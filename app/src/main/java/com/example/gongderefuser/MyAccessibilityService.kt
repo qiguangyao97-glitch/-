@@ -1,0 +1,602 @@
+package com.example.gongderefuser
+
+import android.accessibilityservice.AccessibilityService
+import android.app.Activity
+import android.app.AlertDialog
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.media.MediaPlayer
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import com.example.gongderefuser.analyzer.OrderAnalyzer
+import com.example.gongderefuser.analyzer.OrderAnalyzer.AnalysisResult
+import com.example.gongderefuser.analyzer.RuleSettings
+
+class MyAccessibilityService : AccessibilityService() {
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var overlayView: View? = null
+    private var collapseRunnable: Runnable? = null
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        activeService = this
+        showStatusOverlayInternal()
+        Log.d("TARGET_SERVICE", "connected")
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!MonitoringState.isEnabled(this)) return
+
+        val packageName = event?.packageName?.toString() ?: return
+        if (packageName != "com.ubercab.driver") return
+
+        val now = System.currentTimeMillis()
+        if (now - CaptureTrigger.lastTriggerTime < 1500) return
+
+        CaptureTrigger.lastTriggerTime = now
+        Log.d("TARGET_TRIGGER", "target event detected")
+
+        CaptureTrigger.pendingCaptureCount = 5
+        listOf(500L, 1200L, 2000L, 3000L, 4200L).forEach { delay ->
+            Handler(Looper.getMainLooper()).postDelayed({
+                triggerCapture()
+            }, delay)
+        }
+    }
+
+    private fun triggerCapture() {
+        if (!MonitoringState.isEnabled(this)) return
+
+        Log.d("TARGET_TRIGGER", "set capture flag")
+        CaptureTrigger.shouldCapture = true
+    }
+
+    override fun onInterrupt() {
+        Log.d("TARGET_SERVICE", "interrupted")
+    }
+
+    override fun onDestroy() {
+        clearCollapseTimer()
+        hideOverlay()
+        if (activeService === this) {
+            activeService = null
+        }
+        super.onDestroy()
+    }
+
+    private fun showStatusOverlayInternal() {
+        clearCollapseTimer()
+        hideOverlay()
+
+        if (!MonitoringState.isEnabled(this)) return
+
+        val density = resources.displayMetrics.density
+        val overlaySize = (40 * density).toInt()
+        val isWorking = isMonitoringWorking()
+        val params = WindowManager.LayoutParams(
+            overlaySize,
+            overlaySize,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = getOverlayX((12 * density).toInt())
+            y = getOverlayY((56 * density).toInt())
+        }
+
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val container = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                setColor(Color.argb(238, 255, 255, 255))
+                cornerRadius = 12 * density
+                setStroke((1 * density).toInt(), Color.argb(160, 148, 163, 184))
+            }
+            elevation = 8 * density
+        }
+
+        val dot = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (isWorking) COLOR_SUCCESS else COLOR_DANGER)
+            }
+        }
+
+        container.addView(
+            dot,
+            FrameLayout.LayoutParams((13 * density).toInt(), (13 * density).toInt()).apply {
+                gravity = Gravity.CENTER
+            }
+        )
+
+        makeDraggable(container, params, windowManager, persistPosition = true)
+        windowManager.addView(container, params)
+        overlayView = container
+    }
+
+    private fun showAnalysisOverlayInternal(analysis: AnalysisResult) {
+        clearCollapseTimer()
+        hideOverlay()
+        playAnalysisTone(analysis)
+
+        val density = resources.displayMetrics.density
+        val displayWidth = resources.displayMetrics.widthPixels
+        val displayHeight = resources.displayMetrics.heightPixels
+        val params = WindowManager.LayoutParams(
+            (displayWidth * 0.86f).toInt(),
+            (displayHeight * 0.46f).toInt(),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = (48 * density).toInt()
+        }
+
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val card = createAnalysisCard(analysis)
+        val scrollContainer = ScrollView(this).apply {
+            isFillViewport = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            addView(card)
+        }
+
+        makeDraggable(scrollContainer, params, windowManager, persistPosition = false)
+        windowManager.addView(scrollContainer, params)
+        overlayView = scrollContainer
+
+        collapseRunnable = Runnable {
+            showStatusOverlayInternal()
+        }.also {
+            mainHandler.postDelayed(it, 30_000)
+        }
+    }
+
+    private fun playAnalysisTone(analysis: AnalysisResult) {
+        val soundRes = when {
+            analysis.isBlacklisted -> R.raw.blacklist_reject
+            analysis.isWhitelisted -> R.raw.whitelist_accept
+            else -> R.raw.normal_order
+        }
+
+        runCatching {
+            val player = MediaPlayer.create(this, soundRes) ?: return
+            player.setOnCompletionListener { it.release() }
+            player.setOnErrorListener { mediaPlayer, _, _ ->
+                mediaPlayer.release()
+                true
+            }
+            player.start()
+        }
+    }
+
+    private fun createAnalysisCard(analysis: AnalysisResult): LinearLayout {
+        val density = resources.displayMetrics.density
+        val accentColor = if (analysis.shouldAccept) COLOR_SUCCESS else COLOR_DANGER
+
+        val background = GradientDrawable().apply {
+            setColor(Color.argb(246, 255, 255, 255))
+            cornerRadius = 16 * density
+            setStroke((2 * density).toInt(), accentColor)
+        }
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            this.background = background
+            elevation = 10 * density
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val badge = TextView(this).apply {
+            text = if (analysis.shouldAccept) "推荐接单" else "建议拒单"
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(0, dp(8), 0, dp(8))
+            setBackground(GradientDrawable().apply {
+                setColor(accentColor)
+                cornerRadius = 12 * density
+            })
+        }
+
+        val collapseButton = TextView(this).apply {
+            text = "×"
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setPadding(0, 0, 0, dp(2))
+            setBackground(GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.rgb(241, 245, 249))
+            })
+            setOnClickListener {
+                showStatusOverlayInternal()
+            }
+        }
+
+        header.addView(
+            badge,
+            LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply {
+                rightMargin = dp(8)
+            }
+        )
+        header.addView(
+            collapseButton,
+            LinearLayout.LayoutParams(dp(36), dp(36))
+        )
+        card.addView(
+            header,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(8)
+            }
+        )
+
+        addMerchantStatusBlock(card, analysis)
+        addResultLine(card, "类型", analysis.orderType)
+        if (analysis.isSameLocationStack) {
+            addResultLine(card, "爽单", "取货或配送地点相同")
+        }
+        addResultLine(card, "金额", "${analysis.price} 元")
+        addResultLine(card, "时间", "${analysis.minutes} 分钟")
+        addResultLine(card, "距离", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
+        addResultLine(card, "预计时薪", "${OrderAnalyzer.formatMoney(analysis.effectiveHourly)} 元/小时")
+
+        return card
+    }
+
+    private fun showAddListEntryDialog(keyword: String, isWhitelist: Boolean) {
+        val keywordInput = EditText(this).apply {
+            hint = "商家名称或地址关键词"
+            setText(keyword)
+            setSingleLine(true)
+        }
+        val noteInput = EditText(this).apply {
+            hint = if (isWhitelist) {
+                "备注：位置、出餐速度等"
+            } else {
+                "原因：不好取/不好送/难停车等"
+            }
+            setSingleLine(false)
+            minLines = 2
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(10), dp(18), 0)
+            addView(keywordInput)
+            addView(noteInput)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (isWhitelist) "添加白名单" else "添加黑名单")
+            .setView(content)
+            .setPositiveButton("保存", null)
+            .setNegativeButton("取消", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.window?.setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val keyword = keywordInput.text.toString().trim()
+                val note = noteInput.text.toString().trim()
+                if (keyword.length < 2) {
+                    keywordInput.error = "至少两个字"
+                    return@setOnClickListener
+                }
+                saveListEntry(keyword, note, isWhitelist)
+                dialog.dismiss()
+            }
+        }
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+        dialog.show()
+    }
+
+    private fun showListActionChoice(keyword: String) {
+        val cleanKeyword = keyword.trim()
+        if (cleanKeyword.length < 2 || cleanKeyword == "未识别") return
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("添加名单")
+            .setMessage(cleanKeyword)
+            .setPositiveButton("加白名单") { _, _ ->
+                showAddListEntryDialog(cleanKeyword, isWhitelist = true)
+            }
+            .setNegativeButton("加黑名单") { _, _ ->
+                showAddListEntryDialog(cleanKeyword, isWhitelist = false)
+            }
+            .setNeutralButton("取消", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.window?.setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+        }
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+        dialog.show()
+    }
+
+    private fun saveListEntry(keyword: String, note: String, isWhitelist: Boolean) {
+        val settings = RuleSettings.load(this)
+        val whitelist = settings.whitelistEntries.toMutableList()
+        val blacklist = settings.blacklistEntries.toMutableList()
+        val target = if (isWhitelist) whitelist else blacklist
+
+        target.removeAll { it.keyword == keyword }
+        target.add(RuleSettings.ListEntry(keyword, note))
+
+        RuleSettings.save(
+            context = this,
+            normal = settings.normal,
+            blacklist = settings.blacklist,
+            whitelistText = RuleSettings.serializeEntries(whitelist),
+            blacklistText = RuleSettings.serializeEntries(blacklist)
+        )
+    }
+
+    private fun addResultLine(parent: LinearLayout, label: String, value: String) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(2), 0, dp(2))
+        }
+
+        val labelView = TextView(this).apply {
+            text = label
+            textSize = 12f
+            setTextColor(COLOR_TEXT_SECONDARY)
+        }
+
+        val valueView = TextView(this).apply {
+            text = value
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.END
+            setTextColor(COLOR_TEXT_PRIMARY)
+            maxLines = 2
+        }
+
+        row.addView(
+            labelView,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        row.addView(
+            valueView,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.35f)
+        )
+        parent.addView(row)
+    }
+
+    private fun addMerchantStatusBlock(parent: LinearLayout, analysis: AnalysisResult) {
+        val accentColor = when {
+            analysis.isBlacklisted -> COLOR_DANGER
+            analysis.isWhitelisted -> COLOR_SUCCESS
+            else -> Color.rgb(218, 225, 233)
+        }
+        val fillColor = when {
+            analysis.isBlacklisted -> Color.rgb(254, 202, 202)
+            analysis.isWhitelisted -> Color.rgb(187, 247, 208)
+            else -> Color.WHITE
+        }
+
+        val block = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(6)
+            }
+        }
+        addColoredResultLine(
+            block,
+            "商家",
+            analysis.storeName.ifBlank { "未识别" },
+            fillColor,
+            accentColor
+        )
+        addColoredResultLine(
+            block,
+            "地址",
+            analysis.storeAddress.ifBlank { "未识别" },
+            fillColor,
+            accentColor
+        )
+        parent.addView(block)
+    }
+
+    private fun addColoredResultLine(
+        parent: LinearLayout,
+        label: String,
+        value: String,
+        fillColor: Int,
+        strokeColor: Int
+    ) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            background = GradientDrawable().apply {
+                setColor(fillColor)
+                setStroke(dp(1), strokeColor)
+                cornerRadius = 10 * resources.displayMetrics.density
+            }
+        }
+        row.addView(TextView(this).apply {
+            text = label
+            textSize = 12f
+            setTextColor(COLOR_TEXT_SECONDARY)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.7f))
+        row.addView(TextView(this).apply {
+            text = value
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.END
+            setTextColor(COLOR_TEXT_PRIMARY)
+            maxLines = 2
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.45f))
+        if (value != "未识别") {
+            row.isClickable = true
+            row.isFocusable = true
+            row.setOnClickListener {
+                showListActionChoice(value)
+            }
+        }
+        parent.addView(row, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = dp(4)
+        })
+    }
+
+    private fun hideOverlay() {
+        val view = overlayView ?: return
+        overlayView = null
+        runCatching {
+            val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            windowManager.removeView(view)
+        }
+    }
+
+    private fun makeDraggable(
+        view: View,
+        params: WindowManager.LayoutParams,
+        windowManager: WindowManager,
+        persistPosition: Boolean
+    ) {
+        var startX = 0
+        var startY = 0
+        var startRawX = 0f
+        var startRawY = 0f
+        var moved = false
+
+        view.setOnTouchListener { touchedView, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = params.x
+                    startY = params.y
+                    startRawX = event.rawX
+                    startRawY = event.rawY
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val deltaX = (event.rawX - startRawX).toInt()
+                    val deltaY = (event.rawY - startRawY).toInt()
+                    if (kotlin.math.abs(deltaX) > 6 || kotlin.math.abs(deltaY) > 6) {
+                        moved = true
+                    }
+                    params.x = startX + deltaX
+                    params.y = startY + deltaY
+                    runCatching {
+                        windowManager.updateViewLayout(touchedView, params)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (persistPosition && moved) {
+                        saveOverlayPosition(params.x, params.y)
+                    }
+                    if (!moved) {
+                        touchedView.performClick()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun clearCollapseTimer() {
+        collapseRunnable?.let(mainHandler::removeCallbacks)
+        collapseRunnable = null
+    }
+
+    private fun isMonitoringWorking(): Boolean {
+        val hasProjection = CaptureHolder.data != null &&
+                CaptureHolder.resultCode == Activity.RESULT_OK
+        return MonitoringState.isEnabled(this) && hasProjection && ScreenCaptureService.isRunning
+    }
+
+    private fun getPrefs() =
+        getSharedPreferences(OVERLAY_PREFS_NAME, MODE_PRIVATE)
+
+    private fun getOverlayX(defaultValue: Int): Int {
+        return getPrefs().getInt(KEY_OVERLAY_X, defaultValue)
+    }
+
+    private fun getOverlayY(defaultValue: Int): Int {
+        return getPrefs().getInt(KEY_OVERLAY_Y, defaultValue)
+    }
+
+    private fun saveOverlayPosition(x: Int, y: Int) {
+        getPrefs()
+            .edit()
+            .putInt(KEY_OVERLAY_X, x)
+            .putInt(KEY_OVERLAY_Y, y)
+            .apply()
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
+    }
+
+    companion object {
+        private const val OVERLAY_PREFS_NAME = "gongde_refuser_overlay"
+        private const val KEY_OVERLAY_X = "overlay_x"
+        private const val KEY_OVERLAY_Y = "overlay_y"
+
+        private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
+        private val COLOR_DANGER = Color.rgb(239, 68, 68)
+        private val COLOR_TEXT_PRIMARY = Color.rgb(22, 27, 34)
+        private val COLOR_TEXT_SECONDARY = Color.rgb(88, 96, 105)
+
+        @Volatile
+        private var activeService: MyAccessibilityService? = null
+
+        fun showFeedback(analysis: AnalysisResult): Boolean {
+            val service = activeService ?: return false
+            service.mainHandler.post {
+                service.showAnalysisOverlayInternal(analysis)
+            }
+            return true
+        }
+
+        fun refreshStatusOverlay() {
+            val service = activeService ?: return
+            service.mainHandler.post {
+                service.showStatusOverlayInternal()
+            }
+        }
+    }
+}
