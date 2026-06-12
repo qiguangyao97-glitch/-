@@ -222,7 +222,7 @@ class ScreenCaptureService : Service() {
             Handler(Looper.getMainLooper()).post {
                 Toast.makeText(
                     this,
-                    if (analysis.shouldAccept) "推荐接单" else "建议拒单",
+                    "${analysis.score}分 · ${analysis.recommendation}",
                     Toast.LENGTH_LONG
                 ).show()
             }

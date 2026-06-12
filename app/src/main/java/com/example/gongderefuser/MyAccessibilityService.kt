@@ -190,7 +190,7 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun createAnalysisCard(analysis: AnalysisResult): LinearLayout {
         val density = resources.displayMetrics.density
-        val accentColor = if (analysis.shouldAccept) COLOR_SUCCESS else COLOR_DANGER
+        val accentColor = recommendationColor(analysis)
 
         val background = GradientDrawable().apply {
             setColor(Color.argb(246, 255, 255, 255))
@@ -211,7 +211,7 @@ class MyAccessibilityService : AccessibilityService() {
         }
 
         val badge = TextView(this).apply {
-            text = if (analysis.shouldAccept) "推荐接单" else "建议拒单"
+            text = "${analysis.score}分 · ${analysis.recommendation}"
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -264,6 +264,7 @@ class MyAccessibilityService : AccessibilityService() {
         )
 
         addMerchantStatusBlock(card, analysis)
+        addResultLine(card, "评分", "${analysis.score} 分")
         addResultLine(card, "类型", analysis.orderType)
         if (analysis.isSameLocationStack) {
             addResultLine(card, "爽单", "取货或配送地点相同")
@@ -274,6 +275,14 @@ class MyAccessibilityService : AccessibilityService() {
         addResultLine(card, "预计时薪", "${OrderAnalyzer.formatMoney(analysis.effectiveHourly)} 元/小时")
 
         return card
+    }
+
+    private fun recommendationColor(analysis: AnalysisResult): Int {
+        return when (analysis.recommendation) {
+            "建议接单" -> COLOR_SUCCESS
+            "慎重考虑" -> COLOR_WARNING
+            else -> COLOR_DANGER
+        }
     }
 
     private fun showAddListEntryDialog(keyword: String, isWhitelist: Boolean) {
@@ -578,6 +587,7 @@ class MyAccessibilityService : AccessibilityService() {
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
         private val COLOR_DANGER = Color.rgb(239, 68, 68)
+        private val COLOR_WARNING = Color.rgb(245, 158, 11)
         private val COLOR_TEXT_PRIMARY = Color.rgb(22, 27, 34)
         private val COLOR_TEXT_SECONDARY = Color.rgb(88, 96, 105)
 

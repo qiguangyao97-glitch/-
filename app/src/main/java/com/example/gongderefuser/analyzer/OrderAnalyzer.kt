@@ -17,6 +17,8 @@ object OrderAnalyzer {
         val netIncome: Double,
         val effectiveHourly: Double,
         val shouldAccept: Boolean,
+        val score: Int,
+        val recommendation: String,
         val storeName: String = "",
         val storeAddress: String = "",
         val isWhitelisted: Boolean = false,
@@ -63,7 +65,7 @@ object OrderAnalyzer {
         )
     }
 
-    private fun analyzeResult(
+    internal fun analyzeResult(
         order: OrderData,
         rules: RuleSettings.RuleConfig,
         whitelistEntry: RuleSettings.ListEntry?,
@@ -77,6 +79,14 @@ object OrderAnalyzer {
                 order.distance <= rules.maxDistance &&
                 order.minutes <= rules.maxMinutes &&
                 effectiveHourly >= rules.targetHourly
+        val score = calculateScore(
+            order = order,
+            rules = rules,
+            effectiveHourly = effectiveHourly,
+            isWhitelisted = whitelistEntry != null,
+            isBlacklisted = isBlacklisted,
+            passesRuleLimits = passesRuleLimits
+        )
 
         return AnalysisResult(
             orderType = buildOrderType(order),
@@ -86,7 +96,9 @@ object OrderAnalyzer {
             cost = cost,
             netIncome = netIncome,
             effectiveHourly = effectiveHourly,
-            shouldAccept = passesRuleLimits,
+            shouldAccept = score >= SCORE_ACCEPT,
+            score = score,
+            recommendation = buildRecommendation(score),
             storeName = order.storeName,
             storeAddress = order.address,
             isWhitelisted = whitelistEntry != null,
@@ -115,9 +127,56 @@ object OrderAnalyzer {
         result.appendLine("成本：${formatMoney(analysis.cost)} 元")
         result.appendLine("本单净收益：${formatMoney(analysis.netIncome)} 元")
         result.appendLine("预计时薪：${formatMoney(analysis.effectiveHourly)} 元 / 小时")
-        result.appendLine("建议：${if (analysis.shouldAccept) "接单" else "拒单"}")
+        result.appendLine("评分：${analysis.score} 分")
+        result.appendLine("建议：${analysis.recommendation}")
 
         return result.toString()
+    }
+
+    private fun calculateScore(
+        order: OrderData,
+        rules: RuleSettings.RuleConfig,
+        effectiveHourly: Double,
+        isWhitelisted: Boolean,
+        isBlacklisted: Boolean,
+        passesRuleLimits: Boolean
+    ): Int {
+        var score = BASE_SCORE
+
+        if (passesRuleLimits) {
+            score += PASS_RULE_BONUS
+        }
+        if (isWhitelisted) {
+            score += WHITELIST_BONUS
+        }
+        if (isBlacklisted) {
+            score -= BLACKLIST_PENALTY
+        }
+        if (order.isSameLocationStack) {
+            score += SAME_LOCATION_STACK_BONUS
+        }
+        if (order.price < rules.minPrice) {
+            score -= PRICE_PENALTY
+        }
+        if (order.distance > rules.maxDistance) {
+            score -= DISTANCE_PENALTY
+        }
+        if (order.minutes > rules.maxMinutes) {
+            score -= MINUTES_PENALTY
+        }
+        if (effectiveHourly < rules.targetHourly) {
+            score -= HOURLY_PENALTY
+        }
+
+        return score.coerceIn(0, 100)
+    }
+
+    private fun buildRecommendation(score: Int): String {
+        return when {
+            score >= SCORE_ACCEPT -> "建议接单"
+            score >= SCORE_CAUTION -> "慎重考虑"
+            else -> "不建议接单"
+        }
     }
 
     fun formatMoney(value: Double): String {
@@ -249,4 +308,16 @@ object OrderAnalyzer {
         '國' to '国',
         '門' to '门'
     )
+
+    private const val BASE_SCORE = 70
+    private const val PASS_RULE_BONUS = 15
+    private const val WHITELIST_BONUS = 15
+    private const val BLACKLIST_PENALTY = 25
+    private const val SAME_LOCATION_STACK_BONUS = 10
+    private const val PRICE_PENALTY = 12
+    private const val DISTANCE_PENALTY = 10
+    private const val MINUTES_PENALTY = 8
+    private const val HOURLY_PENALTY = 15
+    private const val SCORE_ACCEPT = 75
+    private const val SCORE_CAUTION = 55
 }

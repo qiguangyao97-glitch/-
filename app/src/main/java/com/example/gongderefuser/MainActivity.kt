@@ -298,13 +298,13 @@ class MainActivity : AppCompatActivity() {
             maxLines = 1
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         titleRow.addView(TextView(this).apply {
-            text = if (record.shouldAccept) "接单" else "拒单"
+            text = "${record.score}分"
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             setPadding(dp(10), dp(4), dp(10), dp(4))
-            background = roundedFill(if (record.shouldAccept) COLOR_SUCCESS else COLOR_DANGER, 999f)
+            background = roundedFill(recommendationColor(record.recommendation), 999f)
         })
         row.addView(titleRow)
 
@@ -922,13 +922,13 @@ class MainActivity : AppCompatActivity() {
         })
         addMerchantStatusCard(content, analysis)
         content.addView(TextView(this).apply {
-            text = if (analysis.shouldAccept) "推荐接单" else "建议拒单"
+            text = "${analysis.score}分 · ${analysis.recommendation}"
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             setPadding(0, dp(12), 0, dp(12))
-            background = roundedFill(if (analysis.shouldAccept) COLOR_SUCCESS else COLOR_DANGER, 14f)
+            background = roundedFill(recommendationColor(analysis.recommendation), 14f)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -941,6 +941,7 @@ class MainActivity : AppCompatActivity() {
             addResultRow(content, "爽单提示", "取货或配送地点相同")
         }
         addResultRow(content, "订单类型", analysis.orderType)
+        addResultRow(content, "评分", "${analysis.score} 分")
         addResultRow(content, "金额", "${analysis.price} 元")
         addResultRow(content, "时间", "${analysis.minutes} 分钟")
         addResultRow(content, "距离", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
@@ -991,6 +992,14 @@ class MainActivity : AppCompatActivity() {
         addColoredResultRow(card, "商家", analysis.storeName.ifBlank { "未识别" }, fillColor, accentColor)
         addColoredResultRow(card, "地址", analysis.storeAddress.ifBlank { "未识别" }, fillColor, accentColor)
         parent.addView(card)
+    }
+
+    private fun recommendationColor(recommendation: String): Int {
+        return when (recommendation) {
+            "建议接单" -> COLOR_SUCCESS
+            "慎重考虑" -> COLOR_WARNING
+            else -> COLOR_DANGER
+        }
     }
 
     private fun showFailureResult(message: String) {

@@ -23,6 +23,8 @@ object OrderHistory {
         val distance: Double,
         val effectiveHourly: Double,
         val shouldAccept: Boolean,
+        val score: Int,
+        val recommendation: String,
         val isBlacklisted: Boolean,
         val isWhitelisted: Boolean,
         val isSameLocationStack: Boolean
@@ -46,6 +48,8 @@ object OrderHistory {
                 distance = analysis.distance,
                 effectiveHourly = analysis.effectiveHourly,
                 shouldAccept = analysis.shouldAccept,
+                score = analysis.score,
+                recommendation = analysis.recommendation,
                 isBlacklisted = analysis.isBlacklisted,
                 isWhitelisted = analysis.isWhitelisted,
                 isSameLocationStack = analysis.isSameLocationStack
@@ -72,6 +76,11 @@ object OrderHistory {
                             distance = item.optDouble("distance"),
                             effectiveHourly = item.optDouble("effectiveHourly"),
                             shouldAccept = item.optBoolean("shouldAccept"),
+                            score = item.optInt("score", if (item.optBoolean("shouldAccept")) 85 else 40),
+                            recommendation = item.optString(
+                                "recommendation",
+                                if (item.optBoolean("shouldAccept")) "建议接单" else "不建议接单"
+                            ),
                             isBlacklisted = item.optBoolean("isBlacklisted"),
                             isWhitelisted = item.optBoolean("isWhitelisted"),
                             isSameLocationStack = item.optBoolean("isSameLocationStack")
@@ -100,6 +109,8 @@ object OrderHistory {
                     .put("distance", record.distance)
                     .put("effectiveHourly", record.effectiveHourly)
                     .put("shouldAccept", record.shouldAccept)
+                    .put("score", record.score)
+                    .put("recommendation", record.recommendation)
                     .put("isBlacklisted", record.isBlacklisted)
                     .put("isWhitelisted", record.isWhitelisted)
                     .put("isSameLocationStack", record.isSameLocationStack)
