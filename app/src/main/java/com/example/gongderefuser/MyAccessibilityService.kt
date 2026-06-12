@@ -265,6 +265,12 @@ class MyAccessibilityService : AccessibilityService() {
 
         addMerchantStatusBlock(card, analysis)
         addResultLine(card, "评分", "${analysis.score} 分")
+        if (analysis.locationScoreImpact != 0) {
+            addResultLine(card, "位置分", "${analysis.locationScoreImpact}")
+        }
+        if (analysis.matchedLocationKeyword.isNotBlank()) {
+            addResultLine(card, "命中位置", analysis.matchedLocationKeyword)
+        }
         addResultLine(card, "类型", analysis.orderType)
         if (analysis.isSameLocationStack) {
             addResultLine(card, "爽单", "取货或配送地点相同")

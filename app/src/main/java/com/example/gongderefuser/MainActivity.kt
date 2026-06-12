@@ -942,6 +942,15 @@ class MainActivity : AppCompatActivity() {
         }
         addResultRow(content, "订单类型", analysis.orderType)
         addResultRow(content, "评分", "${analysis.score} 分")
+        if (analysis.locationScoreImpact != 0) {
+            addResultRow(content, "位置分", "${analysis.locationScoreImpact}")
+        }
+        if (analysis.matchedLocationKeyword.isNotBlank()) {
+            addResultRow(content, "命中位置", analysis.matchedLocationKeyword)
+        }
+        if (analysis.matchedMerchantKeyword.isNotBlank()) {
+            addResultRow(content, "命中商家", analysis.matchedMerchantKeyword)
+        }
         addResultRow(content, "金额", "${analysis.price} 元")
         addResultRow(content, "时间", "${analysis.minutes} 分钟")
         addResultRow(content, "距离", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")

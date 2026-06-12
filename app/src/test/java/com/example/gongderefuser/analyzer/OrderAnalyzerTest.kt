@@ -1,6 +1,8 @@
 package com.example.gongderefuser.analyzer
 
 import com.example.gongderefuser.model.OrderData
+import com.example.gongderefuser.matching.KeywordMatchResult
+import com.example.gongderefuser.matching.LocationAnalysisResult
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -58,5 +60,47 @@ class OrderAnalyzerTest {
 
         assertEquals("不建议接单", analysis.recommendation)
         assertEquals(true, analysis.score < 55)
+    }
+
+    @Test
+    fun strongLocationRiskReducesScore() {
+        val analysis = OrderAnalyzer.analyzeResult(
+            order = OrderData(
+                price = 120,
+                minutes = 25,
+                distance = 4.0,
+                isTargetOffer = true,
+                address = "龜山區萬壽路一段"
+            ),
+            rules = RuleSettings.RuleConfig(
+                minPrice = 0,
+                maxDistance = 999.0,
+                maxMinutes = 999,
+                targetHourly = 0
+            ),
+            whitelistEntry = null,
+            blacklistEntry = null,
+            locationAnalysis = LocationAnalysisResult(
+                normalizedText = "龜山區萬壽路一段",
+                addressMatches = listOf(
+                    KeywordMatchResult(
+                        canonicalName = "龜山區萬壽路一段",
+                        matchedAlias = "萬壽路一段",
+                        category = "ADDRESS_RULE",
+                        district = "龜山區",
+                        level = "BLACK_STRONG",
+                        confidence = 1.0,
+                        scoreImpact = -45
+                    )
+                ),
+                merchantMatches = emptyList(),
+                totalScoreImpact = -45,
+                strongestLevel = "BLACK_STRONG"
+            )
+        )
+
+        assertEquals(-45, analysis.locationScoreImpact)
+        assertEquals("BLACK_STRONG", analysis.strongestLocationLevel)
+        assertEquals("不建议接单", analysis.recommendation)
     }
 }

@@ -1,6 +1,10 @@
 package com.example.gongderefuser.analyzer
 
 import android.content.Context
+import com.example.gongderefuser.matching.KeywordMatchResult
+import com.example.gongderefuser.matching.LocationAnalysisResult
+import com.example.gongderefuser.matching.LocationKeywordRepository
+import com.example.gongderefuser.matching.OrderLocationAnalyzer
 import com.example.gongderefuser.model.OrderData
 
 /**
@@ -27,6 +31,10 @@ object OrderAnalyzer {
         val isBlacklisted: Boolean = false,
         val matchedBlacklistKeyword: String = "",
         val blacklistNote: String = "",
+        val locationScoreImpact: Int = 0,
+        val strongestLocationLevel: String? = null,
+        val matchedLocationKeyword: String = "",
+        val matchedMerchantKeyword: String = "",
         val isSameLocationStack: Boolean = false
     )
 
@@ -40,11 +48,14 @@ object OrderAnalyzer {
         }
         val isBlacklisted = blacklistEntry != null
         val rules = if (isBlacklisted) settings.blacklist else settings.normal
+        val locationAnalysis = OrderLocationAnalyzer(LocationKeywordRepository.load(context))
+            .analyze("${order.storeName}\n${order.address}")
         return analyzeResult(
             order = order,
             rules = rules,
             whitelistEntry = whitelistEntry,
-            blacklistEntry = blacklistEntry
+            blacklistEntry = blacklistEntry,
+            locationAnalysis = locationAnalysis
         )
     }
 
@@ -61,7 +72,8 @@ object OrderAnalyzer {
                 targetHourly = targetHourly
             ),
             whitelistEntry = null,
-            blacklistEntry = null
+            blacklistEntry = null,
+            locationAnalysis = null
         )
     }
 
@@ -69,7 +81,8 @@ object OrderAnalyzer {
         order: OrderData,
         rules: RuleSettings.RuleConfig,
         whitelistEntry: RuleSettings.ListEntry?,
-        blacklistEntry: RuleSettings.ListEntry?
+        blacklistEntry: RuleSettings.ListEntry?,
+        locationAnalysis: LocationAnalysisResult? = null
     ): AnalysisResult {
         val cost = order.distance * rules.costPerKm
         val netIncome = order.price - cost
@@ -87,6 +100,7 @@ object OrderAnalyzer {
             isBlacklisted = isBlacklisted,
             passesRuleLimits = passesRuleLimits
         )
+        val finalScore = (score + (locationAnalysis?.totalScoreImpact ?: 0)).coerceIn(0, 100)
 
         return AnalysisResult(
             orderType = buildOrderType(order),
@@ -96,9 +110,9 @@ object OrderAnalyzer {
             cost = cost,
             netIncome = netIncome,
             effectiveHourly = effectiveHourly,
-            shouldAccept = score >= SCORE_ACCEPT,
-            score = score,
-            recommendation = buildRecommendation(score),
+            shouldAccept = finalScore >= SCORE_ACCEPT,
+            score = finalScore,
+            recommendation = buildRecommendation(finalScore),
             storeName = order.storeName,
             storeAddress = order.address,
             isWhitelisted = whitelistEntry != null,
@@ -107,6 +121,10 @@ object OrderAnalyzer {
             isBlacklisted = isBlacklisted,
             matchedBlacklistKeyword = blacklistEntry?.keyword.orEmpty(),
             blacklistNote = blacklistEntry?.note.orEmpty(),
+            locationScoreImpact = locationAnalysis?.totalScoreImpact ?: 0,
+            strongestLocationLevel = locationAnalysis?.strongestLevel,
+            matchedLocationKeyword = locationAnalysis?.addressMatches?.bestKeyword().orEmpty(),
+            matchedMerchantKeyword = locationAnalysis?.merchantMatches?.bestKeyword().orEmpty(),
             isSameLocationStack = order.isSameLocationStack
         )
     }
@@ -127,6 +145,9 @@ object OrderAnalyzer {
         result.appendLine("成本：${formatMoney(analysis.cost)} 元")
         result.appendLine("本单净收益：${formatMoney(analysis.netIncome)} 元")
         result.appendLine("预计时薪：${formatMoney(analysis.effectiveHourly)} 元 / 小时")
+        if (analysis.locationScoreImpact != 0) {
+            result.appendLine("位置分：${analysis.locationScoreImpact}")
+        }
         result.appendLine("评分：${analysis.score} 分")
         result.appendLine("建议：${analysis.recommendation}")
 
@@ -277,6 +298,10 @@ object OrderAnalyzer {
         }
 
         return previous[b.length]
+    }
+
+    private fun List<KeywordMatchResult>.bestKeyword(): String {
+        return maxByOrNull { it.confidence }?.canonicalName.orEmpty()
     }
 
     private val traditionalToSimplified = mapOf(
