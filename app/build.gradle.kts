@@ -15,8 +15,8 @@ android {
         applicationId = "com.example.gongderefuser"
         minSdk = 28
         targetSdk = 28
-        versionCode = 2
-        versionName = "1.0.01"
+        versionCode = 3
+        versionName = "1.0.02"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -28,12 +28,25 @@ android {
             }
         }
     }
+    flavorDimensions += "channel"
+    productFlavors {
+        create("stable") {
+            dimension = "channel"
+            resValue("string", "app_name", "功德拒絕器")
+        }
+        create("beta") {
+            dimension = "channel"
+            applicationIdSuffix = ".beta"
+            resValue("string", "app_name", "功德拒絕器 測試版")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
     buildFeatures {
         compose = true
+        resValues = true
     }
 }
 
