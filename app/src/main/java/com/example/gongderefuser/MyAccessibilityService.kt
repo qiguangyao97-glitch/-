@@ -3,7 +3,6 @@ package com.example.gongderefuser
 import android.accessibilityservice.AccessibilityService
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -72,11 +71,9 @@ class MyAccessibilityService : AccessibilityService() {
 
         Log.d("TARGET_TRIGGER", "set capture flag")
         CaptureTrigger.shouldCapture = true
-        startForegroundService(
-            Intent(this, ScreenCaptureService::class.java).apply {
-                action = ScreenCaptureService.ACTION_CAPTURE_PULSE
-            }
-        )
+        if (!ScreenCaptureService.requestCapturePulse()) {
+            Log.d("TARGET_TRIGGER", "capture service is not running")
+        }
     }
 
     override fun onInterrupt() {

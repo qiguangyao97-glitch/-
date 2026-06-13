@@ -38,6 +38,7 @@ class ScreenCaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        activeService = this
         MyAccessibilityService.refreshStatusOverlay()
     }
 
@@ -302,6 +303,9 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        if (activeService === this) {
+            activeService = null
+        }
         stopCapture()
         MyAccessibilityService.refreshStatusOverlay()
         super.onDestroy()
@@ -319,5 +323,16 @@ class ScreenCaptureService : Service() {
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        @Volatile
+        private var activeService: ScreenCaptureService? = null
+
+        fun requestCapturePulse(): Boolean {
+            val service = activeService ?: return false
+            service.mainHandler.post {
+                service.startCapture()
+            }
+            return true
+        }
     }
 }
