@@ -63,7 +63,7 @@ class OrderAnalyzerTest {
     }
 
     @Test
-    fun strongLocationRiskReducesScore() {
+    fun hiddenLocationRiskDoesNotChangeScore() {
         val analysis = OrderAnalyzer.analyzeResult(
             order = OrderData(
                 price = 120,
@@ -99,8 +99,8 @@ class OrderAnalyzerTest {
             )
         )
 
-        assertEquals(-45, analysis.locationScoreImpact)
+        assertEquals(0, analysis.locationScoreImpact)
         assertEquals("BLACK_STRONG", analysis.strongestLocationLevel)
-        assertEquals("不建议接单", analysis.recommendation)
+        assertEquals("建议接单", analysis.recommendation)
     }
 }

@@ -1,6 +1,7 @@
 package com.example.gongderefuser.analyzer
 
 import android.content.Context
+import com.example.gongderefuser.matching.LocationKeywordRepository
 
 object RuleSettings {
     private const val PREFS_NAME = "gongde_refuser_rule_settings"
@@ -17,6 +18,7 @@ object RuleSettings {
     private const val KEY_BLACK_COST_PER_KM = "black_cost_per_km"
     private const val KEY_WHITELIST = "whitelist"
     private const val KEY_BLACKLIST = "blacklist"
+    private const val KEY_IMPORTED_LOCATION_LIST_DEFAULTS = "imported_location_list_defaults"
 
     data class RuleConfig(
         val minPrice: Int,
@@ -40,6 +42,7 @@ object RuleSettings {
 
     fun load(context: Context): Settings {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val migratedLists = migrateLocationListDefaultsIfNeeded(context)
         return Settings(
             normal = RuleConfig(
                 minPrice = prefs.getInt(KEY_NORMAL_MIN_PRICE, 0),
@@ -55,9 +58,44 @@ object RuleSettings {
                 targetHourly = prefs.getInt(KEY_BLACK_TARGET_HOURLY, 300),
                 costPerKm = prefs.getFloat(KEY_BLACK_COST_PER_KM, RuleManager.COST_PER_KM.toFloat()).toDouble()
             ),
-            whitelistEntries = parseEntries(prefs.getString(KEY_WHITELIST, "").orEmpty()),
-            blacklistEntries = parseEntries(prefs.getString(KEY_BLACKLIST, "").orEmpty())
+            whitelistEntries = parseEntries(migratedLists.first),
+            blacklistEntries = parseEntries(migratedLists.second)
         )
+    }
+
+    private fun migrateLocationListDefaultsIfNeeded(context: Context): Pair<String, String> {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val currentWhitelistText = prefs.getString(KEY_WHITELIST, "").orEmpty()
+        val currentBlacklistText = prefs.getString(KEY_BLACKLIST, "").orEmpty()
+        if (prefs.getBoolean(KEY_IMPORTED_LOCATION_LIST_DEFAULTS, false)) {
+            return currentWhitelistText to currentBlacklistText
+        }
+
+        val currentWhitelist = parseEntries(currentWhitelistText).toMutableList()
+        val currentBlacklist = parseEntries(currentBlacklistText).toMutableList()
+        val repository = runCatching { LocationKeywordRepository.load(context) }.getOrNull()
+
+        repository?.rules
+            ?.filter { it.scoreImpact != 0 && it.level != "NORMAL" }
+            ?.forEach { rule ->
+                val entry = ListEntry(
+                    keyword = rule.canonicalName,
+                    note = "内置词库：${rule.level}"
+                )
+                val target = if (rule.scoreImpact > 0) currentWhitelist else currentBlacklist
+                if (target.none { it.keyword == entry.keyword }) {
+                    target.add(entry)
+                }
+            }
+
+        val migratedWhitelistText = serializeEntries(currentWhitelist)
+        val migratedBlacklistText = serializeEntries(currentBlacklist)
+        prefs.edit()
+            .putString(KEY_WHITELIST, migratedWhitelistText)
+            .putString(KEY_BLACKLIST, migratedBlacklistText)
+            .putBoolean(KEY_IMPORTED_LOCATION_LIST_DEFAULTS, true)
+            .apply()
+        return migratedWhitelistText to migratedBlacklistText
     }
 
     fun save(

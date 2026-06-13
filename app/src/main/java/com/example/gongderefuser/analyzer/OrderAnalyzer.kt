@@ -100,8 +100,6 @@ object OrderAnalyzer {
             isBlacklisted = isBlacklisted,
             passesRuleLimits = passesRuleLimits
         )
-        val finalScore = (score + (locationAnalysis?.totalScoreImpact ?: 0)).coerceIn(0, 100)
-
         return AnalysisResult(
             orderType = buildOrderType(order),
             price = order.price,
@@ -110,9 +108,9 @@ object OrderAnalyzer {
             cost = cost,
             netIncome = netIncome,
             effectiveHourly = effectiveHourly,
-            shouldAccept = finalScore >= SCORE_ACCEPT,
-            score = finalScore,
-            recommendation = buildRecommendation(finalScore),
+            shouldAccept = score >= SCORE_ACCEPT,
+            score = score,
+            recommendation = buildRecommendation(score),
             storeName = order.storeName,
             storeAddress = order.address,
             isWhitelisted = whitelistEntry != null,
@@ -121,7 +119,7 @@ object OrderAnalyzer {
             isBlacklisted = isBlacklisted,
             matchedBlacklistKeyword = blacklistEntry?.keyword.orEmpty(),
             blacklistNote = blacklistEntry?.note.orEmpty(),
-            locationScoreImpact = locationAnalysis?.totalScoreImpact ?: 0,
+            locationScoreImpact = 0,
             strongestLocationLevel = locationAnalysis?.strongestLevel,
             matchedLocationKeyword = locationAnalysis?.addressMatches?.bestKeyword().orEmpty(),
             matchedMerchantKeyword = locationAnalysis?.merchantMatches?.bestKeyword().orEmpty(),
