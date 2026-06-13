@@ -452,4 +452,52 @@ class OrderParserTest {
             order!!.address
         )
     }
+
+    @Test
+    fun parseRepairsRoadSuffixSplitButKeepsHouseNumberLine() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = """
+                    P?外送
+                    ${'$'}45
+                    99分鐘 (1.2公里) 總計
+                    Pizza Hut必勝客(株口文青店)
+                    333台灣桃園市龜山區樂善里文化一
+                    路
+                    83號
+                    接受
+                """.trimIndent(),
+                cardText = """
+                    TT外达
+                    ${'$'}45
+                    99分鐘(1.2 公里)總計
+                    Pizza Hut必勝客(林口文青店)
+                    83號
+                    333台灣桃園市龜山區樂善里文化一
+                    路
+                    接受
+                """.trimIndent(),
+                typeText = "外送\n獨享",
+                priceText = "${'$'}45",
+                tripText = "99分鐘(1.2 公里)總計",
+                detailText = """
+                    333台灣桃園市山區樂善里文化一
+                    路
+                    83號
+                    接受
+                """.trimIndent(),
+                merchantText = "Pizza Hut必勝客(株口文貴店)",
+                addressText = "333台灣桃園市龜山區樂善里文化一\n路",
+                addressLowerText = "83號"
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals(9, order!!.minutes)
+        assertEquals("Pizza Hut必勝客(林口文青店)", order.storeName)
+        assertEquals(
+            "333台灣桃園市龜山區樂善里文化一路\n83號",
+            order.address
+        )
+    }
 }

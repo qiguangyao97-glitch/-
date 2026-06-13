@@ -278,7 +278,6 @@ class MyAccessibilityService : AccessibilityService() {
 
         addMerchantStatusBlock(card, analysis)
         addListMatchBlock(card, analysis)
-        addResultLine(card, "评分", "${analysis.score} 分")
         addResultLine(card, "类型", analysis.orderType)
         if (analysis.isSameLocationStack) {
             addResultLine(card, "爽单", "取货或配送地点相同")
@@ -670,7 +669,11 @@ class MyAccessibilityService : AccessibilityService() {
         fun showFeedback(analysis: AnalysisResult): Boolean {
             val service = activeService ?: return false
             service.mainHandler.post {
-                service.showAnalysisOverlayInternal(analysis)
+                runCatching {
+                    service.showAnalysisOverlayInternal(analysis)
+                }.onFailure {
+                    service.showStatusOverlayInternal()
+                }
             }
             return true
         }

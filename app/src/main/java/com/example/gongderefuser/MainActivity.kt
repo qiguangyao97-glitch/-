@@ -1406,7 +1406,6 @@ class MainActivity : AppCompatActivity() {
             addResultRow(content, "爽单提示", "取货或配送地点相同")
         }
         addResultRow(content, "订单类型", analysis.orderType)
-        addResultRow(content, "评分", "${analysis.score} 分")
         addResultRow(content, "金额", "${analysis.price} 元")
         addResultRow(content, "时间", "${analysis.minutes} 分钟")
         addResultRow(content, "距离", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")

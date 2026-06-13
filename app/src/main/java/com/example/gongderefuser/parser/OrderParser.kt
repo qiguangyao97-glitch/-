@@ -89,9 +89,9 @@ object OrderParser {
                 fullText
             ).joinToString("\n")
 
-            val price = parsePrice(listOf(priceText, cardText, fullText).joinToString("\n"))
-            val minutes = parseMinutes(listOf(tripText, cardText, fullText).joinToString("\n"))
-            val distance = parseDistance(listOf(tripText, cardText, fullText).joinToString("\n"))
+            val price = parsePriceFromSources(priceText, cardText, fullText)
+            val minutes = parseMinutesFromSources(tripText, cardText, fullText)
+            val distance = parseDistanceFromSources(tripText, cardText, fullText)
             val deliveryCount = parseDeliveryCount(listOf(typeText, cardText, fullText).joinToString("\n"))
             val isExclusive = typeText.contains("獨享") ||
                     typeText.contains("独享") ||
@@ -202,6 +202,12 @@ object OrderParser {
         } ?: 0
     }
 
+    private fun parsePriceFromSources(vararg sources: String): Int {
+        return sources.firstNotNullOfOrNull { source ->
+            parsePrice(source).takeIf { it > 0 }
+        } ?: 0
+    }
+
     private fun parseMinutes(text: String): Int {
         val patterns = listOf(
             Regex("([0-9]{1,3})\\s*分(?:鐘|钟)\\s*\\(\\s*[0-9]+(?:\\.[0-9]+)?\\s*公里\\s*\\)\\s*(?:總計|总计)?"),
@@ -214,7 +220,14 @@ object OrderParser {
         } ?: 0
     }
 
+    private fun parseMinutesFromSources(vararg sources: String): Int {
+        return sources.firstNotNullOfOrNull { source ->
+            parseMinutes(source).takeIf { it > 0 }
+        } ?: 0
+    }
+
     private fun normalizeMinutes(minutes: Int): Int {
+        if (minutes in 91..99) return minutes % 10
         if (minutes in 1..180) return minutes
 
         val lastTwoDigits = minutes % 100
@@ -235,6 +248,12 @@ object OrderParser {
 
         return patterns.firstNotNullOfOrNull { regex ->
             regex.find(text)?.groupValues?.get(1)?.toDoubleOrNull()?.let(::normalizeDistance)
+        } ?: 0.0
+    }
+
+    private fun parseDistanceFromSources(vararg sources: String): Double {
+        return sources.firstNotNullOfOrNull { source ->
+            parseDistance(source).takeIf { it > 0.0 }
         } ?: 0.0
     }
 
@@ -296,7 +315,7 @@ object OrderParser {
         return text
             .lines()
             .map(::cleanDetailLine)
-            .filter(::isUsefulDetailLine)
+            .filter { line -> isUsefulDetailLine(line) || isAddressContinuationLine(line) }
             .distinct()
     }
 
@@ -321,7 +340,7 @@ object OrderParser {
                         !line.contains("配對") &&
                         !line.contains("配对")
             }
-            .filter(::isUsefulDetailLine)
+            .filter { line -> isUsefulDetailLine(line) || isAddressContinuationLine(line) }
             .distinct()
     }
 
@@ -347,7 +366,7 @@ object OrderParser {
                 if (firstAddressIndex >= 0) detailLines.drop(firstAddressIndex) else emptyList()
             }
         }
-        val merged = dedupeAddressLines((bottomAddressLines + detailAddressLines + directAddressLines)
+        val merged = dedupeAddressLines(mergeAddressFragments(bottomAddressLines + detailAddressLines + directAddressLines)
             .map(::cleanDetailLine)
             .map(::correctAddressLine)
             .filter { line ->
@@ -365,6 +384,21 @@ object OrderParser {
         return orderAddressLines(addressLines)
     }
 
+    private fun mergeAddressFragments(lines: List<String>): List<String> {
+        val result = mutableListOf<String>()
+        lines.map(::cleanDetailLine).filter { it.isNotBlank() }.forEach { line ->
+            val normalized = correctAddressLine(line)
+            val shouldAppendToPrevious = result.isNotEmpty() &&
+                    normalized.matches(Regex("^[路街巷弄]$"))
+            if (shouldAppendToPrevious) {
+                result[result.lastIndex] = result.last() + normalized
+            } else {
+                result.add(line)
+            }
+        }
+        return result
+    }
+
     private fun dedupeAddressLines(lines: List<String>): List<String> {
         val result = mutableListOf<String>()
         lines.forEach { line ->
@@ -374,7 +408,8 @@ object OrderParser {
                 val existingKey = normalizeAddressDedupKey(existing)
                 existingKey == key ||
                         existingKey.contains(key) ||
-                        key.contains(existingKey)
+                        key.contains(existingKey) ||
+                        addressKeysLikelySame(existingKey, key)
             }
             if (existingIndex < 0) {
                 result.add(line)
@@ -385,11 +420,23 @@ object OrderParser {
         return result
     }
 
+    private fun addressKeysLikelySame(a: String, b: String): Boolean {
+        val shorter = if (a.length <= b.length) a else b
+        val longer = if (a.length <= b.length) b else a
+        if (shorter.length < 8) return false
+        return longer.startsWith(shorter) || levenshteinDistance(
+            longer.take(shorter.length),
+            shorter,
+            1
+        ) <= 1
+    }
+
     private fun normalizeAddressDedupKey(line: String): String {
         return line
             .lowercase()
             .replace("台湾", "台灣")
             .replace("臺灣", "台灣")
+            .replace("桃園龜山區", "桃園市龜山區")
             .replace("龟", "龜")
             .replace("区", "區")
             .replace("号", "號")
@@ -488,6 +535,9 @@ object OrderParser {
             .replace("龜山区", "龜山區")
             .replace("龜山?區", "龜山區")
             .replace("桃园", "桃園")
+            .replace("桃園龜山區", "桃園市龜山區")
+            .replace("桃園龟山區", "桃園市龜山區")
+            .replace("桃園龜山区", "桃園市龜山區")
             .replace("桃園市桃園市", "桃園市")
             .replace("台灣桃園市桃園市", "台灣桃園市")
             .replace("台湾桃園市桃園市", "台灣桃園市")
@@ -629,6 +679,10 @@ object OrderParser {
                 line != "×"
     }
 
+    private fun isAddressContinuationLine(line: String): Boolean {
+        return line.matches(Regex("^[路街巷弄]$"))
+    }
+
     private fun looksLikeAddressLine(line: String): Boolean {
         return isValidAddressLine(correctAddressLine(cleanDetailLine(line)))
     }
@@ -717,6 +771,11 @@ object OrderParser {
             .replace("麦味登", "麥味登")
             .replace("麦当劳", "麥當勞")
             .replace("必胜客", "必勝客")
+            .replace("株口", "林口")
+            .replace("林囗", "林口")
+            .replace("林ロ", "林口")
+            .replace("文貴店", "文青店")
+            .replace("文贵店", "文青店")
     }
 
     private fun isLikelyStoreName(line: String): Boolean {
