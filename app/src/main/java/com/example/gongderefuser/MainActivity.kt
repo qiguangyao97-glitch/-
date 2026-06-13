@@ -99,10 +99,8 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (currentScreen == Screen.Home) {
+                if (!navigateBackOneLevel()) {
                     finish()
-                } else {
-                    showHome()
                 }
             }
         })
@@ -207,6 +205,23 @@ class MainActivity : AppCompatActivity() {
 
         setBaseContent(layout)
         updateMonitoringUi()
+    }
+
+    private fun navigateBackOneLevel(): Boolean {
+        return when (currentScreen) {
+            Screen.Home -> false
+            Screen.RuleDetail -> {
+                showRuleSettings()
+                true
+            }
+            Screen.Rules,
+            Screen.AppSettings,
+            Screen.Manual,
+            Screen.History -> {
+                showHome()
+                true
+            }
+        }
     }
 
     private fun createHistorySummaryCard(): LinearLayout {
@@ -654,9 +669,9 @@ class MainActivity : AppCompatActivity() {
         list.forEach { entry ->
             container.addView(TextView(this).apply {
                 text = if (entry.note.isBlank()) {
-                    "${entry.keyword}  ×"
+                    entry.keyword
                 } else {
-                    "${entry.keyword}：${entry.note}  ×"
+                    "${entry.keyword}：${entry.note}"
                 }
                 textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
@@ -664,8 +679,7 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(12), dp(8), dp(12), dp(8))
                 background = roundedStroke(Color.WHITE, accentColor, 999f)
                 setOnClickListener {
-                    list.remove(entry)
-                    renderListTags(isWhitelist)
+                    showEditListTagDialog(entry, isWhitelist)
                 }
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -675,6 +689,72 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         }
+    }
+
+    private fun showEditListTagDialog(entry: RuleSettings.ListEntry, isWhitelist: Boolean) {
+        val keywordInput = createNumberlessInput("商家名称或地址关键词").apply {
+            setText(entry.keyword)
+        }
+        val noteInput = createNumberlessInput(
+            if (isWhitelist) "备注：位置、出餐速度等" else "原因：不好取/不好送/难停车等"
+        ).apply {
+            setText(entry.note)
+            setSingleLine(false)
+            minLines = 2
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+            }
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(10), dp(18), 0)
+            addView(keywordInput)
+            addView(noteInput)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (isWhitelist) "编辑白名单标签" else "编辑黑名单标签")
+            .setView(content)
+            .setPositiveButton("保存", null)
+            .setNegativeButton("删除", null)
+            .setNeutralButton("取消", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val keyword = keywordInput.text.toString().trim()
+                val note = noteInput.text.toString().trim()
+                if (keyword.length < 2) {
+                    keywordInput.error = "至少两个字"
+                    return@setOnClickListener
+                }
+                val list = if (isWhitelist) whitelistTags else blacklistTags
+                val index = list.indexOf(entry)
+                val updatedEntry = RuleSettings.ListEntry(keyword, note)
+                if (index >= 0) {
+                    list[index] = updatedEntry
+                } else {
+                    list.add(updatedEntry)
+                }
+                list.distinctBy { it.keyword }.also {
+                    list.clear()
+                    list.addAll(it)
+                }
+                renderListTags(isWhitelist)
+                dialog.dismiss()
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+                val list = if (isWhitelist) whitelistTags else blacklistTags
+                list.remove(entry)
+                renderListTags(isWhitelist)
+                dialog.dismiss()
+            }
+        }
+
+        dialog.show()
     }
 
     private fun showAppSettings() {
@@ -775,8 +855,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun addSubHeader(layout: LinearLayout, title: String, subtitle: String) {
         layout.addView(createButton(primary = false).apply {
-            text = "返回主页"
-            setOnClickListener { showHome() }
+            text = "返回"
+            setOnClickListener { navigateBackOneLevel() }
         })
         layout.addView(TextView(this).apply {
             text = title
