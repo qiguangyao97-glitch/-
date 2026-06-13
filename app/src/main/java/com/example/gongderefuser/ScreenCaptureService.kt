@@ -3,7 +3,6 @@ package com.example.gongderefuser
 import android.app.*
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.content.res.Resources
 import android.graphics.Bitmap
 import android.hardware.display.DisplayManager
@@ -44,15 +43,7 @@ class ScreenCaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                1,
-                createNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-        } else {
-            startForeground(1, createNotification())
-        }
+        startInForeground()
 
         val resultCode = CaptureHolder.resultCode
         val data = CaptureHolder.data
@@ -78,7 +69,8 @@ class ScreenCaptureService : Service() {
             mediaProjection =
                 manager.getMediaProjection(resultCode, data)
         } catch (e: SecurityException) {
-            Log.e("CAPTURE", "projection token invalid", e)
+            Log.e("CAPTURE", "projection token or foreground service permission invalid", e)
+            CrashLogStore.save(this, "projection_start", e)
             clearProjectionPermission()
             MonitoringState.setEnabled(this, false)
             stopSelf()
@@ -90,6 +82,10 @@ class ScreenCaptureService : Service() {
         MyAccessibilityService.refreshStatusOverlay()
 
         return START_STICKY
+    }
+
+    private fun startInForeground() {
+        startForeground(1, createNotification())
     }
 
     private fun startCapture() {
@@ -110,16 +106,26 @@ class ScreenCaptureService : Service() {
             2
         )
 
-        virtualDisplay = projection.createVirtualDisplay(
-            "gongde-screen",
-            metrics.widthPixels,
-            metrics.heightPixels,
-            metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface,
-            null,
-            null
-        )
+        try {
+            virtualDisplay = projection.createVirtualDisplay(
+                "gongde-screen",
+                metrics.widthPixels,
+                metrics.heightPixels,
+                metrics.densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader?.surface,
+                null,
+                null
+            )
+        } catch (e: SecurityException) {
+            Log.e("CAPTURE", "create virtual display failed", e)
+            CrashLogStore.save(this, "create_virtual_display", e)
+            clearProjectionPermission()
+            MonitoringState.setEnabled(this, false)
+            stopCapture()
+            stopSelf()
+            return
+        }
 
         imageReader?.setOnImageAvailableListener({ reader ->
 
@@ -260,16 +266,16 @@ class ScreenCaptureService : Service() {
     }
 
     private fun stopCaptureSession() {
-        virtualDisplay?.release()
-        virtualDisplay = null
-        imageReader?.close()
-        imageReader = null
         CaptureTrigger.shouldCapture = false
         CaptureTrigger.pendingCaptureCount = 0
     }
 
     private fun stopCapture() {
         stopCaptureSession()
+        virtualDisplay?.release()
+        virtualDisplay = null
+        imageReader?.close()
+        imageReader = null
         if (projectionCallbackRegistered) {
             mediaProjection?.unregisterCallback(projectionCallback)
             projectionCallbackRegistered = false
