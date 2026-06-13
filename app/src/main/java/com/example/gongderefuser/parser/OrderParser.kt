@@ -252,14 +252,35 @@ object OrderParser {
     private fun parseDeliveryCount(text: String): Int {
         val patterns = listOf(
             Regex("外送\\s*\\(\\s*([0-9]+)\\s*\\)"),
+            Regex("外送\\s*\\(\\s*([二兩两八])\\s*\\)"),
             Regex("外送\\s*\\(?\\s*([2-9])\\s*\\)?"),
+            Regex("外送\\s*\\(?\\s*([二兩两八])\\s*\\)?"),
             Regex("([2-9])\\s*份?\\s*外送"),
+            Regex("([二兩两八])\\s*份?\\s*外送"),
             Regex("([2-9])\\s*筆?\\s*訂單")
         )
 
         return patterns.firstNotNullOfOrNull { regex ->
-            regex.find(text)?.groupValues?.get(1)?.toIntOrNull()
+            regex.find(text)?.groupValues?.get(1)?.let(::parseDeliveryCountToken)
         } ?: 1
+    }
+
+    private fun parseDeliveryCountToken(token: String): Int? {
+        val rawCount = when (token) {
+            "二", "兩", "两" -> 2
+            "八" -> 8
+            else -> token.toIntOrNull()
+        } ?: return null
+        return normalizeDeliveryCount(rawCount)
+    }
+
+    private fun normalizeDeliveryCount(count: Int): Int {
+        return when {
+            count <= 1 -> 1
+            count in 2..3 -> count
+            count in 4..9 -> 2
+            else -> 1
+        }
     }
 
     private fun parseAddressLines(text: String): List<String> {
@@ -326,14 +347,14 @@ object OrderParser {
                 if (firstAddressIndex >= 0) detailLines.drop(firstAddressIndex) else emptyList()
             }
         }
-        val merged = (bottomAddressLines + detailAddressLines + directAddressLines)
+        val merged = dedupeAddressLines((bottomAddressLines + detailAddressLines + directAddressLines)
             .map(::cleanDetailLine)
             .map(::correctAddressLine)
             .filter { line ->
                 isValidAddressLine(line) &&
                         line != storeName
             }
-            .distinct()
+        )
 
         val firstAddressIndex = merged.indexOfFirst(::looksLikeAddressLine)
         val addressLines = if (firstAddressIndex >= 0) {
@@ -342,6 +363,38 @@ object OrderParser {
             merged
         }
         return orderAddressLines(addressLines)
+    }
+
+    private fun dedupeAddressLines(lines: List<String>): List<String> {
+        val result = mutableListOf<String>()
+        lines.forEach { line ->
+            val key = normalizeAddressDedupKey(line)
+            if (key.isBlank()) return@forEach
+            val existingIndex = result.indexOfFirst { existing ->
+                val existingKey = normalizeAddressDedupKey(existing)
+                existingKey == key ||
+                        existingKey.contains(key) ||
+                        key.contains(existingKey)
+            }
+            if (existingIndex < 0) {
+                result.add(line)
+            } else if (line.length > result[existingIndex].length) {
+                result[existingIndex] = line
+            }
+        }
+        return result
+    }
+
+    private fun normalizeAddressDedupKey(line: String): String {
+        return line
+            .lowercase()
+            .replace("台湾", "台灣")
+            .replace("臺灣", "台灣")
+            .replace("龟", "龜")
+            .replace("区", "區")
+            .replace("号", "號")
+            .replace("楼", "樓")
+            .replace(Regex("[^\\p{IsHan}a-z0-9]"), "")
     }
 
     private fun parseBottomAddressLines(detailLines: List<String>): List<String> {

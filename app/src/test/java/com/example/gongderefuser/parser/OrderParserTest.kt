@@ -339,6 +339,25 @@ class OrderParserTest {
     }
 
     @Test
+    fun parseNormalizesImpossibleDeliveryCountFromOcrEightToTwo() {
+        val order = OrderParser.parse(
+            """
+            外送 (8)
+            ${'$'}94
+            28分鐘 (7.2公里) 總計
+            儒食 日式丼飯專門 龜山總店
+            333台灣桃園市龜山區大華里頂湖路
+            60號
+            配對
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(2, order!!.deliveryCount)
+        assertEquals(true, order.isStackOrder)
+    }
+
+    @Test
     fun parseWanShouRoadOneSectionAddress() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
@@ -408,6 +427,29 @@ class OrderParserTest {
         assertEquals(
             "台灣桃園市龜山區長庚醫護\n新村170號",
             order.address
+        )
+    }
+
+    @Test
+    fun parseDedupesAddressLinesFromOverlappingRegions() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "外送\n${'$'}60\n18分鐘 (4.0公里) 總計\n接受",
+                cardText = "外送\n${'$'}60\n18分鐘 (4.0公里) 總計\n回憶港式茶餐廳\n333台灣桃園市龜山區文青里文青路\n268號\n接受",
+                typeText = "外送\n獨享",
+                priceText = "${'$'}60",
+                tripText = "18分鐘 (4.0公里) 總計",
+                detailText = "回憶港式茶餐廳\n333台灣桃園市龜山區文青里文青路\n268號",
+                merchantText = "回憶港式茶餐廳",
+                addressText = "333台灣桃園市龜山區文青里文青路\n333台灣桃園市龜山區文青里文青路",
+                addressLowerText = "268號"
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals(
+            "333台灣桃園市龜山區文青里文青路\n268號",
+            order!!.address
         )
     }
 }

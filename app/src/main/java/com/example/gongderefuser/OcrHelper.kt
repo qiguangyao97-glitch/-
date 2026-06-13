@@ -57,7 +57,9 @@ object OcrHelper {
         fullText: String,
         callback: (OrderRegionText) -> Unit
     ) {
-        val isPairOffer = fullText.contains("配對") || fullText.contains("配对")
+        val isPairOffer = fullText.contains("配對") ||
+                fullText.contains("配对") ||
+                looksLikePairActionButton(bitmap)
         val profile = if (isPairOffer) RegionProfile.Pair else RegionProfile.Accept
         val regions = listOf(
             "card" to crop(bitmap, 0.03f, profile.cardTop, 0.97f, 0.97f),
@@ -182,6 +184,39 @@ object OcrHelper {
         val right = (bitmap.width * rightRatio).toInt().coerceIn(left + 1, bitmap.width)
         val bottom = (bitmap.height * bottomRatio).toInt().coerceIn(top + 1, bitmap.height)
         return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+    }
+
+    private fun looksLikePairActionButton(bitmap: Bitmap): Boolean {
+        val left = (bitmap.width * 0.22f).toInt().coerceIn(0, bitmap.width - 1)
+        val right = (bitmap.width * 0.94f).toInt().coerceIn(left + 1, bitmap.width)
+        val top = (bitmap.height * 0.88f).toInt().coerceIn(0, bitmap.height - 1)
+        val bottom = (bitmap.height * 0.95f).toInt().coerceIn(top + 1, bitmap.height)
+        var redSum = 0L
+        var greenSum = 0L
+        var blueSum = 0L
+        var count = 0
+        val stepX = ((right - left) / 24).coerceAtLeast(1)
+        val stepY = ((bottom - top) / 8).coerceAtLeast(1)
+        var y = top
+        while (y < bottom) {
+            var x = left
+            while (x < right) {
+                val color = bitmap.getPixel(x, y)
+                redSum += android.graphics.Color.red(color)
+                greenSum += android.graphics.Color.green(color)
+                blueSum += android.graphics.Color.blue(color)
+                count += 1
+                x += stepX
+            }
+            y += stepY
+        }
+        if (count == 0) return false
+        val red = redSum / count
+        val green = greenSum / count
+        val blue = blueSum / count
+        val brightness = (red + green + blue) / 3
+        val greenDominant = green > red + 24 && green > blue + 24
+        return brightness < 95 && !greenDominant
     }
 
     private fun prepareForOcr(bitmap: Bitmap): Bitmap {
