@@ -1297,6 +1297,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(COLOR_TEXT_PRIMARY)
         })
         addMerchantStatusCard(content, analysis)
+        addListMatchCard(content, analysis)
         content.addView(TextView(this).apply {
             text = "${analysis.score}分 · ${analysis.recommendation}"
             textSize = 18f
@@ -1318,15 +1319,6 @@ class MainActivity : AppCompatActivity() {
         }
         addResultRow(content, "订单类型", analysis.orderType)
         addResultRow(content, "评分", "${analysis.score} 分")
-        if (analysis.locationScoreImpact != 0) {
-            addResultRow(content, "位置分", "${analysis.locationScoreImpact}")
-        }
-        if (analysis.matchedLocationKeyword.isNotBlank()) {
-            addResultRow(content, "命中位置", analysis.matchedLocationKeyword)
-        }
-        if (analysis.matchedMerchantKeyword.isNotBlank()) {
-            addResultRow(content, "命中商家", analysis.matchedMerchantKeyword)
-        }
         addResultRow(content, "金额", "${analysis.price} 元")
         addResultRow(content, "时间", "${analysis.minutes} 分钟")
         addResultRow(content, "距离", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
@@ -1377,6 +1369,46 @@ class MainActivity : AppCompatActivity() {
         addColoredResultRow(card, "商家", analysis.storeName.ifBlank { "未识别" }, fillColor, accentColor)
         addColoredResultRow(card, "地址", analysis.storeAddress.ifBlank { "未识别" }, fillColor, accentColor)
         parent.addView(card)
+    }
+
+    private fun addListMatchCard(parent: LinearLayout, analysis: AnalysisResult) {
+        val isBlacklisted = analysis.isBlacklisted
+        val isWhitelisted = analysis.isWhitelisted
+        if (!isBlacklisted && !isWhitelisted) return
+
+        val label = if (isBlacklisted) "命中黑名单" else "命中白名单"
+        val keyword = if (isBlacklisted) analysis.matchedBlacklistKeyword else analysis.matchedWhitelistKeyword
+        val note = if (isBlacklisted) analysis.blacklistNote else analysis.whitelistNote
+        val color = if (isBlacklisted) COLOR_DANGER else COLOR_SUCCESS
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = roundedFill(color, 12f)
+        }
+        card.addView(TextView(this).apply {
+            text = label
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        })
+        card.addView(TextView(this).apply {
+            text = buildString {
+                append(keyword.ifBlank { "已命中名单规则" })
+                if (note.isNotBlank()) append("\n").append(note)
+            }
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setLineSpacing(0f, 1.12f)
+            setPadding(0, dp(4), 0, 0)
+        })
+        parent.addView(card, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = dp(8)
+        })
     }
 
     private fun recommendationColor(recommendation: String): Int {

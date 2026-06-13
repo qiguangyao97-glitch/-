@@ -267,13 +267,8 @@ class MyAccessibilityService : AccessibilityService() {
         )
 
         addMerchantStatusBlock(card, analysis)
+        addListMatchBlock(card, analysis)
         addResultLine(card, "评分", "${analysis.score} 分")
-        if (analysis.locationScoreImpact != 0) {
-            addResultLine(card, "位置分", "${analysis.locationScoreImpact}")
-        }
-        if (analysis.matchedLocationKeyword.isNotBlank()) {
-            addResultLine(card, "命中位置", analysis.matchedLocationKeyword)
-        }
         addResultLine(card, "类型", analysis.orderType)
         if (analysis.isSameLocationStack) {
             addResultLine(card, "爽单", "取货或配送地点相同")
@@ -466,6 +461,49 @@ class MyAccessibilityService : AccessibilityService() {
             accentColor
         )
         parent.addView(block)
+    }
+
+    private fun addListMatchBlock(parent: LinearLayout, analysis: AnalysisResult) {
+        val isBlacklisted = analysis.isBlacklisted
+        val isWhitelisted = analysis.isWhitelisted
+        if (!isBlacklisted && !isWhitelisted) return
+
+        val label = if (isBlacklisted) "命中黑名单" else "命中白名单"
+        val keyword = if (isBlacklisted) analysis.matchedBlacklistKeyword else analysis.matchedWhitelistKeyword
+        val note = if (isBlacklisted) analysis.blacklistNote else analysis.whitelistNote
+        val fillColor = if (isBlacklisted) Color.rgb(220, 38, 38) else Color.rgb(22, 163, 74)
+
+        val block = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = GradientDrawable().apply {
+                setColor(fillColor)
+                cornerRadius = 12 * resources.displayMetrics.density
+            }
+        }
+        block.addView(TextView(this).apply {
+            text = label
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        })
+        block.addView(TextView(this).apply {
+            text = buildString {
+                append(keyword.ifBlank { "已命中名单规则" })
+                if (note.isNotBlank()) append("\n").append(note)
+            }
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setLineSpacing(0f, 1.12f)
+            setPadding(0, dp(4), 0, 0)
+        })
+        parent.addView(block, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = dp(6)
+        })
     }
 
     private fun addColoredResultLine(
