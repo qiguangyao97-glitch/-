@@ -913,12 +913,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(COLOR_TEXT_PRIMARY)
             setPadding(0, dp(4), 0, dp(10))
         })
-        versionCard.addView(TextView(this).apply {
-            text = "更新说明：优化三段式音效、规则卡片、识别记录管理。"
-            textSize = 14f
-            setTextColor(COLOR_TEXT_SECONDARY)
-            setLineSpacing(0f, 1.12f)
-        })
+        versionCard.addView(createUpdateHistoryCard())
         layout.addView(versionCard)
 
         setBaseContent(layout)
@@ -962,6 +957,36 @@ class MainActivity : AppCompatActivity() {
             }
             "${packageInfo.versionName} ($versionCode)"
         }.getOrDefault("未知")
+    }
+
+    private fun createUpdateHistoryCard(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(2), 0, 0)
+            updateHistoryItems().forEachIndexed { index, item ->
+                addView(TextView(this@MainActivity).apply {
+                    text = item
+                    textSize = 13f
+                    setTextColor(if (index == 0) COLOR_TEXT_PRIMARY else COLOR_TEXT_SECONDARY)
+                    setLineSpacing(0f, 1.16f)
+                    setPadding(0, if (index == 0) 0 else dp(10), 0, 0)
+                    if (index == 0) {
+                        typeface = Typeface.DEFAULT_BOLD
+                    }
+                })
+            }
+        }
+    }
+
+    private fun updateHistoryItems(): List<String> {
+        return listOf(
+            "1.0.01：建立三级版本号规则；设置页更新说明改为历史卡片，最新更新固定显示在第一行，并保留旧版本说明。",
+            "1.0.0：订单数量改为只读取外送标签，外送为一单，外送带括号数字才判定多单；商家词库加入索引，降低截图分析时的模糊匹配耗时。",
+            "1.0.0：状态卡片简化为工作绿色、停止红色；录屏或截图中断时发送通知提醒；调试样本和实时订单截图路径显示为 Download/功德拒絕器 下的可见目录。",
+            "1.0.0：扩展林口龜山餐饮商家词库，支持品牌根词和分店后缀自动组合；地址区域左侧边界右移，并清理地址行开头图标噪声。",
+            "1.0.0：新增商家词库 OCR 归一化，黑白名单匹配使用纠错后的商家名和地址；修正独享文字误当商家、订单类型误判等问题。",
+            "1.0.0：优化三段式反馈音效、规则卡片、识别记录管理，并支持从结果卡片添加黑白名单。"
+        )
     }
 
     private fun addHeader(layout: LinearLayout) {
