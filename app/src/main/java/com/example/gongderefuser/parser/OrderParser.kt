@@ -436,7 +436,29 @@ object OrderParser {
         linkouGuishanAddressLexicon.forEach { phrase ->
             corrected = correctKnownAddressPhrase(corrected, phrase)
         }
-        return corrected
+        return trimInvalidAddressTail(corrected)
+    }
+
+    private fun trimInvalidAddressTail(line: String): String {
+        val streetMatch = Regex(".*[路街巷弄]").find(line) ?: return line
+        val base = streetMatch.value
+        val tail = line.removePrefix(base).trim()
+        if (tail.isBlank()) return line
+
+        val validTailPatterns = listOf(
+            Regex("^[0-9]+$"),
+            Regex("^[一二三四五六七八九十]+$"),
+            Regex("^[一二三四五六七八九十0-9]+段$"),
+            Regex("^[一二三四五六七八九十0-9]+段[0-9]+號(?:[0-9]+樓(?:之[0-9]+)?|[0-9]*樓?|之[0-9]+)?$"),
+            Regex("^[0-9]+號(?:[0-9]+樓(?:之[0-9]+)?|[0-9]*樓?|之[0-9]+)?$"),
+            Regex("^[0-9]+巷(?:[0-9]+弄)?[0-9]+號(?:[0-9]+樓(?:之[0-9]+)?)?$"),
+            Regex("^[0-9]+弄[0-9]+號(?:[0-9]+樓(?:之[0-9]+)?)?$"),
+            Regex("^[0-9]+樓(?:之[0-9]+)?$"),
+            Regex("^之[0-9]+$")
+        )
+        if (validTailPatterns.any { it.matches(tail) }) return line
+
+        return if (looksLikePrimaryAddressLine(base)) base else line
     }
 
     private fun isValidAddressLine(line: String): Boolean {

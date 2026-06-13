@@ -199,6 +199,75 @@ class OrderParserTest {
     }
 
     @Test
+    fun parseTrimsNoisyAddressTailAfterStreetWithoutHouseNumber() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "外送\n${'$'}70\n21分鐘 (4.5公里) 總計\n接受",
+                cardText = "外送\n${'$'}70\n21分鐘 (4.5公里) 總計\n麥味登 龟山丘比特\n333台灣桃園市龜山區長庚里長庚十街47號列",
+                typeText = "外送\n獨享",
+                priceText = "${'$'}70",
+                tripText = "21分鐘 (4.5公里) 總計",
+                detailText = "麥味登 龟山丘比特\n333台灣桃園市龜山區長庚里長庚十街47號列",
+                merchantText = "麥味登 龟山丘比特",
+                addressText = "333台灣桃園市龜山區長庚里長庚十街47號列",
+                addressLowerText = ""
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals(
+            "333台灣桃園市龜山區長庚里長庚十街",
+            order!!.address
+        )
+    }
+
+    @Test
+    fun parseTrimsGenericNoisyTailAfterRoadName() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n配對",
+                cardText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n麥味登\n333台灣桃園市龜山區文化里文化二路ABC列車",
+                typeText = "外送",
+                priceText = "${'$'}45",
+                tripText = "13分鐘 (2.2公里) 總計",
+                detailText = "麥味登\n333台灣桃園市龜山區文化里文化二路ABC列車",
+                merchantText = "麥味登",
+                addressText = "333台灣桃園市龜山區文化里文化二路ABC列車",
+                addressLowerText = ""
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals(
+            "333台灣桃園市龜山區文化里文化二路",
+            order!!.address
+        )
+    }
+
+    @Test
+    fun parseKeepsValidHouseNumberTailAfterRoadName() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n配對",
+                cardText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n麥味登\n333台灣桃園市龜山區文化里文化二路211號",
+                typeText = "外送",
+                priceText = "${'$'}45",
+                tripText = "13分鐘 (2.2公里) 總計",
+                detailText = "麥味登\n333台灣桃園市龜山區文化里文化二路211號",
+                merchantText = "麥味登",
+                addressText = "333台灣桃園市龜山區文化里文化二路211號",
+                addressLowerText = ""
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals(
+            "333台灣桃園市龜山區文化里文化二路211號",
+            order!!.address
+        )
+    }
+
+    @Test
     fun parseIgnoresNoiseOnlyLowerAddressLine() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
