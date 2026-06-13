@@ -39,6 +39,7 @@ class MyAccessibilityService : AccessibilityService() {
     private var isProcessingOrder = false
     private var lastShownOrderSignature: String = ""
     private var lastShownOrderTime: Long = 0L
+    private var lastOcrAttemptTime: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -63,13 +64,13 @@ class MyAccessibilityService : AccessibilityService() {
         }
         lastTargetEventSummary = "type=${event.eventType} class=${event.className} time=$now"
 
-        if (now - CaptureTrigger.lastTriggerTime < 1500) return
+        if (now - CaptureTrigger.lastTriggerTime < 4_000) return
 
         CaptureTrigger.lastTriggerTime = now
         Log.d("TARGET_TRIGGER", "target event detected")
 
-        CaptureTrigger.pendingCaptureCount = 3
-        listOf(320L, 850L, 1450L).forEach { delay ->
+        CaptureTrigger.pendingCaptureCount = 2
+        listOf(420L, 1200L).forEach { delay ->
             Handler(Looper.getMainLooper()).postDelayed({
                 triggerCapture()
             }, delay)
@@ -78,6 +79,16 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun triggerCapture() {
         if (!MonitoringState.isEnabled(this)) return
+        val now = System.currentTimeMillis()
+        if (now - lastShownOrderTime < 6_000) {
+            Log.d("TARGET_TRIGGER", "skip, recent order shown")
+            return
+        }
+        if (now - lastOcrAttemptTime < 650) {
+            Log.d("TARGET_TRIGGER", "skip, recent OCR attempt")
+            return
+        }
+        lastOcrAttemptTime = now
 
         Log.d("TARGET_TRIGGER", "set capture flag")
         tryAccessibilityScreenshot()
@@ -624,14 +635,14 @@ class MyAccessibilityService : AccessibilityService() {
         }
         block.addView(TextView(this).apply {
             text = label
-            textSize = 13f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
         })
         block.addView(TextView(this).apply {
             text = buildString {
-                append(keyword.ifBlank { "已命中名单规则" })
-                if (note.isNotBlank()) append("\n").append(note)
+                append("标签：").append(keyword.ifBlank { "已命中名单规则" })
+                if (note.isNotBlank()) append("\n备注：").append(note)
             }
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
