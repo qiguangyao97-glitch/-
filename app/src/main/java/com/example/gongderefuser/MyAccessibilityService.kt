@@ -3,14 +3,17 @@ package com.example.gongderefuser
 import android.accessibilityservice.AccessibilityService
 import android.app.Activity
 import android.app.AlertDialog
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -31,11 +34,13 @@ class MyAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var overlayView: View? = null
     private var collapseRunnable: Runnable? = null
+    private var isTakingScreenshot = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         activeService = this
         showStatusOverlayInternal()
+        DiagnosticLogStore.append(this, "ACCESSIBILITY", "connected package=$packageName")
         Log.d("TARGET_SERVICE", "connected")
     }
 
@@ -44,6 +49,7 @@ class MyAccessibilityService : AccessibilityService() {
 
         val packageName = event?.packageName?.toString() ?: return
         if (packageName != "com.ubercab.driver") return
+        val now = System.currentTimeMillis()
 
         if (AppSettings.isAccessibilityLogEnabled(this)) {
             Log.d(
@@ -51,8 +57,8 @@ class MyAccessibilityService : AccessibilityService() {
                 "type=${event.eventType} class=${event.className} text=${event.text} desc=${event.contentDescription}"
             )
         }
+        lastTargetEventSummary = "type=${event.eventType} class=${event.className} time=$now"
 
-        val now = System.currentTimeMillis()
         if (now - CaptureTrigger.lastTriggerTime < 1500) return
 
         CaptureTrigger.lastTriggerTime = now
@@ -70,10 +76,67 @@ class MyAccessibilityService : AccessibilityService() {
         if (!MonitoringState.isEnabled(this)) return
 
         Log.d("TARGET_TRIGGER", "set capture flag")
-        CaptureTrigger.shouldCapture = true
-        if (!ScreenCaptureService.requestCapturePulse()) {
-            Log.d("TARGET_TRIGGER", "capture service is not running")
+        tryAccessibilityScreenshot()
+    }
+
+    private fun reportAccessibilityScreenshotFailure(reason: String) {
+        DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "failed_no_fallback reason=$reason")
+        Toast.makeText(this, "无障碍截图失败：$reason", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun tryAccessibilityScreenshot(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            reportAccessibilityScreenshotFailure("sdk_${Build.VERSION.SDK_INT}")
+            return false
         }
+        if (isTakingScreenshot) {
+            Log.d("A11Y_SCREENSHOT", "skip, screenshot already running")
+            return true
+        }
+        if (!ScreenCaptureService.hasActiveService()) {
+            reportAccessibilityScreenshotFailure("capture_service_not_running")
+            return false
+        }
+
+        isTakingScreenshot = true
+        DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "request lastEvent=$lastTargetEventSummary")
+        takeScreenshot(
+            Display.DEFAULT_DISPLAY,
+            mainExecutor,
+            object : TakeScreenshotCallback {
+                override fun onSuccess(screenshot: ScreenshotResult) {
+                    isTakingScreenshot = false
+                    val bitmap = screenshot.toBitmap()
+                    if (bitmap == null) {
+                        reportAccessibilityScreenshotFailure("bitmap_null")
+                        return
+                    }
+                    DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "success ${bitmap.width}x${bitmap.height}")
+                    if (!ScreenCaptureService.processAccessibilityScreenshot(bitmap)) {
+                        bitmap.recycle()
+                        reportAccessibilityScreenshotFailure("process_rejected")
+                    }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    isTakingScreenshot = false
+                    Log.d("A11Y_SCREENSHOT", "failed code=$errorCode")
+                    reportAccessibilityScreenshotFailure("error_$errorCode")
+                }
+            }
+        )
+        return true
+    }
+
+    private fun ScreenshotResult.toBitmap(): Bitmap? {
+        return runCatching {
+            val source = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace) ?: return null
+            source.copy(Bitmap.Config.ARGB_8888, false).also {
+                hardwareBuffer.close()
+            }
+        }.onFailure {
+            DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "bitmap_error=${it.javaClass.simpleName}:${it.message}")
+        }.getOrNull()
     }
 
     override fun onInterrupt() {
@@ -81,6 +144,7 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        DiagnosticLogStore.append(this, "ACCESSIBILITY", "destroyed package=$packageName")
         clearCollapseTimer()
         hideOverlay()
         if (activeService === this) {
@@ -665,6 +729,8 @@ class MyAccessibilityService : AccessibilityService() {
 
         @Volatile
         private var activeService: MyAccessibilityService? = null
+        @Volatile
+        private var lastTargetEventSummary: String = ""
 
         fun showFeedback(analysis: AnalysisResult): Boolean {
             val service = activeService ?: return false

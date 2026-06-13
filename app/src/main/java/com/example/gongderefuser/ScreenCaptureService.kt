@@ -1,8 +1,10 @@
 package com.example.gongderefuser
 
 import android.app.*
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Resources
 import android.graphics.Bitmap
 import android.hardware.display.DisplayManager
@@ -27,8 +29,17 @@ class ScreenCaptureService : Service() {
     private var isProcessing = false
     private var lastShownOrderSignature: String = ""
     private var lastShownOrderTime: Long = 0L
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action.orEmpty()
+            DiagnosticLogStore.append(this@ScreenCaptureService, "SCREEN", action)
+            Log.d("SCREEN_STATE", action)
+        }
+    }
+
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
+            DiagnosticLogStore.append(this@ScreenCaptureService, "PROJECTION", "onStop enabled=${MonitoringState.isEnabled(this@ScreenCaptureService)}")
             showStoppedNotification("屏幕分享已中断，请重新启用实时监测")
             MonitoringState.setEnabled(this@ScreenCaptureService, false)
             stopCapture()
@@ -39,6 +50,15 @@ class ScreenCaptureService : Service() {
         super.onCreate()
         isRunning = true
         activeService = this
+        registerReceiver(
+            screenReceiver,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_USER_PRESENT)
+            }
+        )
+        DiagnosticLogStore.append(this, "SERVICE", "created package=$packageName")
         MyAccessibilityService.refreshStatusOverlay()
     }
 
@@ -207,6 +227,33 @@ class ScreenCaptureService : Service() {
         }, 3_500)
     }
 
+    private fun processCapturedBitmap(bitmap: Bitmap, source: String) {
+        if (!MonitoringState.isEnabled(this)) {
+            bitmap.recycle()
+            return
+        }
+        if (isProcessing) {
+            bitmap.recycle()
+            return
+        }
+        isProcessing = true
+        DiagnosticLogStore.append(this, "CAPTURE", "process source=$source ${bitmap.width}x${bitmap.height}")
+        OcrHelper.runOrderRegions(this, bitmap) { regionText ->
+            runCatching {
+                Log.d("OCR_RESULT", regionText.fullText)
+                val foundOrder = handleOcrText(regionText, bitmap)
+                DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
+                if (!foundOrder) {
+                    DiagnosticLogStore.append(this, "CAPTURE", "no_order source=$source")
+                }
+            }.onFailure { throwable ->
+                Log.e("CAPTURE", "external OCR callback failed", throwable)
+                CrashLogStore.save(this, "external_ocr_callback", throwable)
+            }
+            isProcessing = false
+        }
+    }
+
     private fun handleOcrText(regionText: OcrHelper.OrderRegionText, bitmap: Bitmap? = null): Boolean {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
@@ -350,6 +397,8 @@ class ScreenCaptureService : Service() {
         if (activeService === this) {
             activeService = null
         }
+        runCatching { unregisterReceiver(screenReceiver) }
+        DiagnosticLogStore.append(this, "SERVICE", "destroyed package=$packageName")
         stopCapture()
         MyAccessibilityService.refreshStatusOverlay()
         super.onDestroy()
@@ -375,6 +424,18 @@ class ScreenCaptureService : Service() {
             val service = activeService ?: return false
             service.mainHandler.post {
                 service.startCapture()
+            }
+            return true
+        }
+
+        fun hasActiveService(): Boolean {
+            return activeService != null
+        }
+
+        fun processAccessibilityScreenshot(bitmap: Bitmap): Boolean {
+            val service = activeService ?: return false
+            service.mainHandler.post {
+                service.processCapturedBitmap(bitmap, "accessibility")
             }
             return true
         }
