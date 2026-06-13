@@ -382,8 +382,48 @@ class MainActivity : AppCompatActivity() {
             setTextColor(COLOR_TEXT_PRIMARY)
             setPadding(0, dp(4), 0, 0)
         })
+        if (record.storeAddress.isNotBlank()) {
+            row.addView(TextView(this).apply {
+                text = record.storeAddress
+                textSize = 13f
+                setTextColor(COLOR_TEXT_SECONDARY)
+                setLineSpacing(0f, 1.12f)
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, 0)
+        }
+        val keyword = buildHistoryListKeyword(record)
+        actionRow.addView(
+            createSmallActionButton("加白名单", COLOR_SUCCESS) {
+                showAddListEntryDialog(keyword, "", isWhitelist = true)
+            },
+            LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                rightMargin = dp(6)
+            }
+        )
+        actionRow.addView(
+            createSmallActionButton("加黑名单", COLOR_DANGER) {
+                showAddListEntryDialog(keyword, "", isWhitelist = false)
+            },
+            LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                leftMargin = dp(6)
+            }
+        )
+        row.addView(actionRow)
 
         parent.addView(row)
+    }
+
+    private fun buildHistoryListKeyword(record: OrderHistory.Record): String {
+        return listOf(record.storeName, record.storeAddress)
+            .map { it.trim() }
+            .filter { it.isNotBlank() && it != "未识别商家" }
+            .joinToString("\n")
+            .ifBlank { record.storeName }
     }
 
     private fun showManualCalculator() {
@@ -1478,15 +1518,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAddListEntryDialog(analysis: AnalysisResult, isWhitelist: Boolean) {
-        val keywordInput = createNumberlessInput("商家名称或地址关键词").apply {
-            setText(analysis.storeName.ifBlank {
+        showAddListEntryDialog(
+            keyword = analysis.storeName.ifBlank {
                 if (isWhitelist) analysis.matchedWhitelistKeyword else analysis.matchedBlacklistKeyword
-            })
+            },
+            note = if (isWhitelist) analysis.whitelistNote else analysis.blacklistNote,
+            isWhitelist = isWhitelist
+        )
+    }
+
+    private fun showAddListEntryDialog(keyword: String, note: String, isWhitelist: Boolean) {
+        val keywordInput = createNumberlessInput("商家名称或地址关键词").apply {
+            setText(keyword)
+            setSingleLine(false)
+            minLines = if (keyword.contains('\n')) 2 else 1
         }
         val noteInput = createNumberlessInput(
             if (isWhitelist) "备注：位置、出餐速度等" else "原因：不好取/不好送/难停车等"
         ).apply {
-            setText(if (isWhitelist) analysis.whitelistNote else analysis.blacklistNote)
+            setText(note)
             setSingleLine(false)
             minLines = 2
             layoutParams = LinearLayout.LayoutParams(
@@ -1518,8 +1568,16 @@ class MainActivity : AppCompatActivity() {
                     keywordInput.error = "至少两个字"
                     return@setOnClickListener
                 }
-                saveListEntry(keyword, note, isWhitelist)
-                Toast.makeText(this, "已添加到${if (isWhitelist) "白名单" else "黑名单"}", Toast.LENGTH_SHORT).show()
+                val saved = saveListEntry(keyword, note, isWhitelist)
+                Toast.makeText(
+                    this,
+                    if (saved) {
+                        "已添加到${if (isWhitelist) "白名单" else "黑名单"}"
+                    } else {
+                        "名单里已有相同商家或地址"
+                    },
+                    Toast.LENGTH_SHORT
+                ).show()
                 dialog.dismiss()
             }
         }
@@ -1527,11 +1585,16 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun saveListEntry(keyword: String, note: String, isWhitelist: Boolean) {
+    private fun saveListEntry(keyword: String, note: String, isWhitelist: Boolean): Boolean {
         val settings = RuleSettings.load(this)
         val whitelist = settings.whitelistEntries.toMutableList()
         val blacklist = settings.blacklistEntries.toMutableList()
         val target = if (isWhitelist) whitelist else blacklist
+        val allEntries = whitelist + blacklist
+
+        if (RuleSettings.containsMatchingEntry(allEntries, keyword)) {
+            return false
+        }
 
         target.removeAll { it.keyword == keyword }
         target.add(RuleSettings.ListEntry(keyword, note))
@@ -1543,6 +1606,7 @@ class MainActivity : AppCompatActivity() {
             whitelistText = RuleSettings.serializeEntries(whitelist),
             blacklistText = RuleSettings.serializeEntries(blacklist)
         )
+        return true
     }
 
     private fun addLabeledNumberInput(parent: LinearLayout, label: String, unit: String): EditText {

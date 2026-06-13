@@ -21,6 +21,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.example.gongderefuser.analyzer.OrderAnalyzer
 import com.example.gongderefuser.analyzer.OrderAnalyzer.AnalysisResult
 import com.example.gongderefuser.analyzer.RuleSettings
@@ -174,8 +175,8 @@ class MyAccessibilityService : AccessibilityService() {
         if (!AppSettings.isSoundEnabled(this)) return
 
         val soundRes = when (analysis.recommendation) {
-            "建议接单" -> R.raw.normal_order
-            "慎重考虑" -> R.raw.whitelist_accept
+            "建议接单" -> R.raw.whitelist_accept
+            "慎重考虑" -> R.raw.normal_order
             else -> R.raw.blacklist_reject
         }
 
@@ -297,7 +298,8 @@ class MyAccessibilityService : AccessibilityService() {
         val keywordInput = EditText(this).apply {
             hint = "商家名称或地址关键词"
             setText(keyword)
-            setSingleLine(true)
+            setSingleLine(false)
+            minLines = if (keyword.contains('\n')) 2 else 1
         }
         val noteInput = EditText(this).apply {
             hint = if (isWhitelist) {
@@ -331,7 +333,16 @@ class MyAccessibilityService : AccessibilityService() {
                     keywordInput.error = "至少两个字"
                     return@setOnClickListener
                 }
-                saveListEntry(keyword, note, isWhitelist)
+                val saved = saveListEntry(keyword, note, isWhitelist)
+                Toast.makeText(
+                    this,
+                    if (saved) {
+                        "已添加到${if (isWhitelist) "白名单" else "黑名单"}"
+                    } else {
+                        "名单里已有相同商家或地址"
+                    },
+                    Toast.LENGTH_SHORT
+                ).show()
                 dialog.dismiss()
             }
         }
@@ -362,11 +373,16 @@ class MyAccessibilityService : AccessibilityService() {
         dialog.show()
     }
 
-    private fun saveListEntry(keyword: String, note: String, isWhitelist: Boolean) {
+    private fun saveListEntry(keyword: String, note: String, isWhitelist: Boolean): Boolean {
         val settings = RuleSettings.load(this)
         val whitelist = settings.whitelistEntries.toMutableList()
         val blacklist = settings.blacklistEntries.toMutableList()
         val target = if (isWhitelist) whitelist else blacklist
+        val allEntries = whitelist + blacklist
+
+        if (RuleSettings.containsMatchingEntry(allEntries, keyword)) {
+            return false
+        }
 
         target.removeAll { it.keyword == keyword }
         target.add(RuleSettings.ListEntry(keyword, note))
@@ -378,6 +394,7 @@ class MyAccessibilityService : AccessibilityService() {
             whitelistText = RuleSettings.serializeEntries(whitelist),
             blacklistText = RuleSettings.serializeEntries(blacklist)
         )
+        return true
     }
 
     private fun addResultLine(parent: LinearLayout, label: String, value: String) {

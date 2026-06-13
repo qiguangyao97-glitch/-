@@ -17,6 +17,7 @@ object OrderHistory {
         val timestamp: Long,
         val source: String,
         val storeName: String,
+        val storeAddress: String,
         val orderType: String,
         val price: Int,
         val minutes: Int,
@@ -42,6 +43,7 @@ object OrderHistory {
                 timestamp = System.currentTimeMillis(),
                 source = source,
                 storeName = analysis.storeName.ifBlank { "未识别商家" },
+                storeAddress = analysis.storeAddress,
                 orderType = analysis.orderType,
                 price = analysis.price,
                 minutes = analysis.minutes,
@@ -70,6 +72,7 @@ object OrderHistory {
                             timestamp = item.optLong("timestamp"),
                             source = item.optString("source"),
                             storeName = item.optString("storeName", "未识别商家"),
+                            storeAddress = item.optString("storeAddress"),
                             orderType = item.optString("orderType"),
                             price = item.optInt("price"),
                             minutes = item.optInt("minutes"),
@@ -107,6 +110,7 @@ object OrderHistory {
                     .put("timestamp", record.timestamp)
                     .put("source", record.source)
                     .put("storeName", record.storeName)
+                    .put("storeAddress", record.storeAddress)
                     .put("orderType", record.orderType)
                     .put("price", record.price)
                     .put("minutes", record.minutes)

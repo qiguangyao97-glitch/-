@@ -139,7 +139,9 @@ object RuleSettings {
 
     fun serializeEntries(entries: List<ListEntry>): String {
         return entries.joinToString("\n") { entry ->
-            if (entry.note.isBlank()) entry.keyword else "${entry.keyword}|${entry.note}"
+            val keyword = encodeEntryPart(entry.keyword)
+            val note = encodeEntryPart(entry.note)
+            if (note.isBlank()) keyword else "$keyword|$note"
         }
     }
 
@@ -152,15 +154,80 @@ object RuleSettings {
             .map { raw ->
                 val parts = raw.trim().split('|', limit = 2)
                 ListEntry(
-                    keyword = parts.getOrNull(0).orEmpty().trim(),
-                    note = parts.getOrNull(1).orEmpty().trim()
+                    keyword = decodeEntryPart(parts.getOrNull(0).orEmpty()).trim(),
+                    note = decodeEntryPart(parts.getOrNull(1).orEmpty()).trim()
                 )
             }
             .filter { it.keyword.length >= 2 }
             .distinctBy { it.keyword }
     }
 
+    private fun encodeEntryPart(value: String): String {
+        return value
+            .trim()
+            .replace("\\", "\\\\")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .replace("\n", "\\n")
+    }
+
+    private fun decodeEntryPart(value: String): String {
+        val result = StringBuilder()
+        var index = 0
+        while (index < value.length) {
+            val char = value[index]
+            if (char == '\\' && index + 1 < value.length) {
+                when (value[index + 1]) {
+                    'n' -> {
+                        result.append('\n')
+                        index += 2
+                        continue
+                    }
+                    '\\' -> {
+                        result.append('\\')
+                        index += 2
+                        continue
+                    }
+                }
+            }
+            result.append(char)
+            index += 1
+        }
+        return result.toString()
+    }
+
     fun parseKeywords(text: String): List<String> {
         return parseEntries(text).map { it.keyword }
+    }
+
+    fun containsMatchingEntry(entries: List<ListEntry>, keyword: String): Boolean {
+        val candidates = keywordCandidates(keyword)
+        if (candidates.isEmpty()) return false
+        return entries.any { entry ->
+            val existingCandidates = keywordCandidates(entry.keyword)
+            existingCandidates.any { existing ->
+                candidates.any { candidate ->
+                    existing == candidate ||
+                            existing.contains(candidate) ||
+                            candidate.contains(existing)
+                }
+            }
+        }
+    }
+
+    private fun keywordCandidates(keyword: String): Set<String> {
+        val parts = keyword
+            .lines()
+            .map(::normalizeListKeyword)
+            .filter { it.length >= 2 }
+        val full = normalizeListKeyword(keyword)
+        return (parts + full).filter { it.length >= 2 }.toSet()
+    }
+
+    private fun normalizeListKeyword(value: String): String {
+        return value
+            .lowercase()
+            .replace(Regex("\\s+"), "")
+            .replace(Regex("[,，;；|]"), "")
     }
 }
