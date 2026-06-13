@@ -28,6 +28,7 @@ import android.widget.Toast
 import com.example.gongderefuser.analyzer.OrderAnalyzer
 import com.example.gongderefuser.analyzer.OrderAnalyzer.AnalysisResult
 import com.example.gongderefuser.analyzer.RuleSettings
+import com.example.gongderefuser.parser.OrderParser
 
 class MyAccessibilityService : AccessibilityService() {
 
@@ -36,6 +37,9 @@ class MyAccessibilityService : AccessibilityService() {
     private var testButtonView: View? = null
     private var collapseRunnable: Runnable? = null
     private var isTakingScreenshot = false
+    private var isProcessingOrder = false
+    private var lastShownOrderSignature: String = ""
+    private var lastShownOrderTime: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -95,11 +99,6 @@ class MyAccessibilityService : AccessibilityService() {
             Log.d("A11Y_SCREENSHOT", "skip, screenshot already running")
             return true
         }
-        if (!ScreenCaptureService.hasActiveService()) {
-            reportAccessibilityScreenshotFailure("capture_service_not_running")
-            return false
-        }
-
         isTakingScreenshot = true
         DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "request lastEvent=$lastTargetEventSummary")
         takeScreenshot(
@@ -114,10 +113,7 @@ class MyAccessibilityService : AccessibilityService() {
                         return
                     }
                     DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "success ${bitmap.width}x${bitmap.height}")
-                    if (!ScreenCaptureService.processAccessibilityScreenshot(bitmap)) {
-                        bitmap.recycle()
-                        reportAccessibilityScreenshotFailure("process_rejected")
-                    }
+                    processAccessibilityOrderBitmap(bitmap)
                 }
 
                 override fun onFailure(errorCode: Int) {
@@ -127,6 +123,78 @@ class MyAccessibilityService : AccessibilityService() {
                 }
             }
         )
+        return true
+    }
+
+    private fun processAccessibilityOrderBitmap(bitmap: Bitmap) {
+        if (!MonitoringState.isEnabled(this)) {
+            bitmap.recycle()
+            return
+        }
+        if (isProcessingOrder) {
+            bitmap.recycle()
+            return
+        }
+
+        isProcessingOrder = true
+        DiagnosticLogStore.append(this, "CAPTURE", "process source=accessibility ${bitmap.width}x${bitmap.height}")
+        OcrHelper.runOrderRegions(this, bitmap) { regionText ->
+            runCatching {
+                Log.d("OCR_RESULT", regionText.fullText)
+                val order = OrderParser.parse(
+                    OrderParser.RegionInput(
+                        fullText = regionText.fullText,
+                        cardText = regionText.cardText,
+                        typeText = regionText.typeText,
+                        priceText = regionText.priceText,
+                        tripText = regionText.tripText,
+                        detailText = regionText.detailText,
+                        merchantText = regionText.merchantText,
+                        addressText = regionText.addressText,
+                        addressLowerText = regionText.addressLowerText
+                    )
+                ) ?: OrderParser.parse(regionText.fullText)
+                val foundOrder = handleAccessibilityOrder(order, bitmap)
+                DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
+                if (!foundOrder) {
+                    DiagnosticLogStore.append(this, "CAPTURE", "no_order source=accessibility")
+                }
+            }.onFailure { throwable ->
+                Log.e("CAPTURE", "accessibility OCR callback failed", throwable)
+                CrashLogStore.save(this, "accessibility_ocr_callback", throwable)
+            }
+            isProcessingOrder = false
+        }
+    }
+
+    private fun handleAccessibilityOrder(order: com.example.gongderefuser.model.OrderData?, bitmap: Bitmap?): Boolean {
+        if (order == null) {
+            Log.d("ORDER_ANALYSIS", "incomplete order ignored")
+            return false
+        }
+
+        val signature = "${order.price}-${order.minutes}-${order.distance}-${order.deliveryCount}-${order.isExclusive}"
+        val now = System.currentTimeMillis()
+        if (signature == lastShownOrderSignature && now - lastShownOrderTime < 30_000) {
+            Log.d("ORDER_ANALYSIS", "duplicate order ignored")
+            return true
+        }
+
+        lastShownOrderSignature = signature
+        lastShownOrderTime = now
+
+        val analysis = OrderAnalyzer.analyzeResult(this, order)
+        val screenshotPath = bitmap?.takeIf {
+            AppSettings.isOrderCaptureEnabled(this)
+        }?.let {
+            OrderCaptureStore.saveOrderCapture(this, it, analysis)
+        }.orEmpty()
+        OrderHistory.add(this, analysis, "实时", screenshotPath)
+
+        Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(order))
+        mainHandler.post {
+            showAnalysisOverlayInternal(analysis)
+        }
         return true
     }
 
@@ -805,6 +873,9 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun isMonitoringWorking(): Boolean {
+        if (isBetaPackage()) {
+            return MonitoringState.isEnabled(this) && activeService === this
+        }
         val hasProjection = CaptureHolder.data != null &&
                 CaptureHolder.resultCode == Activity.RESULT_OK
         return MonitoringState.isEnabled(this) && hasProjection && ScreenCaptureService.isRunning
@@ -871,6 +942,10 @@ class MyAccessibilityService : AccessibilityService() {
                 service.showStatusOverlayInternal()
                 service.showTestScreenshotButtonInternal()
             }
+        }
+
+        fun isServiceActive(): Boolean {
+            return activeService != null
         }
     }
 }

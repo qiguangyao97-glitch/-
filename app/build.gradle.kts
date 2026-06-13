@@ -15,8 +15,8 @@ android {
         applicationId = "com.example.gongderefuser"
         minSdk = 28
         targetSdk = 28
-        versionCode = 6
-        versionName = "1.0.05"
+        versionCode = 7
+        versionName = "1.0.06"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

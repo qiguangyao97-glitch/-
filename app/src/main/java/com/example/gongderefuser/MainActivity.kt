@@ -980,6 +980,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.06：测试版开启监测不再请求画面分享授权；实时订单改为由无障碍截图直接进入 OCR 处理，首页文案同步改为无障碍监听状态。",
             "1.0.05：测试版新增无障碍截图测试悬浮按钮；点按后只验证当前界面能否截图，不跑订单识别，成功图片保存到 Download/功德拒絕器/accessibility_screenshot_tests。",
             "1.0.04：测试版改为只使用无障碍截图，不再失败回退录屏；截图失败会写入诊断日志并提示，方便直观看出新逻辑是否能触发。",
             "1.0.03：测试版优先使用无障碍截图抓取订单画面，失败才回退到原录屏截屏；新增监测诊断日志，记录锁屏、解锁、录屏中断和截图来源。",
@@ -1157,6 +1158,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleMonitoring() {
+        if (isBetaPackage()) {
+            toggleBetaMonitoring()
+            return
+        }
+
         val isEnabled = MonitoringState.isEnabled(this)
         val isWorking = isEnabled && ScreenCaptureService.isRunning
 
@@ -1172,7 +1178,36 @@ class MainActivity : AppCompatActivity() {
         startAppFlow()
     }
 
+    private fun toggleBetaMonitoring() {
+        val isEnabled = MonitoringState.isEnabled(this)
+        if (isEnabled) {
+            MonitoringState.setEnabled(this, false)
+            Toast.makeText(this, "实时监测已暂停", Toast.LENGTH_SHORT).show()
+            MyAccessibilityService.refreshStatusOverlay()
+            updateMonitoringUi()
+            return
+        }
+
+        if (!isAccessibilityServiceEnabled()) {
+            Toast.makeText(this, "请先开启测试版无障碍服务", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
+        }
+
+        MonitoringState.setEnabled(this, true)
+        Toast.makeText(this, "测试版实时监测已开启，不需要画面分享授权", Toast.LENGTH_LONG).show()
+        MyAccessibilityService.refreshStatusOverlay()
+        updateMonitoringUi()
+    }
+
     private fun restoreMonitoringIfPossible() {
+        if (isBetaPackage()) {
+            if (MonitoringState.isEnabled(this)) {
+                MyAccessibilityService.refreshStatusOverlay()
+            }
+            return
+        }
+
         if (
             MonitoringState.isEnabled(this) &&
             hasProjectionPermission() &&
@@ -1185,7 +1220,11 @@ class MainActivity : AppCompatActivity() {
     private fun updateMonitoringUi() {
         val isEnabled = MonitoringState.isEnabled(this)
         val hasProjectionPermission = hasProjectionPermission()
-        val isServiceRunning = ScreenCaptureService.isRunning
+        val isServiceRunning = if (isBetaPackage()) {
+            isEnabled && isAccessibilityServiceEnabled() && MyAccessibilityService.isServiceActive()
+        } else {
+            ScreenCaptureService.isRunning
+        }
 
         if (::statusToggleButton.isInitialized) {
             statusToggleButton.text = when {
@@ -1197,12 +1236,18 @@ class MainActivity : AppCompatActivity() {
         when {
             isEnabled && isServiceRunning -> setStatus(
                 title = "正在工作",
-                detail = "低功耗监听已开启。目标应用弹出订单后才会短时 OCR。",
+                detail = if (isBetaPackage()) {
+                    "测试版无障碍监听已开启。目标应用弹出订单后会直接调用无障碍截图。"
+                } else {
+                    "低功耗监听已开启。目标应用弹出订单后才会短时 OCR。"
+                },
                 color = COLOR_SUCCESS
             )
             else -> setStatus(
                 title = "已停止",
-                detail = if (hasProjectionPermission) {
+                detail = if (isBetaPackage()) {
+                    "测试版没有在工作。点击启用监测，只需要确认无障碍服务已开启。"
+                } else if (hasProjectionPermission) {
                     "实时监测没有在工作。点击启用监测后，请重新确认屏幕分享。"
                 } else {
                     "实时监测没有在工作。点击启用监测，授权时请选择分享整个画面。"
@@ -1857,6 +1902,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun hasProjectionPermission(): Boolean {
         return CaptureHolder.resultCode == Activity.RESULT_OK && CaptureHolder.data != null
+    }
+
+    private fun isBetaPackage(): Boolean {
+        return packageName.endsWith(".beta")
     }
 
     private fun promptAccessibilityIfNeeded() {
