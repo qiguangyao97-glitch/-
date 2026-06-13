@@ -9,8 +9,14 @@ object MerchantDictionaryStore {
         val aliases: List<String>
     )
 
+    private data class IndexedEntry(
+        val canonicalName: String,
+        val compactNames: List<String>,
+        val grams: Set<String>
+    )
+
     @Volatile
-    private var entries: List<Entry> = emptyList()
+    private var entries: List<IndexedEntry> = emptyList()
 
     fun load(context: Context) {
         runCatching {
@@ -24,14 +30,14 @@ object MerchantDictionaryStore {
             val branches = assets.open("merchant_branch_suffixes.txt")
                 .bufferedReader(Charsets.UTF_8)
                 .use { reader -> parseNames(reader.readText()) }
-            entries = (base + buildBranchEntries(brands, branches)).distinctBy {
+            entries = buildIndex((base + buildBranchEntries(brands, branches)).distinctBy {
                 compact(it.canonicalName)
-            }
+            })
         }
     }
 
     fun loadFromText(text: String) {
-        entries = parseEntries(text)
+        entries = buildIndex(parseEntries(text))
     }
 
     fun correct(candidate: String): String {
@@ -49,33 +55,36 @@ object MerchantDictionaryStore {
     private fun bestExactMatch(compactCandidate: String): String? {
         return entries
             .asSequence()
-            .flatMap { entry -> entry.allNames().asSequence().map { name -> entry to compact(name) } }
+            .flatMap { entry -> entry.compactNames.asSequence().map { name -> entry to name } }
             .filter { (_, compactName) ->
                 compactName.length >= 4 &&
                     compactCandidate.contains(compactName) &&
                     compactName.length >= (compactCandidate.length * EXACT_MIN_COVERAGE).toInt()
             }
-            .maxWithOrNull(compareBy<Pair<Entry, String>> { it.second.length })
+            .maxWithOrNull(compareBy<Pair<IndexedEntry, String>> { it.second.length })
             ?.first
             ?.canonicalName
     }
 
     private fun bestFuzzyMatch(compactCandidate: String): String? {
+        val candidateGrams = grams(compactCandidate)
+        if (candidateGrams.isEmpty()) return null
+
         return entries
             .asSequence()
+            .filter { entry -> entry.grams.any(candidateGrams::contains) }
             .mapNotNull { entry ->
-                val confidence = entry.allNames()
+                val confidence = entry.compactNames
                     .asSequence()
-                    .map(::compact)
                     .filter { it.length >= 4 }
                     .map { name -> bestSimilarity(compactCandidate, name) }
                     .maxOrNull() ?: 0.0
-                val threshold = minimumConfidence(compactCandidate.length, compact(entry.canonicalName).length)
+                val threshold = minimumConfidence(compactCandidate.length, entry.compactNames.firstOrNull()?.length ?: 0)
                 if (confidence >= threshold) entry to confidence else null
             }
             .maxWithOrNull(
-                compareBy<Pair<Entry, Double>> { it.second }
-                    .thenBy { compact(it.first.canonicalName).length }
+                compareBy<Pair<IndexedEntry, Double>> { it.second }
+                    .thenBy { it.first.compactNames.firstOrNull()?.length ?: 0 }
             )
             ?.first
             ?.canonicalName
@@ -127,8 +136,34 @@ object MerchantDictionaryStore {
 
     private fun Entry.allNames(): List<String> = listOf(canonicalName) + aliases
 
+    private fun buildIndex(rawEntries: List<Entry>): List<IndexedEntry> {
+        return rawEntries.mapNotNull { entry ->
+            val compactNames = entry.allNames()
+                .map(::compact)
+                .filter { it.length >= 3 }
+                .distinct()
+            if (compactNames.isEmpty()) {
+                null
+            } else {
+                IndexedEntry(
+                    canonicalName = entry.canonicalName,
+                    compactNames = compactNames,
+                    grams = compactNames.flatMap(::grams).toSet()
+                )
+            }
+        }
+    }
+
     private fun compact(text: String): String {
         return OcrTextNormalizer.compact(OcrCorrectionStore.applyMerchant(text))
+    }
+
+    private fun grams(text: String): Set<String> {
+        if (text.length < 2) return emptySet()
+        return (0 until text.length - 1)
+            .map { index -> text.substring(index, index + 2) }
+            .filterNot { gram -> noisyGrams.contains(gram) }
+            .toSet()
     }
 
     private fun minimumConfidence(candidateLength: Int, canonicalLength: Int): Double {
@@ -184,4 +219,5 @@ object MerchantDictionaryStore {
     }
 
     private const val EXACT_MIN_COVERAGE = 0.70
+    private val noisyGrams = setOf("林口", "龜山", "龟山", "總店", "总店")
 }

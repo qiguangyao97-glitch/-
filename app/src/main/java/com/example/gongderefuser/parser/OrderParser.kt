@@ -33,8 +33,7 @@ object OrderParser {
             val minutes = parseMinutes(normalizedText)
             val distance = parseDistance(normalizedText)
             val deliveryCount = parseDeliveryCount(normalizedText)
-            val isExclusive = normalizedText.contains("獨享") ||
-                    normalizedText.contains("独享")
+            val isExclusive = deliveryCount <= 1
             val isTargetOffer = isLikelyTargetOffer(normalizedText)
             val addressLines = parseAddressLines(normalizedText)
             val address = addressLines.joinToString("\n").ifBlank { normalizedText }
@@ -95,12 +94,7 @@ object OrderParser {
             val minutes = parseMinutesFromSources(tripText, cardText, fullText)
             val distance = parseDistanceFromSources(tripText, cardText, fullText)
             val deliveryCount = parseDeliveryCount(listOf(typeText, cardText, fullText).joinToString("\n"))
-            val isExclusive = typeText.contains("獨享") ||
-                    typeText.contains("独享") ||
-                    cardText.contains("獨享") ||
-                    cardText.contains("独享") ||
-                    fullText.contains("獨享") ||
-                    fullText.contains("独享")
+            val isExclusive = deliveryCount <= 1
             val isTargetOffer = isLikelyTargetOffer(combinedText)
             val cardDetailLines = parseCardDetailLines(cardText)
             val regionDetailLines = parseDetailLines(detailText.ifBlank {
@@ -271,18 +265,20 @@ object OrderParser {
     }
 
     private fun parseDeliveryCount(text: String): Int {
+        val deliveryLabel = text
+            .lines()
+            .firstOrNull { line -> line.contains("外送") }
+            ?: return 1
+
         val patterns = listOf(
             Regex("外送\\s*\\(\\s*([0-9]+)\\s*\\)"),
             Regex("外送\\s*\\(\\s*([二兩两])\\s*\\)"),
             Regex("外送\\s+([2-3])(?:\\s|$)"),
-            Regex("外送\\s+([二兩两])(?:\\s|$)"),
-            Regex("([2-9])\\s*份?\\s*外送"),
-            Regex("([二兩两])\\s*份?\\s*外送"),
-            Regex("([2-9])\\s*筆?\\s*訂單")
+            Regex("外送\\s+([二兩两])(?:\\s|$)")
         )
 
         return patterns.firstNotNullOfOrNull { regex ->
-            regex.find(text)?.groupValues?.get(1)?.let(::parseDeliveryCountToken)
+            regex.find(deliveryLabel)?.groupValues?.get(1)?.let(::parseDeliveryCountToken)
         } ?: 1
     }
 

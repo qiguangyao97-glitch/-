@@ -67,6 +67,46 @@ class OrderParserTest {
     }
 
     @Test
+    fun parseSingleOrderIgnoresExclusiveText() {
+        val order = OrderParser.parse(
+            """
+            外送
+            獨享
+            ${'$'}80
+            20分鐘 (4.0公里) 總計
+            麥味登 龜山華亞店
+            333台灣桃園市龜山區文化一路83號
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(1, order!!.deliveryCount)
+        assertEquals(false, order.isStackOrder)
+        assertEquals("独享", OrderAnalyzer.analyzeResult(order).orderType)
+    }
+
+    @Test
+    fun parseDeliveryCountOnlyUsesDeliveryBadge() {
+        val order = OrderParser.parse(
+            """
+            外送
+            獨享
+            背景文字 2筆訂單
+            ${'$'}80
+            20分鐘 (4.0公里) 總計
+            麥味登 龜山華亞店
+            333台灣桃園市龜山區文化一路83號
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(1, order!!.deliveryCount)
+        assertEquals(false, order.isStackOrder)
+    }
+
+    @Test
     fun parseCorrectsDistanceWhenDecimalPointIsMissing() {
         val order = OrderParser.parse(
             """
