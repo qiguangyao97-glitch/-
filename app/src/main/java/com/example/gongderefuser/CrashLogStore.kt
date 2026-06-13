@@ -13,9 +13,7 @@ object CrashLogStore {
 
     fun save(context: Context, label: String, throwable: Throwable) {
         runCatching {
-            val dir = File(context.applicationContext.getExternalFilesDir(null), "crash_logs").apply {
-                mkdirs()
-            }
+            val dir = DebugFileDirs.resolve(context, "crash_logs")
             val stack = StringWriter().also { writer ->
                 PrintWriter(writer).use { printer ->
                     printer.println("label=$label")

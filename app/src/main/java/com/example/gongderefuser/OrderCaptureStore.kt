@@ -17,9 +17,7 @@ object OrderCaptureStore {
         analysis: OrderAnalyzer.AnalysisResult
     ): String {
         return runCatching {
-            val dir = File(context.applicationContext.getExternalFilesDir(null), "order_captures").apply {
-                mkdirs()
-            }
+            val dir = DebugFileDirs.resolve(context, "order_captures")
             val merchant = analysis.storeName
                 .ifBlank { "order" }
                 .replace(Regex("[^\\p{IsHan}A-Za-z0-9_-]+"), "_")

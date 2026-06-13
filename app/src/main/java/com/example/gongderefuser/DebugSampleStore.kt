@@ -19,9 +19,7 @@ object DebugSampleStore {
         if (!AppSettings.isDebugSamplesEnabled(context)) return
 
         runCatching {
-            val dir = File(context.getExternalFilesDir(null), "debug_samples").apply {
-                mkdirs()
-            }
+            val dir = DebugFileDirs.resolve(context, "debug_samples")
             val name = "${formatter.format(Date())}-${if (parsed) "order" else "miss"}"
             File(dir, "$name.jpg").outputStream().use { output ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output)

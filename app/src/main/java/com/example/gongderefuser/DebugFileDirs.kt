@@ -1,0 +1,27 @@
+package com.example.gongderefuser
+
+import android.content.Context
+import android.os.Environment
+import java.io.File
+
+object DebugFileDirs {
+    private const val ROOT_NAME = "功德拒絕器"
+
+    fun resolve(context: Context, folderName: String): File {
+        val publicDir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "$ROOT_NAME/$folderName"
+        )
+        return runCatching {
+            publicDir.mkdirs()
+            val probe = File(publicDir, ".probe")
+            probe.writeText("ok")
+            probe.delete()
+            publicDir
+        }.getOrElse {
+            File(context.applicationContext.getExternalFilesDir(null), folderName).apply {
+                mkdirs()
+            }
+        }
+    }
+}
