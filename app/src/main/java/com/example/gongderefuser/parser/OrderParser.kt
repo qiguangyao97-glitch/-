@@ -1,5 +1,6 @@
 package com.example.gongderefuser.parser
 
+import com.example.gongderefuser.MerchantDictionaryStore
 import com.example.gongderefuser.OcrCorrectionStore
 import com.example.gongderefuser.model.OrderData
 
@@ -692,6 +693,7 @@ object OrderParser {
             if (linesAfterTotal.any { line -> addressLines.any { address -> address == line } }) {
                 linesAfterTotal
                     .takeWhile { line -> addressLines.none { address -> address == line } }
+                    .map(::correctMerchantName)
                     .firstOrNull(::isLikelyStoreName)
                     ?.let { return it }
             }
@@ -703,11 +705,15 @@ object OrderParser {
         if (firstAddressIndex > 0) {
             lines.subList(0, firstAddressIndex)
                 .asReversed()
+                .map(::correctMerchantName)
                 .firstOrNull(::isLikelyStoreName)
                 ?.let { return it }
         }
 
-        return lines.firstOrNull(::isLikelyStoreName).orEmpty()
+        return lines
+            .map(::correctMerchantName)
+            .firstOrNull(::isLikelyStoreName)
+            .orEmpty()
     }
 
     private fun parseRegionStoreName(text: String): String {
@@ -729,9 +735,10 @@ object OrderParser {
     }
 
     private fun correctMerchantName(line: String): String {
-        return OcrCorrectionStore.applyMerchant(line
+        val corrected = OcrCorrectionStore.applyMerchant(line
             .replace(Regex("^[90oO]\\s*(?=[\\p{IsHan}A-Za-z])"), "")
         )
+        return MerchantDictionaryStore.correct(corrected)
     }
 
     private fun isLikelyStoreName(line: String): Boolean {

@@ -12,6 +12,7 @@ class GongdeRefuserApp : Application() {
     override fun onCreate() {
         super.onCreate()
         OcrCorrectionStore.load(this)
+        MerchantDictionaryStore.load(this)
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching {

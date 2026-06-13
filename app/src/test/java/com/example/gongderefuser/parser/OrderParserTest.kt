@@ -1,5 +1,6 @@
 package com.example.gongderefuser.parser
 
+import com.example.gongderefuser.MerchantDictionaryStore
 import com.example.gongderefuser.OcrCorrectionStore
 import com.example.gongderefuser.analyzer.OrderAnalyzer
 import org.junit.BeforeClass
@@ -19,6 +20,13 @@ class OrderParserTest {
             ).first { it.exists() }
             OcrCorrectionStore.loadFromText(
                 file.readText(Charsets.UTF_8)
+            )
+            val merchantFile = listOf(
+                File("app/src/main/assets/merchant_dictionary.txt"),
+                File("src/main/assets/merchant_dictionary.txt")
+            ).first { it.exists() }
+            MerchantDictionaryStore.loadFromText(
+                merchantFile.readText(Charsets.UTF_8)
             )
         }
     }
@@ -662,5 +670,50 @@ class OrderParserTest {
         assertNotNull(order)
         assertEquals(1, order!!.deliveryCount)
         assertEquals(false, order.isStackOrder)
+    }
+
+    @Test
+    fun parseCorrectsMerchantNameFromDictionary() {
+        val order = OrderParser.parse(
+            """
+            外送
+            獨享
+            ${'$'}45
+            13分鐘 (2.2公里) 總計
+            9Pizza Hut必勝客(株口文貴店)
+            333台灣桃園市龜山區樂善里文化一路
+            83號
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals("Pizza Hut必勝客(林口文青店)", order!!.storeName)
+        assertEquals(false, order.isStackOrder)
+    }
+
+    @Test
+    fun correctedMerchantNameCanTriggerManualListKeyword() {
+        val order = OrderParser.parse(
+            """
+            外送
+            獨享
+            ${'$'}45
+            13分鐘 (2.2公里) 總計
+            9Pizza Hut必勝客(株口文貴店)
+            333台灣桃園市龜山區樂善里文化一路
+            83號
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(
+            true,
+            OrderAnalyzer.matchesManualListKeyword(
+                text = order!!.storeName,
+                keyword = "Pizza Hut必勝客(林口文青店)"
+            )
+        )
     }
 }
