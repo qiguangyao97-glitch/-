@@ -95,15 +95,8 @@ object OcrHelper {
         }
 
         regions.forEach { (key, regionBitmap) ->
-            if (key == "detail" || key == "merchant" || key == "address" || key == "addressLower") {
-                Thread {
-                    val paddleText = PaddleOcrEngine.recognize(context, regionBitmap)
-                    if (!paddleText.isNullOrBlank()) {
-                        finishOne(key, paddleText)
-                    } else {
-                        runMlKitRegion(regionBitmap) { text -> finishOne(key, text) }
-                    }
-                }.start()
+            if (regionBitmap.width <= 1 && regionBitmap.height <= 1) {
+                finishOne(key, "")
             } else {
                 runMlKitRegion(regionBitmap) { text -> finishOne(key, text) }
             }
@@ -138,9 +131,9 @@ object OcrHelper {
             "price" to prepareForOcr(crop(bitmap, 0.05f, profile.priceTop, 0.45f, profile.priceBottom)),
             "trip" to prepareForOcr(crop(bitmap, 0.05f, profile.tripTop, 0.92f, profile.tripBottom)),
             "detail" to prepareForOcr(crop(bitmap, 0.00f, profile.merchantTop - 0.01f, 1.00f, profile.addressBottom + 0.04f)),
-            "merchant" to prepareForOcr(crop(bitmap, 0.00f, profile.merchantTop, 1.00f, profile.merchantBottom)),
-            "address" to prepareForOcr(crop(bitmap, 0.00f, profile.addressTop, 1.00f, profile.addressBottom)),
-            "addressLower" to prepareForOcr(crop(bitmap, 0.00f, profile.addressSecondTop, 1.00f, profile.addressSecondBottom))
+            "merchant" to blankBitmap(),
+            "address" to blankBitmap(),
+            "addressLower" to blankBitmap()
         )
     }
 
@@ -169,9 +162,9 @@ object OcrHelper {
 
         val merchantTop = anchor?.let { (it.top - cardHeight * 0.045f).toInt() }
             ?: y(if (isPairOffer) 0.48f else 0.50f)
-        val merchantBottom = anchor?.let { (it.top + cardHeight * 0.12f).toInt() }
+        val merchantBottom = anchor?.let { (it.top + cardHeight * 0.14f).toInt() }
             ?: y(if (isPairOffer) 0.62f else 0.64f)
-        val addressTop = anchor?.let { (it.top + cardHeight * 0.055f).toInt() }
+        val addressTop = anchor?.let { (it.top + cardHeight * 0.13f).toInt() }
             ?: y(if (isPairOffer) 0.58f else 0.60f)
         val addressBottom = detailBottom
 
@@ -181,10 +174,16 @@ object OcrHelper {
             "price" to prepareForOcr(crop(bitmap, x(0.03f), y(0.13f), x(0.50f), y(0.33f))),
             "trip" to prepareForOcr(crop(bitmap, x(0.03f), y(0.32f), x(0.92f), y(0.48f))),
             "detail" to prepareForOcr(crop(bitmap, detailLeft, detailTop, detailRight, detailBottom)),
-            "merchant" to prepareForOcr(crop(bitmap, detailLeft, merchantTop, detailRight, merchantBottom)),
-            "address" to prepareForOcr(crop(bitmap, detailLeft, addressTop, detailRight, addressBottom)),
-            "addressLower" to prepareForOcr(crop(bitmap, detailLeft, addressTop, detailRight, addressBottom))
+            "merchant" to blankBitmap(),
+            "address" to blankBitmap(),
+            "addressLower" to blankBitmap()
         )
+    }
+
+    private fun blankBitmap(): Bitmap {
+        return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.WHITE)
+        }
     }
 
     private sealed class RegionProfile(
@@ -270,56 +269,58 @@ object OcrHelper {
     private fun findActionButton(bitmap: Bitmap): ActionButton? {
         val searchLeft = (bitmap.width * 0.08f).toInt()
         val searchRight = (bitmap.width * 0.96f).toInt()
-        val searchTop = (bitmap.height * 0.62f).toInt()
+        val searchTop = (bitmap.height * 0.58f).toInt()
         val searchBottom = (bitmap.height * 0.97f).toInt()
-        val threshold = ((searchRight - searchLeft) * 0.26f).toInt()
-        val groups = mutableListOf<IntRange>()
+        val minRunWidth = (bitmap.width * 0.48f).toInt()
+        val groups = mutableListOf<Pair<IntRange, Boolean>>()
         var groupStart = -1
         var quietRows = 0
+        var groupPair = false
 
         var y = searchTop
         while (y < searchBottom) {
-            var count = 0
-            var x = searchLeft
-            while (x < searchRight) {
-                if (isActionButtonPixel(bitmap.getPixel(x, y))) count += 1
-                x += 3
+            val greenRun = longestColorRun(bitmap, y, searchLeft, searchRight) { color ->
+                isGreenActionPixel(color)
             }
-            val scaledCount = count * 3
-            if (scaledCount >= threshold) {
+            val blackRun = longestColorRun(bitmap, y, searchLeft, searchRight) { color ->
+                isBlackActionPixel(color)
+            }
+            val isCandidate = greenRun.width >= minRunWidth || blackRun.width >= minRunWidth
+            val isPairRow = blackRun.width > greenRun.width
+            if (isCandidate) {
                 if (groupStart < 0) groupStart = y
+                groupPair = groupPair || isPairRow
                 quietRows = 0
             } else if (groupStart >= 0) {
                 quietRows += 1
                 if (quietRows >= 6) {
-                    groups.add(groupStart..(y - quietRows))
+                    groups.add((groupStart..(y - quietRows)) to groupPair)
                     groupStart = -1
                     quietRows = 0
+                    groupPair = false
                 }
             }
             y += 2
         }
-        if (groupStart >= 0) groups.add(groupStart..searchBottom)
+        if (groupStart >= 0) groups.add((groupStart..searchBottom) to groupPair)
 
         val selected = groups
-            .filter { it.last - it.first >= bitmap.height * 0.025f }
-            .maxByOrNull { it.last }
+            .filter { it.first.last - it.first.first >= bitmap.height * 0.025f }
+            .maxByOrNull { it.first.last }
             ?: return null
 
-        val centerY = ((selected.first + selected.last) / 2).coerceIn(0, bitmap.height - 1)
-        val xs = mutableListOf<Int>()
-        var x = searchLeft
-        while (x < searchRight) {
-            if (isActionButtonPixel(bitmap.getPixel(x, centerY))) xs.add(x)
-            x += 2
+        val centerY = ((selected.first.first + selected.first.last) / 2).coerceIn(0, bitmap.height - 1)
+        val run = if (selected.second) {
+            longestColorRun(bitmap, centerY, searchLeft, searchRight, ::isBlackActionPixel)
+        } else {
+            longestColorRun(bitmap, centerY, searchLeft, searchRight, ::isGreenActionPixel)
         }
-        if (xs.isEmpty()) return null
+        if (run.width < minRunWidth) return null
 
-        val left = (xs.minOrNull() ?: searchLeft) - 12
-        val right = (xs.maxOrNull() ?: searchRight) + 12
-        val top = selected.first - 8
-        val bottom = selected.last + 8
-        val pair = sampleDarkButtonRatio(bitmap, Rect(left, top, right, bottom)) > 0.58f
+        val left = run.start - 12
+        val right = run.end + 12
+        val top = selected.first.first - 8
+        val bottom = selected.first.last + 8
         return ActionButton(
             Rect(
                 left.coerceIn(0, bitmap.width - 1),
@@ -327,14 +328,13 @@ object OcrHelper {
                 right.coerceIn(left + 1, bitmap.width),
                 bottom.coerceIn(top + 1, bitmap.height)
             ),
-            pair
+            selected.second
         )
     }
 
     private fun findCardRect(bitmap: Bitmap, button: ActionButton): Rect {
-        val horizontalPadding = (bitmap.width * 0.065f).toInt()
-        val left = (button.rect.left - horizontalPadding).coerceAtLeast(0)
-        val right = (button.rect.right + horizontalPadding).coerceAtMost(bitmap.width)
+        val left = (bitmap.width * 0.035f).toInt().coerceAtLeast(0)
+        val right = (bitmap.width * 0.965f).toInt().coerceAtMost(bitmap.width)
         val bottom = (button.rect.bottom + bitmap.height * 0.035f).toInt().coerceAtMost(bitmap.height)
         val span = (right - left).coerceAtLeast(1)
         val borderThreshold = (span * 0.34f).toInt()
@@ -408,12 +408,55 @@ object OcrHelper {
     }
 
     private fun isActionButtonPixel(color: Int): Boolean {
+        return isGreenActionPixel(color) || isBlackActionPixel(color)
+    }
+
+    private data class ColorRun(val start: Int, val end: Int) {
+        val width: Int get() = end - start
+    }
+
+    private fun longestColorRun(
+        bitmap: Bitmap,
+        y: Int,
+        left: Int,
+        right: Int,
+        predicate: (Int) -> Boolean
+    ): ColorRun {
+        var bestStart = left
+        var bestEnd = left
+        var currentStart = -1
+        var x = left
+        while (x < right) {
+            if (predicate(bitmap.getPixel(x, y))) {
+                if (currentStart < 0) currentStart = x
+            } else if (currentStart >= 0) {
+                if (x - currentStart > bestEnd - bestStart) {
+                    bestStart = currentStart
+                    bestEnd = x
+                }
+                currentStart = -1
+            }
+            x += 2
+        }
+        if (currentStart >= 0 && right - currentStart > bestEnd - bestStart) {
+            bestStart = currentStart
+            bestEnd = right
+        }
+        return ColorRun(bestStart, bestEnd)
+    }
+
+    private fun isGreenActionPixel(color: Int): Boolean {
         val red = Color.red(color)
         val green = Color.green(color)
         val blue = Color.blue(color)
-        val isGreen = green > 105 && green > red + 32 && green > blue + 24 && red < 120
-        val isBlack = red < 58 && green < 58 && blue < 58
-        return isGreen || isBlack
+        return green > 105 && green > red + 32 && green > blue + 24 && red < 130
+    }
+
+    private fun isBlackActionPixel(color: Int): Boolean {
+        val red = Color.red(color)
+        val green = Color.green(color)
+        val blue = Color.blue(color)
+        return red < 45 && green < 45 && blue < 45
     }
 
     private fun isCardBorderPixel(color: Int, pair: Boolean): Boolean {

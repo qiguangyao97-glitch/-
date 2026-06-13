@@ -506,8 +506,31 @@ object OrderParser {
     private fun orderAddressLines(lines: List<String>): List<String> {
         if (lines.size <= 1) return lines
         val firstPrimaryIndex = lines.indexOfFirst(::looksLikePrimaryAddressLine)
-        if (firstPrimaryIndex <= 0) return lines
-        return lines.drop(firstPrimaryIndex) + lines.take(firstPrimaryIndex)
+        val ordered = if (firstPrimaryIndex > 0) {
+            lines.drop(firstPrimaryIndex) + lines.take(firstPrimaryIndex)
+        } else {
+            lines
+        }
+        val deduped = dedupeAddressLines(ordered)
+        if (deduped.size <= 2) return deduped
+
+        val primary = deduped.firstOrNull(::looksLikePrimaryAddressLine) ?: deduped.first()
+        val primaryKey = normalizeAddressDedupKey(primary)
+        val tail = deduped
+            .dropWhile { it != primary }
+            .drop(1)
+            .firstOrNull { line ->
+                val key = normalizeAddressDedupKey(line)
+                key.isNotBlank() &&
+                        !addressKeysLikelySame(primaryKey, key) &&
+                        !looksLikePrimaryAddressLine(line)
+            }
+            ?: deduped.firstOrNull { line ->
+                line != primary &&
+                        !addressKeysLikelySame(primaryKey, normalizeAddressDedupKey(line))
+            }
+
+        return listOfNotNull(primary, tail).take(2)
     }
 
     private fun cleanDetailLine(line: String): String {
@@ -531,6 +554,7 @@ object OrderParser {
             .replace("龟山區", "龜山區")
             .replace("龟山区", "龜山區")
             .replace("龜山区", "龜山區")
+            .replace("桃園市龜區", "桃園市龜山區")
             .replace("龜山?区", "龜山區")
             .replace("龜山区", "龜山區")
             .replace("龜山?區", "龜山區")

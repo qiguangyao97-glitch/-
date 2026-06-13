@@ -551,4 +551,41 @@ class OrderParserTest {
             order.address
         )
     }
+
+    @Test
+    fun parseKeepsAtMostTwoAddressLinesWhenPrimaryLineRepeats() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n配對",
+                cardText = """
+                    外送
+                    ${'$'}45
+                    13分鐘 (2.2公里) 總計
+                    麥味登 龜山華亞店
+                    333台灣桃園市龜山區文化里文化二路
+                    333台灣桃園市龜區文化里文化二路
+                    211號
+                    配對
+                """.trimIndent(),
+                typeText = "外送",
+                priceText = "${'$'}45",
+                tripText = "13分鐘 (2.2公里) 總計",
+                detailText = """
+                    麥味登 龜山華亞店
+                    333台灣桃園市龜山區文化里文化二路
+                    333台灣桃園市龜區文化里文化二路
+                    211號
+                """.trimIndent(),
+                merchantText = "",
+                addressText = "",
+                addressLowerText = ""
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals(
+            "333台灣桃園市龜山區文化里文化二路\n211號",
+            order!!.address
+        )
+    }
 }
