@@ -3,6 +3,7 @@ package com.example.gongderefuser
 import android.accessibilityservice.AccessibilityService
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -45,14 +46,21 @@ class MyAccessibilityService : AccessibilityService() {
         val packageName = event?.packageName?.toString() ?: return
         if (packageName != "com.ubercab.driver") return
 
+        if (AppSettings.isAccessibilityLogEnabled(this)) {
+            Log.d(
+                "TARGET_EVENT",
+                "type=${event.eventType} class=${event.className} text=${event.text} desc=${event.contentDescription}"
+            )
+        }
+
         val now = System.currentTimeMillis()
         if (now - CaptureTrigger.lastTriggerTime < 1500) return
 
         CaptureTrigger.lastTriggerTime = now
         Log.d("TARGET_TRIGGER", "target event detected")
 
-        CaptureTrigger.pendingCaptureCount = 5
-        listOf(500L, 1200L, 2000L, 3000L, 4200L).forEach { delay ->
+        CaptureTrigger.pendingCaptureCount = 3
+        listOf(320L, 850L, 1450L).forEach { delay ->
             Handler(Looper.getMainLooper()).postDelayed({
                 triggerCapture()
             }, delay)
@@ -64,6 +72,11 @@ class MyAccessibilityService : AccessibilityService() {
 
         Log.d("TARGET_TRIGGER", "set capture flag")
         CaptureTrigger.shouldCapture = true
+        startForegroundService(
+            Intent(this, ScreenCaptureService::class.java).apply {
+                action = ScreenCaptureService.ACTION_CAPTURE_PULSE
+            }
+        )
     }
 
     override fun onInterrupt() {

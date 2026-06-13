@@ -599,21 +599,6 @@ class MainActivity : AppCompatActivity() {
             blacklistTags.addAll(settings.blacklistEntries)
         }
         renderListTags(isWhitelist)
-        card.addView(createButton(primary = true).apply {
-            text = "保存标签"
-            setOnClickListener {
-                val latest = RuleSettings.load(this@MainActivity)
-                RuleSettings.save(
-                    context = this@MainActivity,
-                    normal = latest.normal,
-                    blacklist = latest.blacklist,
-                    whitelistText = RuleSettings.serializeEntries(if (isWhitelist) whitelistTags else latest.whitelistEntries),
-                    blacklistText = RuleSettings.serializeEntries(if (isWhitelist) latest.blacklistEntries else blacklistTags)
-                )
-                Toast.makeText(this@MainActivity, "标签已保存", Toast.LENGTH_SHORT).show()
-                showRuleSettings()
-            }
-        })
         layout.addView(card)
         setBaseContent(layout)
     }
@@ -681,9 +666,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         val list = if (isWhitelist) whitelistTags else blacklistTags
-        if (list.none { it.keyword == keyword }) {
+        if (RuleSettings.containsMatchingEntry(whitelistTags + blacklistTags, keyword)) {
+            Toast.makeText(this, "名单里已有相同商家或地址", Toast.LENGTH_SHORT).show()
+        } else {
             list.add(RuleSettings.ListEntry(keyword, note))
-            renderListTags(isWhitelist)
+            persistListTags(isWhitelist)
+            Toast.makeText(this, "标签已保存", Toast.LENGTH_SHORT).show()
         }
         keywordInput.setText("")
         noteInput.setText("")
@@ -783,18 +771,32 @@ class MainActivity : AppCompatActivity() {
                     list.clear()
                     list.addAll(it)
                 }
-                renderListTags(isWhitelist)
+                persistListTags(isWhitelist)
+                Toast.makeText(this@MainActivity, "标签已保存", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
                 val list = if (isWhitelist) whitelistTags else blacklistTags
                 list.remove(entry)
-                renderListTags(isWhitelist)
+                persistListTags(isWhitelist)
+                Toast.makeText(this@MainActivity, "标签已删除", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
         }
 
         dialog.show()
+    }
+
+    private fun persistListTags(isWhitelist: Boolean) {
+        val latest = RuleSettings.load(this)
+        RuleSettings.save(
+            context = this,
+            normal = latest.normal,
+            blacklist = latest.blacklist,
+            whitelistText = RuleSettings.serializeEntries(if (isWhitelist) whitelistTags else latest.whitelistEntries),
+            blacklistText = RuleSettings.serializeEntries(if (isWhitelist) latest.blacklistEntries else blacklistTags)
+        )
+        renderListTags(isWhitelist)
     }
 
     private fun showAppSettings() {
@@ -840,6 +842,41 @@ class MainActivity : AppCompatActivity() {
         })
         layout.addView(soundCard)
 
+        val debugCard = createCard().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        debugCard.addView(createSettingsToggleRow(
+            title = "保存调试样本",
+            enabled = AppSettings.isDebugSamplesEnabled(this),
+            onToggle = { enabled ->
+                AppSettings.setDebugSamplesEnabled(this, enabled)
+                showAppSettings()
+            }
+        ))
+        debugCard.addView(TextView(this).apply {
+            text = "路径：${AppSettings.debugSamplePath(this@MainActivity)}"
+            textSize = 12f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.12f)
+            setPadding(0, dp(8), 0, dp(12))
+        })
+        debugCard.addView(createSettingsToggleRow(
+            title = "记录无障碍事件日志",
+            enabled = AppSettings.isAccessibilityLogEnabled(this),
+            onToggle = { enabled ->
+                AppSettings.setAccessibilityLogEnabled(this, enabled)
+                showAppSettings()
+            }
+        ))
+        debugCard.addView(TextView(this).apply {
+            text = "用于确认订单弹窗是否能触发低功耗 OCR。"
+            textSize = 13f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setPadding(0, dp(8), 0, 0)
+        })
+        layout.addView(debugCard)
+
         val versionCard = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
@@ -861,6 +898,33 @@ class MainActivity : AppCompatActivity() {
         layout.addView(versionCard)
 
         setBaseContent(layout)
+    }
+
+    private fun createSettingsToggleRow(
+        title: String,
+        enabled: Boolean,
+        onToggle: (Boolean) -> Unit
+    ): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 16f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_TEXT_PRIMARY)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@MainActivity).apply {
+                text = if (enabled) "已开启" else "已关闭"
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                background = roundedFill(if (enabled) COLOR_SUCCESS else COLOR_MUTED, 999f)
+                setOnClickListener { onToggle(!enabled) }
+            })
+        }
     }
 
     private fun appVersionLabel(): String {
@@ -1080,7 +1144,7 @@ class MainActivity : AppCompatActivity() {
         when {
             isEnabled && isServiceRunning -> setStatus(
                 title = "正在工作",
-                detail = "后台 OCR 正在运行。收到订单后会自动弹出分析卡片。",
+                detail = "低功耗监听已开启。目标应用弹出订单后才会短时 OCR。",
                 color = COLOR_SUCCESS
             )
             isEnabled && hasProjectionPermission -> setStatus(

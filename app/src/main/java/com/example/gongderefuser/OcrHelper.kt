@@ -148,9 +148,9 @@ object OcrHelper {
             merchantTop = 0.80f,
             merchantBottom = 0.84f,
             addressTop = 0.84f,
-            addressBottom = 0.93f,
+            addressBottom = 0.955f,
             addressSecondTop = 0.855f,
-            addressSecondBottom = 0.935f
+            addressSecondBottom = 0.965f
         )
 
         object Pair : RegionProfile(
@@ -164,9 +164,9 @@ object OcrHelper {
             merchantTop = 0.77f,
             merchantBottom = 0.81f,
             addressTop = 0.81f,
-            addressBottom = 0.91f,
+            addressBottom = 0.94f,
             addressSecondTop = 0.835f,
-            addressSecondBottom = 0.915f
+            addressSecondBottom = 0.95f
         )
     }
 

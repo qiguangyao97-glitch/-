@@ -22,6 +22,8 @@ class ScreenCaptureService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var projectionCallbackRegistered = false
 
     private var isProcessing = false
     private var lastShownOrderSignature: String = ""
@@ -60,7 +62,10 @@ class ScreenCaptureService : Service() {
             return START_NOT_STICKY
         }
 
-        if (mediaProjection != null && virtualDisplay != null) {
+        if (mediaProjection != null) {
+            if (intent?.action == ACTION_CAPTURE_PULSE) {
+                startCapture()
+            }
             return START_STICKY
         }
 
@@ -71,14 +76,15 @@ class ScreenCaptureService : Service() {
         try {
             mediaProjection =
                 manager.getMediaProjection(resultCode, data)
-
-            startCapture()
         } catch (e: SecurityException) {
             Log.e("CAPTURE", "projection token invalid", e)
             clearProjectionPermission()
             MonitoringState.setEnabled(this, false)
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_CAPTURE_PULSE) {
+            startCapture()
         }
         MyAccessibilityService.refreshStatusOverlay()
 
@@ -88,7 +94,11 @@ class ScreenCaptureService : Service() {
     private fun startCapture() {
 
         val projection = mediaProjection ?: return
-        projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
+        if (virtualDisplay != null || imageReader != null) return
+        if (!projectionCallbackRegistered) {
+            projection.registerCallback(projectionCallback, mainHandler)
+            projectionCallbackRegistered = true
+        }
 
         val metrics = Resources.getSystem().displayMetrics
 
@@ -161,17 +171,26 @@ class ScreenCaptureService : Service() {
 
                 Log.d("OCR_RESULT", regionText.fullText)
                 val foundOrder = handleOcrText(regionText)
+                DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
                 if (!foundOrder && CaptureTrigger.pendingCaptureCount > 0) {
-                    Handler(Looper.getMainLooper()).postDelayed({
+                    mainHandler.postDelayed({
                         CaptureTrigger.shouldCapture = true
                         Log.d("CAPTURE", "retry capture, remaining=${CaptureTrigger.pendingCaptureCount}")
                     }, 650)
+                } else if (CaptureTrigger.pendingCaptureCount <= 0 || foundOrder) {
+                    mainHandler.postDelayed({ stopCaptureSession() }, 250)
                 }
 
                 isProcessing = false
             }
 
-        }, Handler(Looper.getMainLooper()))
+        }, mainHandler)
+
+        mainHandler.postDelayed({
+            if (!isProcessing && CaptureTrigger.pendingCaptureCount <= 0) {
+                stopCaptureSession()
+            }
+        }, 3_500)
     }
 
     private fun handleOcrText(regionText: OcrHelper.OrderRegionText): Boolean {
@@ -230,12 +249,21 @@ class ScreenCaptureService : Service() {
         return true
     }
 
-    private fun stopCapture() {
+    private fun stopCaptureSession() {
         virtualDisplay?.release()
         virtualDisplay = null
         imageReader?.close()
         imageReader = null
-        mediaProjection?.unregisterCallback(projectionCallback)
+        CaptureTrigger.shouldCapture = false
+        CaptureTrigger.pendingCaptureCount = 0
+    }
+
+    private fun stopCapture() {
+        stopCaptureSession()
+        if (projectionCallbackRegistered) {
+            mediaProjection?.unregisterCallback(projectionCallback)
+            projectionCallbackRegistered = false
+        }
         mediaProjection = null
         isProcessing = false
     }
@@ -286,6 +314,8 @@ class ScreenCaptureService : Service() {
     }
 
     companion object {
+        const val ACTION_CAPTURE_PULSE = "com.example.gongderefuser.CAPTURE_PULSE"
+
         @Volatile
         var isRunning: Boolean = false
             private set
