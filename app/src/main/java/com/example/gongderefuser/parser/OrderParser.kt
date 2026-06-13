@@ -607,7 +607,7 @@ object OrderParser {
             return false
         }
         val addressKeywords = Regex("[市縣县區区鄉乡鎮镇路街巷弄號号樓楼大道段]")
-        val addressTailPattern = Regex("^[0-9]+(?:[號号][0-9-]*|[樓楼](?:之?[0-9]+)?|之[0-9]+)(?:[0-9號号樓楼之-]*)?$")
+        val addressTailPattern = Regex("^[0-9]+(?:[號号](?:[0-9]+[樓楼](?:之[0-9]+)?|[0-9]*[樓楼]?|之[0-9]+)?|[樓楼](?:之?[0-9]+)?|之[0-9]+)$")
         val roadAddressPattern = Regex("[路街巷弄大道段].*[0-9]+(?:[號号])?(?:[0-9]+[樓楼](?:之[0-9]+)?)?")
         val pureNumberNoise = Regex("^[0-9]{2,}$")
         val hasNumber = Regex("[0-9]").containsMatchIn(line)

@@ -169,19 +169,23 @@ class ScreenCaptureService : Service() {
 
             // OCR处理
             OcrHelper.runOrderRegions(this, bitmap) { regionText ->
-
-                Log.d("OCR_RESULT", regionText.fullText)
-                val foundOrder = handleOcrText(regionText, bitmap)
-                DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
-                if (!foundOrder && CaptureTrigger.pendingCaptureCount > 0) {
-                    mainHandler.postDelayed({
-                        CaptureTrigger.shouldCapture = true
-                        Log.d("CAPTURE", "retry capture, remaining=${CaptureTrigger.pendingCaptureCount}")
-                    }, 650)
-                } else if (CaptureTrigger.pendingCaptureCount <= 0 || foundOrder) {
+                runCatching {
+                    Log.d("OCR_RESULT", regionText.fullText)
+                    val foundOrder = handleOcrText(regionText, bitmap)
+                    DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
+                    if (!foundOrder && CaptureTrigger.pendingCaptureCount > 0) {
+                        mainHandler.postDelayed({
+                            CaptureTrigger.shouldCapture = true
+                            Log.d("CAPTURE", "retry capture, remaining=${CaptureTrigger.pendingCaptureCount}")
+                        }, 650)
+                    } else if (CaptureTrigger.pendingCaptureCount <= 0 || foundOrder) {
+                        mainHandler.postDelayed({ stopCaptureSession() }, 250)
+                    }
+                }.onFailure { throwable ->
+                    Log.e("CAPTURE", "OCR callback failed", throwable)
+                    CrashLogStore.save(this, "ocr_callback", throwable)
                     mainHandler.postDelayed({ stopCaptureSession() }, 250)
                 }
-
                 isProcessing = false
             }
 

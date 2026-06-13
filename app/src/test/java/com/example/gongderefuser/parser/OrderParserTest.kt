@@ -500,4 +500,55 @@ class OrderParserTest {
             order.address
         )
     }
+
+    @Test
+    fun parseRealtimePairOrderKeepsHouseNumberFloorLine() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = """
+                    YP外送
+                    ${'$'}56
+                    C17分鐘(4.7公里)總計
+                    癮作炒泡麵屋 龜山總店
+                    333台灣桃園市龜山區大華里文化三路
+                    256號2樓
+                    X
+                    配對
+                """.trimIndent(),
+                cardText = """
+                    YP外送
+                    ${'$'}56
+                    C17分鐘(4.7公里)總計
+                    癮作炒泡麵屋 龜山總店
+                    333台灣桃園市龜山區大華里文化三路
+                    256號2樓
+                    X
+                    配對
+                """.trimIndent(),
+                typeText = "外送",
+                priceText = "${'$'}56",
+                tripText = "C17分鐘(4.7公里)總計",
+                detailText = """
+                    作炒泡翘屋巍山總店
+                    333台灣桃園市山區大華里文化三路
+                    256號2楼
+                    日
+                    配對
+                """.trimIndent(),
+                merchantText = "」333台湾桃園市编山區大莘里文化三路",
+                addressText = "256號2楼\nM\n配對",
+                addressLowerText = "256號2楼\n配對"
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals(56, order!!.price)
+        assertEquals(17, order.minutes)
+        assertEquals(4.7, order.distance, 0.001)
+        assertEquals("癮作炒泡麵屋 龜山總店", order.storeName)
+        assertEquals(
+            "333台灣桃園市龜山區大華里文化三路\n256號2樓",
+            order.address
+        )
+    }
 }

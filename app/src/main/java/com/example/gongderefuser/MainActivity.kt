@@ -1574,8 +1574,7 @@ class MainActivity : AppCompatActivity() {
         strokeColor: Int
     ) {
         val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
             background = roundedStroke(fillColor, strokeColor, 12f)
         }
@@ -1583,14 +1582,16 @@ class MainActivity : AppCompatActivity() {
             text = label
             textSize = 14f
             setTextColor(COLOR_TEXT_SECONDARY)
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.75f))
+        })
         row.addView(TextView(this).apply {
             text = value
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.END
             setTextColor(COLOR_TEXT_PRIMARY)
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.45f))
+            maxLines = if (label == "地址") 4 else 2
+            setLineSpacing(0f, 1.08f)
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         parent.addView(row, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT

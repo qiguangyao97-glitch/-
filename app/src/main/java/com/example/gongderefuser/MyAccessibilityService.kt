@@ -523,8 +523,7 @@ class MyAccessibilityService : AccessibilityService() {
         strokeColor: Int
     ) {
         val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(6), dp(8), dp(6))
             background = GradientDrawable().apply {
                 setColor(fillColor)
@@ -536,15 +535,16 @@ class MyAccessibilityService : AccessibilityService() {
             text = label
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.7f))
+        })
         row.addView(TextView(this).apply {
             text = value
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.END
             setTextColor(COLOR_TEXT_PRIMARY)
-            maxLines = 2
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.45f))
+            maxLines = if (label == "地址") 4 else 2
+            setLineSpacing(0f, 1.08f)
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         if (value != "未识别") {
             row.isClickable = true
             row.isFocusable = true
