@@ -1,5 +1,6 @@
 package com.example.gongderefuser.parser
 
+import com.example.gongderefuser.OcrCorrectionStore
 import com.example.gongderefuser.model.OrderData
 
 /**
@@ -271,11 +272,11 @@ object OrderParser {
     private fun parseDeliveryCount(text: String): Int {
         val patterns = listOf(
             Regex("外送\\s*\\(\\s*([0-9]+)\\s*\\)"),
-            Regex("外送\\s*\\(\\s*([二兩两八])\\s*\\)"),
-            Regex("外送\\s*\\(?\\s*([2-9])\\s*\\)?"),
-            Regex("外送\\s*\\(?\\s*([二兩两八])\\s*\\)?"),
+            Regex("外送\\s*\\(\\s*([二兩两])\\s*\\)"),
+            Regex("外送\\s+([2-3])(?:\\s|$)"),
+            Regex("外送\\s+([二兩两])(?:\\s|$)"),
             Regex("([2-9])\\s*份?\\s*外送"),
-            Regex("([二兩两八])\\s*份?\\s*外送"),
+            Regex("([二兩两])\\s*份?\\s*外送"),
             Regex("([2-9])\\s*筆?\\s*訂單")
         )
 
@@ -287,7 +288,6 @@ object OrderParser {
     private fun parseDeliveryCountToken(token: String): Int? {
         val rawCount = when (token) {
             "二", "兩", "两" -> 2
-            "八" -> 8
             else -> token.toIntOrNull()
         } ?: return null
         return normalizeDeliveryCount(rawCount)
@@ -432,7 +432,7 @@ object OrderParser {
     }
 
     private fun normalizeAddressDedupKey(line: String): String {
-        return line
+        return OcrCorrectionStore.applyAddress(line)
             .lowercase()
             .replace("台湾", "台灣")
             .replace("臺灣", "台灣")
@@ -542,52 +542,14 @@ object OrderParser {
     }
 
     private fun correctAddressLine(line: String): String {
-        var corrected = line
+        var corrected = OcrCorrectionStore.applyAddress(line
             .map { char ->
                 when (char) {
                     in '０'..'９' -> '0' + (char - '０')
                     else -> char
                 }
             }
-            .joinToString("")
-            .replace("龟山", "龜山")
-            .replace("龟山區", "龜山區")
-            .replace("龟山区", "龜山區")
-            .replace("龜山区", "龜山區")
-            .replace("桃園市龜區", "桃園市龜山區")
-            .replace("龜山?区", "龜山區")
-            .replace("龜山区", "龜山區")
-            .replace("龜山?區", "龜山區")
-            .replace("桃园", "桃園")
-            .replace("桃園龜山區", "桃園市龜山區")
-            .replace("桃園龟山區", "桃園市龜山區")
-            .replace("桃園龜山区", "桃園市龜山區")
-            .replace("桃園市桃園市", "桃園市")
-            .replace("台灣桃園市桃園市", "台灣桃園市")
-            .replace("台湾桃園市桃園市", "台灣桃園市")
-            .replace("Taiwan桃園市桃園市", "台灣桃園市")
-            .replace("Taiwan桃園市", "台灣桃園市")
-            .replace("Taiwan", "台灣")
-            .replace("台湾", "台灣")
-            .replace("龜山區樂善里文禾路", "龜山區樂善里文禾路")
-            .replace("桃園市龟", "桃園市龜")
-            .replace("樂善里", "樂善里")
-            .replace("乐善里", "樂善里")
-            .replace("長庚", "長庚")
-            .replace("长庚", "長庚")
-            .replace("號", "號")
-            .replace("号", "號")
-            .replace("樓", "樓")
-            .replace("楼", "樓")
-            .replace("林□", "林口")
-            .replace("林囗", "林口")
-            .replace("林ロ", "林口")
-            .replace("復兴", "復興")
-            .replace("复興", "復興")
-            .replace("复兴", "復興")
-            .replace("龜山乡", "龜山區")
-            .replace("龜山郊", "龜山區")
-            .replace("龜山匾", "龜山區")
+            .joinToString(""))
             .replace(Regex("(?<=[0-9])\\s+(?=[0-9])"), "")
             .replace(Regex("(?<=[0-9])\\s+之\\s*(?=[0-9])"), "之")
             .replace(Regex("(?<=[0-9])\\s+(?=[號号樓楼])"), "")
@@ -718,7 +680,7 @@ object OrderParser {
     private fun parseStoreName(text: String, addressLines: List<String>): String {
         val lines = text
             .lines()
-            .map { it.trim() }
+            .map { cleanMerchantCandidate(it) }
             .filter { it.isNotBlank() }
 
         val totalIndex = lines.indexOfFirst { line ->
@@ -751,69 +713,49 @@ object OrderParser {
     private fun parseRegionStoreName(text: String): String {
         return text
             .lines()
-            .map { line ->
-                line.trim()
-                    .replace(Regex("^[●•·\\-\\s]+"), "")
-                    .replace(Regex("\\s{2,}"), " ")
-            }
+            .map(::cleanMerchantCandidate)
             .map(::correctMerchantName)
             .firstOrNull(::isLikelyStoreName)
             .orEmpty()
     }
 
-    private fun correctMerchantName(line: String): String {
+    private fun cleanMerchantCandidate(line: String): String {
         return line
-            .replace("龟", "龜")
-            .replace("亀", "龜")
-            .replace("黽", "龜")
-            .replace("黾", "龜")
-            .replace("龜山區", "龜山")
-            .replace("龜山区", "龜山")
-            .replace("龟山区", "龜山")
-            .replace("龟山區", "龜山")
-            .replace("龟山", "龜山")
-            .replace("龜山山", "龜山")
-            .replace("龜山龜山", "龜山")
-            .replace("山丘比特", "龜山丘比特")
-            .replace("龜龜山", "龜山")
-            .replace("饭", "飯")
-            .replace("飰", "飯")
-            .replace("麪", "麵")
-            .replace("面", "麵")
-            .replace("便当", "便當")
-            .replace("日式", "日式")
-            .replace("韩式", "韓式")
-            .replace("锅", "鍋")
-            .replace("烧", "燒")
-            .replace("卤", "滷")
-            .replace("汤", "湯")
-            .replace("汉堡", "漢堡")
-            .replace("拉面", "拉麵")
-            .replace("寿司", "壽司")
-            .replace("鸡", "雞")
-            .replace("猪", "豬")
-            .replace("麦味登", "麥味登")
-            .replace("麦当劳", "麥當勞")
-            .replace("必胜客", "必勝客")
-            .replace("株口", "林口")
-            .replace("林囗", "林口")
-            .replace("林ロ", "林口")
-            .replace("文貴店", "文青店")
-            .replace("文贵店", "文青店")
+            .trim()
+            .replace(Regex("^[●•·\\-\\|丨!！lI\\s]+"), "")
+            .replace(Regex("^[90oO]\\s*(?=[\\p{IsHan}A-Za-z])"), "")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+    }
+
+    private fun correctMerchantName(line: String): String {
+        return OcrCorrectionStore.applyMerchant(line
+            .replace(Regex("^[90oO]\\s*(?=[\\p{IsHan}A-Za-z])"), "")
+        )
     }
 
     private fun isLikelyStoreName(line: String): Boolean {
-        return line.length >= 2 &&
+        val normalized = line.trim()
+        val typeWords = setOf("獨享", "独享", "外送", "外送(2)", "外送 (2)", "配對", "配对", "接受")
+        return normalized.length >= 2 &&
+                normalized !in typeWords &&
                 !line.contains("$") &&
                 !line.contains("分鐘") &&
                 !line.contains("分钟") &&
                 !line.contains("公里") &&
                 !line.startsWith("外送") &&
+                !looksLikeAddressText(line) &&
                 !line.contains("接受") &&
                 !line.contains("配對") &&
                 !line.contains("配对") &&
                 !line.contains("總計") &&
                 !line.contains("总计")
+    }
+
+    private fun looksLikeAddressText(line: String): Boolean {
+        val cleaned = correctAddressLine(cleanDetailLine(line))
+        return Regex("(台灣|台湾|Taiwan|桃園市|新北市|龜山區|林口區|[路街巷弄號楼樓])").containsMatchIn(cleaned) &&
+                Regex("[0-9]").containsMatchIn(cleaned)
     }
 
     private fun hasSameLocationStackFeature(text: String): Boolean {

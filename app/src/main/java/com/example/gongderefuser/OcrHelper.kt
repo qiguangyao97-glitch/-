@@ -156,7 +156,7 @@ object OcrHelper {
             ?: y(if (isPairOffer) 0.49f else 0.51f)
         val detailBottom = (buttonTop - cardHeight * 0.03f).toInt()
             .coerceAtLeast(detailTop + 1)
-        val detailLeft = anchor?.let { it.lineX + (cardWidth * 0.04f).toInt() }
+        val detailLeft = anchor?.let { it.lineX + (cardWidth * 0.07f).toInt() }
             ?: x(0.11f)
         val detailRight = (card.right - cardWidth * 0.05f).toInt()
 

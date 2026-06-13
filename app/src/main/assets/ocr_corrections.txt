@@ -1,0 +1,63 @@
+# OCR 模糊纠错词库
+# 格式：范围<TAB>错字<TAB>正字
+# 范围可用：all / merchant / address
+# 后续优化优先改这里，不需要改 Kotlin 代码。
+
+all	龟	龜
+all	龟山	龜山
+all	亀	龜
+all	黽	龜
+all	黾	龜
+all	号	號
+all	楼	樓
+all	桃园	桃園
+all	台湾	台灣
+all	Taiwan	台灣
+
+address	桃園市龜區	桃園市龜山區
+address	台灣桃園市桃園市	台灣桃園市
+address	Taiwan桃園市桃園市	台灣桃園市
+address	Taiwan桃園市	台灣桃園市
+address	桃園龜山區	桃園市龜山區
+address	桃園龜山区	桃園市龜山區
+address	龜山区	龜山區
+address	龜山?區	龜山區
+address	龜山?区	龜山區
+address	乐善里	樂善里
+address	长庚	長庚
+address	復兴	復興
+address	复興	復興
+address	复兴	復興
+address	龜山乡	龜山區
+address	龜山郊	龜山區
+address	龜山匾	龜山區
+
+merchant	龜山區	龜山
+merchant	龜山区	龜山
+merchant	龜山山	龜山
+merchant	龜山龜山	龜山
+merchant	山丘比特	龜山丘比特
+merchant	龜龜山	龜山
+merchant	饭	飯
+merchant	飰	飯
+merchant	麪	麵
+merchant	面	麵
+merchant	便当	便當
+merchant	韩式	韓式
+merchant	锅	鍋
+merchant	烧	燒
+merchant	卤	滷
+merchant	汤	湯
+merchant	汉堡	漢堡
+merchant	拉面	拉麵
+merchant	寿司	壽司
+merchant	鸡	雞
+merchant	猪	豬
+merchant	麦味登	麥味登
+merchant	麦当劳	麥當勞
+merchant	必胜客	必勝客
+merchant	株口	林口
+merchant	林囗	林口
+merchant	林ロ	林口
+merchant	文貴店	文青店
+merchant	文贵店	文青店

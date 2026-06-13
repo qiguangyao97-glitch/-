@@ -1,11 +1,27 @@
 package com.example.gongderefuser.parser
 
+import com.example.gongderefuser.OcrCorrectionStore
 import com.example.gongderefuser.analyzer.OrderAnalyzer
+import org.junit.BeforeClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
+import java.io.File
 
 class OrderParserTest {
+    companion object {
+        @JvmStatic
+        @BeforeClass
+        fun loadOcrCorrections() {
+            val file = listOf(
+                File("app/src/main/assets/ocr_corrections.txt"),
+                File("src/main/assets/ocr_corrections.txt")
+            ).first { it.exists() }
+            OcrCorrectionStore.loadFromText(
+                file.readText(Charsets.UTF_8)
+            )
+        }
+    }
 
     @Test
     fun parseCorrectsMergedMinutePrefix() {
@@ -587,5 +603,64 @@ class OrderParserTest {
             "333台灣桃園市龜山區文化里文化二路\n211號",
             order!!.address
         )
+    }
+
+    @Test
+    fun parseRemovesPickupIconNoiseBeforeMerchantName() {
+        val order = OrderParser.parse(
+            """
+            外送
+            獨享
+            ${'$'}45
+            13分鐘 (2.2公里) 總計
+            9麥味登 龜山華亞店
+            333台灣桃園市龜山區文化里文化二路
+            211號
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals("麥味登 龜山華亞店", order!!.storeName)
+        assertEquals(false, order.isStackOrder)
+    }
+
+    @Test
+    fun parseDoesNotUseExclusiveBadgeAsMerchantName() {
+        val order = OrderParser.parse(
+            """
+            外送
+            ${'$'}45
+            13分鐘 (2.2公里) 總計
+            獨享
+            333台灣桃園市龜山區文化里文化二路
+            211號
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals("", order!!.storeName)
+        assertEquals(false, order.isStackOrder)
+    }
+
+    @Test
+    fun parseExclusiveOrderDoesNotBecomeStackFromNoisyBadgeText() {
+        val order = OrderParser.parse(
+            """
+            外送
+            獨享
+            ${'$'}60
+            18分鐘 (4.0公里) 總計
+            回憶港式茶餐廳
+            333台灣桃園市龜山區文青里文青路
+            268號
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(1, order!!.deliveryCount)
+        assertEquals(false, order.isStackOrder)
     }
 }
