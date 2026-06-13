@@ -391,6 +391,15 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, dp(4), 0, 0)
             })
         }
+        if (record.screenshotPath.isNotBlank()) {
+            row.addView(TextView(this).apply {
+                text = "截图：${record.screenshotPath}"
+                textSize = 11f
+                setTextColor(COLOR_TEXT_SECONDARY)
+                setLineSpacing(0f, 1.12f)
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -856,6 +865,21 @@ class MainActivity : AppCompatActivity() {
         ))
         debugCard.addView(TextView(this).apply {
             text = "路径：${AppSettings.debugSamplePath(this@MainActivity)}"
+            textSize = 12f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.12f)
+            setPadding(0, dp(8), 0, dp(12))
+        })
+        debugCard.addView(createSettingsToggleRow(
+            title = "保存实时订单截图",
+            enabled = AppSettings.isOrderCaptureEnabled(this),
+            onToggle = { enabled ->
+                AppSettings.setOrderCaptureEnabled(this, enabled)
+                showAppSettings()
+            }
+        ))
+        debugCard.addView(TextView(this).apply {
+            text = "仅调试时开启。识别到真实订单后保存完整截图，路径：${AppSettings.orderCapturePath(this@MainActivity)}"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.12f)

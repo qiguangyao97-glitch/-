@@ -28,14 +28,20 @@ object OrderHistory {
         val recommendation: String,
         val isBlacklisted: Boolean,
         val isWhitelisted: Boolean,
-        val isSameLocationStack: Boolean
+        val isSameLocationStack: Boolean,
+        val screenshotPath: String = ""
     ) {
         fun timeLabel(): String {
             return SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(timestamp))
         }
     }
 
-    fun add(context: Context, analysis: OrderAnalyzer.AnalysisResult, source: String) {
+    fun add(
+        context: Context,
+        analysis: OrderAnalyzer.AnalysisResult,
+        source: String,
+        screenshotPath: String = ""
+    ) {
         val records = load(context).toMutableList()
         records.add(
             0,
@@ -54,7 +60,8 @@ object OrderHistory {
                 recommendation = analysis.recommendation,
                 isBlacklisted = analysis.isBlacklisted,
                 isWhitelisted = analysis.isWhitelisted,
-                isSameLocationStack = analysis.isSameLocationStack
+                isSameLocationStack = analysis.isSameLocationStack,
+                screenshotPath = screenshotPath
             )
         )
         save(context, records.take(MAX_RECORDS))
@@ -86,7 +93,8 @@ object OrderHistory {
                             ),
                             isBlacklisted = item.optBoolean("isBlacklisted"),
                             isWhitelisted = item.optBoolean("isWhitelisted"),
-                            isSameLocationStack = item.optBoolean("isSameLocationStack")
+                            isSameLocationStack = item.optBoolean("isSameLocationStack"),
+                            screenshotPath = item.optString("screenshotPath")
                         )
                     )
                 }
@@ -122,6 +130,7 @@ object OrderHistory {
                     .put("isBlacklisted", record.isBlacklisted)
                     .put("isWhitelisted", record.isWhitelisted)
                     .put("isSameLocationStack", record.isSameLocationStack)
+                    .put("screenshotPath", record.screenshotPath)
             )
         }
         prefs(context).edit().putString(KEY_RECORDS, array.toString()).apply()

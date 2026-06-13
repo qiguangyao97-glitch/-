@@ -171,7 +171,7 @@ class ScreenCaptureService : Service() {
             OcrHelper.runOrderRegions(this, bitmap) { regionText ->
 
                 Log.d("OCR_RESULT", regionText.fullText)
-                val foundOrder = handleOcrText(regionText)
+                val foundOrder = handleOcrText(regionText, bitmap)
                 DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
                 if (!foundOrder && CaptureTrigger.pendingCaptureCount > 0) {
                     mainHandler.postDelayed({
@@ -194,7 +194,7 @@ class ScreenCaptureService : Service() {
         }, 3_500)
     }
 
-    private fun handleOcrText(regionText: OcrHelper.OrderRegionText): Boolean {
+    private fun handleOcrText(regionText: OcrHelper.OrderRegionText, bitmap: Bitmap? = null): Boolean {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = regionText.fullText,
@@ -208,7 +208,7 @@ class ScreenCaptureService : Service() {
                 addressLowerText = regionText.addressLowerText
             )
         ) ?: OrderParser.parse(regionText.fullText)
-        return handleOrder(order)
+        return handleOrder(order, bitmap)
     }
 
     private fun handleOcrText(text: String): Boolean {
@@ -216,7 +216,7 @@ class ScreenCaptureService : Service() {
         return handleOrder(order)
     }
 
-    private fun handleOrder(order: com.example.gongderefuser.model.OrderData?): Boolean {
+    private fun handleOrder(order: com.example.gongderefuser.model.OrderData?, bitmap: Bitmap? = null): Boolean {
         if (order == null) {
             Log.d("ORDER_ANALYSIS", "incomplete order ignored")
             return false
@@ -233,7 +233,12 @@ class ScreenCaptureService : Service() {
         lastShownOrderTime = now
 
         val analysis = OrderAnalyzer.analyzeResult(this, order)
-        OrderHistory.add(this, analysis, "实时")
+        val screenshotPath = bitmap?.takeIf {
+            AppSettings.isOrderCaptureEnabled(this)
+        }?.let {
+            OrderCaptureStore.saveOrderCapture(this, it, analysis)
+        }.orEmpty()
+        OrderHistory.add(this, analysis, "实时", screenshotPath)
 
         Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(order))
 
