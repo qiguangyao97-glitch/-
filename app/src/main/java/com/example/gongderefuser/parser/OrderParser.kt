@@ -538,6 +538,8 @@ object OrderParser {
         return line
             .trim()
             .replace(Regex("^[●•·\\-\\|丨!！lI\\s]+"), "")
+            .replace(Regex("^[B口□■▢▣]\\s*(?=(?:[0-9]{3}|台灣|台湾|Taiwan|桃園|新北|龜山|林口))"), "")
+            .replace(Regex("^[89]\\s*(?=(?:333|台灣|台湾|Taiwan|桃園|新北|龜山|林口))"), "")
             .replace(Regex("\\s{2,}"), " ")
             .trim()
     }

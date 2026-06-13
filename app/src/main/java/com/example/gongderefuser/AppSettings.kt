@@ -42,11 +42,11 @@ object AppSettings {
     }
 
     fun debugSamplePath(context: Context): String {
-        return "${context.applicationContext.getExternalFilesDir(null)?.absolutePath.orEmpty()}/debug_samples"
+        return DebugFileDirs.resolve(context, "debug_samples").absolutePath
     }
 
     fun orderCapturePath(context: Context): String {
-        return "${context.applicationContext.getExternalFilesDir(null)?.absolutePath.orEmpty()}/order_captures"
+        return DebugFileDirs.resolve(context, "order_captures").absolutePath
     }
 
     private fun prefs(context: Context) =

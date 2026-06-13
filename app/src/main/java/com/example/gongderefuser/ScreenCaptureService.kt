@@ -29,6 +29,7 @@ class ScreenCaptureService : Service() {
     private var lastShownOrderTime: Long = 0L
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
+            showStoppedNotification("屏幕分享已中断，请重新启用实时监测")
             MonitoringState.setEnabled(this@ScreenCaptureService, false)
             stopCapture()
         }
@@ -72,6 +73,7 @@ class ScreenCaptureService : Service() {
             Log.e("CAPTURE", "projection token or foreground service permission invalid", e)
             CrashLogStore.save(this, "projection_start", e)
             clearProjectionPermission()
+            showStoppedNotification("屏幕分享授权已失效，请重新启用实时监测")
             MonitoringState.setEnabled(this, false)
             stopSelf()
             return START_NOT_STICKY
@@ -121,6 +123,7 @@ class ScreenCaptureService : Service() {
             Log.e("CAPTURE", "create virtual display failed", e)
             CrashLogStore.save(this, "create_virtual_display", e)
             clearProjectionPermission()
+            showStoppedNotification("屏幕截图已中断，请重新启用实时监测")
             MonitoringState.setEnabled(this, false)
             stopCapture()
             stopSelf()
@@ -312,6 +315,32 @@ class ScreenCaptureService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .build()
+    }
+
+    private fun showStoppedNotification(message: String) {
+        val channelId = "capture_status"
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(
+            NotificationChannel(
+                channelId,
+                "Monitoring Status",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+        )
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = Notification.Builder(this, channelId)
+            .setContentTitle("功德拒絕器已停止监测")
+            .setContentText(message)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+        manager.notify(2, notification)
     }
 
     override fun onBind(intent: Intent?) = null

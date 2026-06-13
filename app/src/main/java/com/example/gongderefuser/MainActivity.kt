@@ -1129,8 +1129,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleMonitoring() {
         val isEnabled = MonitoringState.isEnabled(this)
+        val isWorking = isEnabled && ScreenCaptureService.isRunning
 
-        if (isEnabled) {
+        if (isWorking) {
             MonitoringState.setEnabled(this, false)
             CaptureHolder.clear()
             Toast.makeText(this, "实时监测已暂停", Toast.LENGTH_SHORT).show()
@@ -1159,8 +1160,7 @@ class MainActivity : AppCompatActivity() {
 
         if (::statusToggleButton.isInitialized) {
             statusToggleButton.text = when {
-                isEnabled && !hasProjectionPermission && !isServiceRunning -> "重新授权"
-                isEnabled -> "暂停监测"
+                isEnabled && isServiceRunning -> "暂停监测"
                 else -> "启用监测"
             }
         }
@@ -1171,24 +1171,13 @@ class MainActivity : AppCompatActivity() {
                 detail = "低功耗监听已开启。目标应用弹出订单后才会短时 OCR。",
                 color = COLOR_SUCCESS
             )
-            isEnabled && hasProjectionPermission -> setStatus(
-                title = "正在恢复",
-                detail = "已授权屏幕分享，正在恢复后台识别服务。",
-                color = COLOR_WARNING
-            )
-            isEnabled -> setStatus(
-                title = "需要重新授权",
-                detail = "监测开关已开启，但屏幕分享授权已失效。请重新授权整个画面。",
-                color = COLOR_DANGER
-            )
-            hasProjectionPermission || isServiceRunning -> setStatus(
-                title = "已暂停",
-                detail = "OCR 暂时不会自动识别订单。点击启用后会继续后台监测。",
-                color = COLOR_DANGER
-            )
             else -> setStatus(
-                title = "尚未启用",
-                detail = "点击启用监测，授权时请选择分享整个画面。",
+                title = "已停止",
+                detail = if (hasProjectionPermission) {
+                    "实时监测没有在工作。点击启用监测后，请重新确认屏幕分享。"
+                } else {
+                    "实时监测没有在工作。点击启用监测，授权时请选择分享整个画面。"
+                },
                 color = COLOR_DANGER
             )
         }

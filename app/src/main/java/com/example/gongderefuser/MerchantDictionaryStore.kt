@@ -14,19 +14,24 @@ object MerchantDictionaryStore {
 
     fun load(context: Context) {
         runCatching {
-            context.applicationContext.assets.open("merchant_dictionary.txt")
+            val assets = context.applicationContext.assets
+            val base = assets.open("merchant_dictionary.txt")
                 .bufferedReader(Charsets.UTF_8)
-                .use { reader -> loadFromText(reader.readText()) }
+                .use { reader -> parseEntries(reader.readText()) }
+            val brands = assets.open("merchant_brand_roots.txt")
+                .bufferedReader(Charsets.UTF_8)
+                .use { reader -> parseNames(reader.readText()) }
+            val branches = assets.open("merchant_branch_suffixes.txt")
+                .bufferedReader(Charsets.UTF_8)
+                .use { reader -> parseNames(reader.readText()) }
+            entries = (base + buildBranchEntries(brands, branches)).distinctBy {
+                compact(it.canonicalName)
+            }
         }
     }
 
     fun loadFromText(text: String) {
-        entries = text
-            .lineSequence()
-            .map { it.substringBefore("#").trim() }
-            .filter { it.isNotBlank() }
-            .mapNotNull(::parseEntry)
-            .toList()
+        entries = parseEntries(text)
     }
 
     fun correct(candidate: String): String {
@@ -83,6 +88,41 @@ object MerchantDictionaryStore {
             .distinct()
         val canonical = names.firstOrNull() ?: return null
         return Entry(canonicalName = canonical, aliases = names.drop(1))
+    }
+
+    private fun parseEntries(text: String): List<Entry> {
+        return text
+            .lineSequence()
+            .map { it.substringBefore("#").trim() }
+            .filter { it.isNotBlank() }
+            .mapNotNull(::parseEntry)
+            .toList()
+    }
+
+    private fun parseNames(text: String): List<String> {
+        return text
+            .lineSequence()
+            .map { it.substringBefore("#").trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+    }
+
+    private fun buildBranchEntries(brands: List<String>, branches: List<String>): List<Entry> {
+        return brands.flatMap { brand ->
+            branches.map { branch ->
+                val canonical = "$brand $branch"
+                Entry(
+                    canonicalName = canonical,
+                    aliases = listOf(
+                        "$brand$branch",
+                        canonical.replace("林口", "株口"),
+                        canonical.replace("林口", "林囗"),
+                        canonical.replace("龜山", "龟山")
+                    ).distinct()
+                )
+            }
+        }
     }
 
     private fun Entry.allNames(): List<String> = listOf(canonicalName) + aliases
