@@ -103,4 +103,26 @@ class OrderAnalyzerTest {
         assertEquals("BLACK_STRONG", analysis.strongestLocationLevel)
         assertEquals("建议接单", analysis.recommendation)
     }
+
+    @Test
+    fun manualListMatchingDoesNotUseApproximateTypos() {
+        assertEquals(
+            false,
+            OrderAnalyzer.matchesManualListKeyword(
+                text = "台灣桃園市龜山區長庚醫護新村170號",
+                keyword = "長庚醫院"
+            )
+        )
+    }
+
+    @Test
+    fun manualListMatchingKeepsTraditionalSimplifiedExactContainment() {
+        assertEquals(
+            true,
+            OrderAnalyzer.matchesManualListKeyword(
+                text = "麥味登 龜山丘比特",
+                keyword = "龟山丘比特"
+            )
+        )
+    }
 }

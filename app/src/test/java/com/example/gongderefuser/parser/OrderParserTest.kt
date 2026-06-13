@@ -361,4 +361,53 @@ class OrderParserTest {
             order.address
         )
     }
+
+    @Test
+    fun parseUsesCardDetailWhenSmallMerchantAndAddressRegionsAreNoisy() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = """
+                    Y?外送 獨享
+                    ${'$'}46
+                    LINE
+                    914分鐘(25公里)總計
+                    Pizza Hut必勝客(林口文青)
+                    新村170號
+                    搔受
+                    Taiwan桃園市桃園市龜山區長庚醫護
+                """.trimIndent(),
+                cardText = """
+                    TT外达
+                    ${'$'}46
+                    O4分鐘(2.5公里)總計
+                    Pizza Hut必勝客(林口文青店)
+                    Taiwan桃園市桃園市龜山區長庚醫護
+                    新村170號
+                    接受
+                """.trimIndent(),
+                typeText = "${'$'}46",
+                priceText = "(O14分籍(25ク",
+                tripText = "Pizza Hut必勝客(林口文青店)",
+                detailText = """
+                    Taiwan桃園市桃園市山區長庚醫護
+                    新村170號
+                    接受
+                """.trimIndent(),
+                merchantText = "智四用出图化出体中",
+                addressText = """
+                    新村170弧
+                    B
+                    接受
+                """.trimIndent(),
+                addressLowerText = "接受\nN"
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals("Pizza Hut必勝客(林口文青店)", order!!.storeName)
+        assertEquals(
+            "台灣桃園市龜山區長庚醫護\n新村170號",
+            order.address
+        )
+    }
 }

@@ -227,11 +227,11 @@ object OrderAnalyzer {
 
         val searchableText = "${order.storeName}\n${order.address}"
         return entries.firstOrNull { entry ->
-            matchesListKeyword(searchableText, entry.keyword)
+            matchesManualListKeyword(searchableText, entry.keyword)
         }
     }
 
-    private fun matchesListKeyword(text: String, keyword: String): Boolean {
+    internal fun matchesManualListKeyword(text: String, keyword: String): Boolean {
         val rawKeyword = keyword.trim()
         if (rawKeyword.length < 2) return false
         if (text.contains(rawKeyword, ignoreCase = true)) return true
@@ -239,14 +239,7 @@ object OrderAnalyzer {
         val normalizedText = normalizeForMatching(text)
         val normalizedKeyword = normalizeForMatching(rawKeyword)
         if (normalizedKeyword.length < 2) return false
-        if (normalizedText.contains(normalizedKeyword, ignoreCase = true)) return true
-
-        val maxDistance = when {
-            normalizedKeyword.length < 4 -> return false
-            normalizedKeyword.length < 7 -> 1
-            else -> 2
-        }
-        return containsApproximate(normalizedText, normalizedKeyword, maxDistance)
+        return normalizedText.contains(normalizedKeyword, ignoreCase = true)
     }
 
     private fun normalizeForMatching(value: String): String {
@@ -256,46 +249,6 @@ object OrderAnalyzer {
         return simplified
             .lowercase()
             .replace(Regex("[^\\p{IsHan}a-z0-9]"), "")
-    }
-
-    private fun containsApproximate(text: String, keyword: String, maxDistance: Int): Boolean {
-        if (text.length < keyword.length) return false
-        val minWindow = (keyword.length - maxDistance).coerceAtLeast(2)
-        val maxWindow = (keyword.length + maxDistance).coerceAtMost(text.length)
-        for (windowSize in minWindow..maxWindow) {
-            for (start in 0..(text.length - windowSize)) {
-                val candidate = text.substring(start, start + windowSize)
-                if (levenshteinDistance(candidate, keyword, maxDistance) <= maxDistance) {
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
-    private fun levenshteinDistance(a: String, b: String, limit: Int): Int {
-        var previous = IntArray(b.length + 1) { it }
-        var current = IntArray(b.length + 1)
-
-        for (i in 1..a.length) {
-            current[0] = i
-            var rowMin = current[0]
-            for (j in 1..b.length) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                current[j] = minOf(
-                    previous[j] + 1,
-                    current[j - 1] + 1,
-                    previous[j - 1] + cost
-                )
-                rowMin = minOf(rowMin, current[j])
-            }
-            if (rowMin > limit) return limit + 1
-            val swap = previous
-            previous = current
-            current = swap
-        }
-
-        return previous[b.length]
     }
 
     private fun List<KeywordMatchResult>.bestKeyword(): String {

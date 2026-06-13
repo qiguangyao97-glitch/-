@@ -100,9 +100,12 @@ object OrderParser {
                     fullText.contains("獨享") ||
                     fullText.contains("独享")
             val isTargetOffer = isLikelyTargetOffer(combinedText)
-            val detailLines = parseDetailLines(detailText.ifBlank {
-                listOf(merchantText, addressText).joinToString("\n")
+            val cardDetailLines = parseCardDetailLines(cardText)
+            val regionDetailLines = parseDetailLines(detailText.ifBlank {
+                listOf(merchantText, addressText, addressLowerText).joinToString("\n")
             })
+            val detailLines = (cardDetailLines + regionDetailLines)
+                .distinct()
             val merchantCandidate = parseRegionStoreName(merchantText)
             val detailStoreCandidate = parseStoreNameFromDetail(detailLines)
             val regionStoreName = chooseStoreName(merchantCandidate, detailStoreCandidate, detailLines)
@@ -276,6 +279,31 @@ object OrderParser {
             .distinct()
     }
 
+    private fun parseCardDetailLines(text: String): List<String> {
+        val lines = text
+            .lines()
+            .map(::cleanDetailLine)
+            .filter { it.isNotBlank() }
+        val totalIndex = lines.indexOfFirst { line ->
+            (line.contains("總計") || line.contains("总计")) &&
+                    (line.contains("分鐘") || line.contains("分钟") || line.contains("公里"))
+        }
+        val detailStart = if (totalIndex >= 0) {
+            totalIndex + 1
+        } else {
+            lines.indexOfFirst { it.startsWith("$") }.takeIf { it >= 0 }?.plus(2) ?: 0
+        }
+        return lines
+            .drop(detailStart)
+            .takeWhile { line ->
+                !line.contains("接受") &&
+                        !line.contains("配對") &&
+                        !line.contains("配对")
+            }
+            .filter(::isUsefulDetailLine)
+            .distinct()
+    }
+
     private fun parseRegionAddressLines(
         addressText: String,
         addressLowerText: String,
@@ -345,7 +373,8 @@ object OrderParser {
     ): String {
         val merchantLooksBad = merchantCandidate.isBlank() ||
                 looksLikeAddressLine(merchantCandidate) ||
-                overlapsAddressCandidate(merchantCandidate, detailLines)
+                overlapsAddressCandidate(merchantCandidate, detailLines) ||
+                looksLikeNoisyMerchantCandidate(merchantCandidate)
 
         if (merchantLooksBad) return detailStoreCandidate
         if (
@@ -356,6 +385,14 @@ object OrderParser {
             return detailStoreCandidate
         }
         return merchantCandidate
+    }
+
+    private fun looksLikeNoisyMerchantCandidate(candidate: String): Boolean {
+        if (candidate.isBlank()) return true
+        val hasMerchantHint = Regex("[A-Za-z]|麥|麦|Pizza|Hut|必勝|必胜|飯|麵|便當|早餐|早點|茶|咖啡|飲|鍋|堡|雞|滷|壽司").containsMatchIn(candidate)
+        if (hasMerchantHint) return false
+        val suspiciousChars = candidate.count { it in "出图圖体體用智四弧列辆輛門約搔技" }
+        return suspiciousChars >= 2 || candidate.length >= 6 && suspiciousChars * 2 >= candidate.length
     }
 
     private fun overlapsAddressCandidate(candidate: String, detailLines: List<String>): Boolean {
@@ -497,7 +534,7 @@ object OrderParser {
     }
 
     private fun shouldUseExactAddressPhraseOnly(phrase: String): Boolean {
-        return Regex("[路街巷弄段里]|大道").containsMatchIn(phrase)
+        return Regex("[路街巷弄段里]|大道|醫院|医院|醫護|医护").containsMatchIn(phrase)
     }
 
     private fun levenshteinDistance(a: String, b: String, limit: Int): Int {
