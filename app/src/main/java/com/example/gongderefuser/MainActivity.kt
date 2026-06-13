@@ -72,7 +72,10 @@ class MainActivity : AppCompatActivity() {
     private enum class Screen {
         Home,
         Manual,
-        Settings
+        Rules,
+        RuleDetail,
+        AppSettings,
+        History
     }
 
     private var currentScreen = Screen.Home
@@ -200,19 +203,36 @@ class MainActivity : AppCompatActivity() {
             rowItemParams(leftMargin = dp(7))
         )
         layout.addView(actionRow)
-        layout.addView(createActionCard("规则设置", "规则与黑名单", COLOR_SUCCESS).apply {
-            setOnClickListener { showRuleSettings() }
+        layout.addView(createHistorySummaryCard())
+
+        setBaseContent(layout)
+        updateMonitoringUi()
+    }
+
+    private fun createHistorySummaryCard(): LinearLayout {
+        val records = OrderHistory.load(this)
+        return createActionCard(
+            title = "识别记录",
+            detail = if (records.isEmpty()) "还没有记录" else "已保存 ${records.size} 条，点击查看",
+            accentColor = COLOR_ACCENT
+        ).apply {
+            setOnClickListener { showHistory() }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(96)
             ).apply {
                 bottomMargin = dp(14)
             }
-        })
-        layout.addView(createOrderHistoryCard())
+        }
+    }
 
+    private fun showHistory() {
+        currentScreen = Screen.History
+
+        val layout = createBaseLayout()
+        addSubHeader(layout, "识别记录", "实时监测和截图分析的历史结果。")
+        layout.addView(createOrderHistoryCard())
         setBaseContent(layout)
-        updateMonitoringUi()
     }
 
     private fun createOrderHistoryCard(): LinearLayout {
@@ -306,6 +326,24 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(10), dp(4), dp(10), dp(4))
             background = roundedFill(recommendationColor(record.recommendation), 999f)
         })
+        titleRow.addView(TextView(this).apply {
+            text = "删除"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(COLOR_DANGER)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = roundedStroke(Color.WHITE, COLOR_DANGER, 999f)
+            setOnClickListener {
+                OrderHistory.delete(this@MainActivity, record.timestamp)
+                showHistory()
+            }
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            leftMargin = dp(8)
+        })
         row.addView(titleRow)
 
         val markers = buildList {
@@ -361,82 +399,167 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showRuleSettings() {
-        currentScreen = Screen.Settings
+        currentScreen = Screen.Rules
 
         val settings = RuleSettings.load(this)
         val layout = createBaseLayout()
-        addSubHeader(layout, "规则设置", "命中黑名单关键词时，会使用黑名单规则。")
+        addSubHeader(layout, "规则", "点击卡片进入对应项目修改。")
 
-        val normalCard = createCard().apply {
+        val ruleRow = createCardRow()
+        ruleRow.addView(
+            createActionCard(
+                "正常单规则",
+                ruleSummary(settings.normal),
+                COLOR_SUCCESS
+            ).apply { setOnClickListener { showRuleConfigEditor(isBlacklistRule = false) } },
+            rowItemParams(rightMargin = dp(7))
+        )
+        ruleRow.addView(
+            createActionCard(
+                "黑名单规则",
+                ruleSummary(settings.blacklist),
+                COLOR_DANGER
+            ).apply { setOnClickListener { showRuleConfigEditor(isBlacklistRule = true) } },
+            rowItemParams(leftMargin = dp(7))
+        )
+        layout.addView(ruleRow)
+
+        val listRow = createCardRow()
+        listRow.addView(
+            createActionCard(
+                "白名单标签",
+                "${settings.whitelistEntries.size} 个关键词",
+                COLOR_SUCCESS
+            ).apply { setOnClickListener { showListEditor(isWhitelist = true) } },
+            rowItemParams(rightMargin = dp(7))
+        )
+        listRow.addView(
+            createActionCard(
+                "黑名单标签",
+                "${settings.blacklistEntries.size} 个关键词",
+                COLOR_DANGER
+            ).apply { setOnClickListener { showListEditor(isWhitelist = false) } },
+            rowItemParams(leftMargin = dp(7))
+        )
+        layout.addView(listRow)
+
+        setBaseContent(layout)
+    }
+
+    private fun ruleSummary(rule: RuleSettings.RuleConfig): String {
+        return "${rule.minPrice}元 / ${OrderAnalyzer.formatDistance(rule.maxDistance)}公里 / ${rule.maxMinutes}分"
+    }
+
+    private fun showRuleConfigEditor(isBlacklistRule: Boolean) {
+        currentScreen = Screen.RuleDetail
+
+        val settings = RuleSettings.load(this)
+        val rule = if (isBlacklistRule) settings.blacklist else settings.normal
+        val layout = createBaseLayout()
+        addSubHeader(
+            layout,
+            if (isBlacklistRule) "黑名单规则" else "正常单规则",
+            "修改后点击保存，只影响这一组规则。"
+        )
+
+        val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
-        normalCard.addView(createSectionTitle("正常单规则"))
-        normalMinPriceInput = addLabeledNumberInput(normalCard, "最低金额", "元").apply {
-            setText(settings.normal.minPrice.toString())
+        val minPriceInput = addLabeledNumberInput(card, "最低金额", "元").apply {
+            setText(rule.minPrice.toString())
         }
-        normalMaxDistanceInput = addLabeledNumberInput(normalCard, "最大公里", "公里").apply {
-            setText(OrderAnalyzer.formatDistance(settings.normal.maxDistance))
+        val maxDistanceInput = addLabeledNumberInput(card, "最大公里", "公里").apply {
+            setText(OrderAnalyzer.formatDistance(rule.maxDistance))
         }
-        normalMaxMinutesInput = addLabeledNumberInput(normalCard, "最大时间", "分钟").apply {
-            setText(settings.normal.maxMinutes.toString())
+        val maxMinutesInput = addLabeledNumberInput(card, "最大时间", "分钟").apply {
+            setText(rule.maxMinutes.toString())
         }
-        normalTargetHourlyInput = addLabeledNumberInput(normalCard, "目标时薪", "元/小时").apply {
-            setText(settings.normal.targetHourly.toString())
+        val targetHourlyInput = addLabeledNumberInput(card, "目标时薪", "元/小时").apply {
+            setText(rule.targetHourly.toString())
         }
-        normalCostPerKmInput = addLabeledNumberInput(normalCard, "每公里成本", "元/公里").apply {
-            setText(OrderAnalyzer.formatDistance(settings.normal.costPerKm))
+        val costPerKmInput = addLabeledNumberInput(card, "每公里成本", "元/公里").apply {
+            setText(OrderAnalyzer.formatDistance(rule.costPerKm))
         }
-        layout.addView(normalCard)
-
-        val blackCard = createCard().apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(18))
-        }
-        blackCard.addView(createSectionTitle("黑名单规则"))
-        blackMinPriceInput = addLabeledNumberInput(blackCard, "最低金额", "元").apply {
-            setText(settings.blacklist.minPrice.toString())
-        }
-        blackMaxDistanceInput = addLabeledNumberInput(blackCard, "最大公里", "公里").apply {
-            setText(OrderAnalyzer.formatDistance(settings.blacklist.maxDistance))
-        }
-        blackMaxMinutesInput = addLabeledNumberInput(blackCard, "最大时间", "分钟").apply {
-            setText(settings.blacklist.maxMinutes.toString())
-        }
-        blackTargetHourlyInput = addLabeledNumberInput(blackCard, "目标时薪", "元/小时").apply {
-            setText(settings.blacklist.targetHourly.toString())
-        }
-        blackCostPerKmInput = addLabeledNumberInput(blackCard, "每公里成本", "元/公里").apply {
-            setText(OrderAnalyzer.formatDistance(settings.blacklist.costPerKm))
-        }
-        blackCard.addView(createSectionTitle("白名单商家/地址"))
-        blackCard.addView(createTagInputRow(isWhitelist = true))
-        whitelistTagContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(8), 0, dp(4))
-        }
-        blackCard.addView(whitelistTagContainer)
-        whitelistTags.clear()
-        whitelistTags.addAll(settings.whitelistEntries)
-        renderListTags(isWhitelist = true)
-
-        blackCard.addView(createSectionTitle("黑名单商家/地址"))
-        blackCard.addView(createTagInputRow(isWhitelist = false))
-        blacklistTagContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(8), 0, dp(4))
-        }
-        blackCard.addView(blacklistTagContainer)
-        blacklistTags.clear()
-        blacklistTags.addAll(settings.blacklistEntries)
-        renderListTags(isWhitelist = false)
-
-        blackCard.addView(createButton(primary = true).apply {
-            text = "保存规则设置"
-            setOnClickListener { saveRuleSettings() }
+        card.addView(createButton(primary = true).apply {
+            text = "保存"
+            setOnClickListener {
+                val updatedRule = readRuleConfig(
+                    minPriceInput = minPriceInput,
+                    maxDistanceInput = maxDistanceInput,
+                    maxMinutesInput = maxMinutesInput,
+                    targetHourlyInput = targetHourlyInput,
+                    costPerKmInput = costPerKmInput
+                )
+                if (updatedRule == null) {
+                    Toast.makeText(this@MainActivity, "请输入有效的规则数字", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                RuleSettings.save(
+                    context = this@MainActivity,
+                    normal = if (isBlacklistRule) settings.normal else updatedRule,
+                    blacklist = if (isBlacklistRule) updatedRule else settings.blacklist,
+                    whitelistText = RuleSettings.serializeEntries(settings.whitelistEntries),
+                    blacklistText = RuleSettings.serializeEntries(settings.blacklistEntries)
+                )
+                Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
+                showRuleSettings()
+            }
         })
-        layout.addView(blackCard)
+        layout.addView(card)
+        setBaseContent(layout)
+    }
 
+    private fun showListEditor(isWhitelist: Boolean) {
+        currentScreen = Screen.RuleDetail
+
+        val settings = RuleSettings.load(this)
+        val layout = createBaseLayout()
+        addSubHeader(
+            layout,
+            if (isWhitelist) "白名单标签" else "黑名单标签",
+            if (isWhitelist) "命中后评分加分。" else "命中后使用黑名单规则并扣分。"
+        )
+
+        val card = createCard().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        card.addView(createTagInputRow(isWhitelist))
+        if (isWhitelist) {
+            whitelistTagContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(8), 0, dp(4))
+            }
+            card.addView(whitelistTagContainer)
+            whitelistTags.clear()
+            whitelistTags.addAll(settings.whitelistEntries)
+        } else {
+            blacklistTagContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(8), 0, dp(4))
+            }
+            card.addView(blacklistTagContainer)
+            blacklistTags.clear()
+            blacklistTags.addAll(settings.blacklistEntries)
+        }
+        renderListTags(isWhitelist)
+        card.addView(createButton(primary = true).apply {
+            text = "保存标签"
+            setOnClickListener {
+                val latest = RuleSettings.load(this@MainActivity)
+                RuleSettings.save(
+                    context = this@MainActivity,
+                    normal = latest.normal,
+                    blacklist = latest.blacklist,
+                    whitelistText = RuleSettings.serializeEntries(if (isWhitelist) whitelistTags else latest.whitelistEntries),
+                    blacklistText = RuleSettings.serializeEntries(if (isWhitelist) latest.blacklistEntries else blacklistTags)
+                )
+                Toast.makeText(this@MainActivity, "标签已保存", Toast.LENGTH_SHORT).show()
+                showRuleSettings()
+            }
+        })
+        layout.addView(card)
         setBaseContent(layout)
     }
 
@@ -554,6 +677,85 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showAppSettings() {
+        currentScreen = Screen.AppSettings
+
+        val layout = createBaseLayout()
+        addSubHeader(layout, "设置", "应用偏好和版本信息。")
+
+        val soundCard = createCard().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        val soundEnabled = AppSettings.isSoundEnabled(this)
+        val soundRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        soundRow.addView(TextView(this).apply {
+            text = "反馈音效"
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT_PRIMARY)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        soundRow.addView(TextView(this).apply {
+            text = if (soundEnabled) "已开启" else "已关闭"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = roundedFill(if (soundEnabled) COLOR_SUCCESS else COLOR_MUTED, 999f)
+            setOnClickListener {
+                AppSettings.setSoundEnabled(this@MainActivity, !soundEnabled)
+                showAppSettings()
+            }
+        })
+        soundCard.addView(soundRow)
+        soundCard.addView(TextView(this).apply {
+            text = "建议、慎重考虑、不建议会播放三种不同提示音。"
+            textSize = 13f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setPadding(0, dp(10), 0, 0)
+        })
+        layout.addView(soundCard)
+
+        val versionCard = createCard().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        versionCard.addView(createSectionTitle("版本信息"))
+        versionCard.addView(TextView(this).apply {
+            text = "版本：${appVersionLabel()}"
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT_PRIMARY)
+            setPadding(0, dp(4), 0, dp(10))
+        })
+        versionCard.addView(TextView(this).apply {
+            text = "更新说明：优化三段式音效、规则卡片、识别记录管理。"
+            textSize = 14f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.12f)
+        })
+        layout.addView(versionCard)
+
+        setBaseContent(layout)
+    }
+
+    private fun appVersionLabel(): String {
+        return runCatching {
+            val packageInfo = packageManager.getPackageInfo(packageName, 0)
+            val versionCode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode.toString()
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo.versionCode.toString()
+            }
+            "${packageInfo.versionName} ($versionCode)"
+        }.getOrDefault("未知")
+    }
+
     private fun addHeader(layout: LinearLayout) {
         layout.addView(TextView(this).apply {
             text = "功德拒絕器"
@@ -596,7 +798,17 @@ class MainActivity : AppCompatActivity() {
             isFillViewport = true
             addView(layout)
         }
-        setContentView(scrollView)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(COLOR_BACKGROUND)
+            addView(scrollView, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            ))
+            addView(createBottomNavigation())
+        }
+        setContentView(root)
     }
 
     private fun createBaseLayout(): LinearLayout {
@@ -616,6 +828,50 @@ class MainActivity : AppCompatActivity() {
             ).apply {
                 bottomMargin = dp(14)
             }
+        }
+    }
+
+    private fun createBottomNavigation(): LinearLayout {
+        val nav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(8), dp(12), dp(10))
+            background = roundedStroke(Color.WHITE, COLOR_BORDER, 18f)
+        }
+        nav.addView(createNavItem("主页", isHomeSection()) { showHome() }, navItemParams())
+        nav.addView(createNavItem("规则", isRuleSection()) { showRuleSettings() }, navItemParams())
+        nav.addView(createNavItem("设置", currentScreen == Screen.AppSettings) { showAppSettings() }, navItemParams())
+        return nav
+    }
+
+    private fun isHomeSection(): Boolean {
+        return currentScreen == Screen.Home || currentScreen == Screen.Manual || currentScreen == Screen.History
+    }
+
+    private fun isRuleSection(): Boolean {
+        return currentScreen == Screen.Rules || currentScreen == Screen.RuleDetail
+    }
+
+    private fun navItemParams(): LinearLayout.LayoutParams {
+        return LinearLayout.LayoutParams(0, dp(46), 1f).apply {
+            leftMargin = dp(4)
+            rightMargin = dp(4)
+        }
+    }
+
+    private fun createNavItem(label: String, selected: Boolean, onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = label
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(if (selected) Color.WHITE else COLOR_TEXT_SECONDARY)
+            background = if (selected) {
+                roundedFill(COLOR_ACCENT, 999f)
+            } else {
+                roundedFill(Color.WHITE, 999f)
+            }
+            setOnClickListener { onClick() }
         }
     }
 

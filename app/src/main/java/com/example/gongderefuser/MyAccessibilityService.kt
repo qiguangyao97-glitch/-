@@ -171,10 +171,12 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun playAnalysisTone(analysis: AnalysisResult) {
-        val soundRes = when {
-            analysis.isBlacklisted -> R.raw.blacklist_reject
-            analysis.isWhitelisted -> R.raw.whitelist_accept
-            else -> R.raw.normal_order
+        if (!AppSettings.isSoundEnabled(this)) return
+
+        val soundRes = when (analysis.recommendation) {
+            "建议接单" -> R.raw.normal_order
+            "慎重考虑" -> R.raw.whitelist_accept
+            else -> R.raw.blacklist_reject
         }
 
         runCatching {

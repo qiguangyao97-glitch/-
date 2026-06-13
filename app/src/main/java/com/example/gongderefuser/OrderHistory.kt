@@ -95,6 +95,10 @@ object OrderHistory {
         prefs(context).edit().remove(KEY_RECORDS).apply()
     }
 
+    fun delete(context: Context, timestamp: Long) {
+        save(context, load(context).filterNot { it.timestamp == timestamp })
+    }
+
     private fun save(context: Context, records: List<Record>) {
         val array = JSONArray()
         records.forEach { record ->
