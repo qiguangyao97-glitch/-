@@ -980,6 +980,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.07：确认无障碍截图可用后，移除测试版截图测试悬浮按钮；测试版保留无画面分享授权的实时订单识别流程。",
             "1.0.06：测试版开启监测不再请求画面分享授权；实时订单改为由无障碍截图直接进入 OCR 处理，首页文案同步改为无障碍监听状态。",
             "1.0.05：测试版新增无障碍截图测试悬浮按钮；点按后只验证当前界面能否截图，不跑订单识别，成功图片保存到 Download/功德拒絕器/accessibility_screenshot_tests。",
             "1.0.04：测试版改为只使用无障碍截图，不再失败回退录屏；截图失败会写入诊断日志并提示，方便直观看出新逻辑是否能触发。",

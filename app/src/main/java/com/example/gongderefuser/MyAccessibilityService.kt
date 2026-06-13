@@ -34,7 +34,6 @@ class MyAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var overlayView: View? = null
-    private var testButtonView: View? = null
     private var collapseRunnable: Runnable? = null
     private var isTakingScreenshot = false
     private var isProcessingOrder = false
@@ -45,7 +44,6 @@ class MyAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         activeService = this
         showStatusOverlayInternal()
-        showTestScreenshotButtonInternal()
         DiagnosticLogStore.append(this, "ACCESSIBILITY", "connected package=$packageName")
         Log.d("TARGET_SERVICE", "connected")
     }
@@ -217,125 +215,10 @@ class MyAccessibilityService : AccessibilityService() {
         DiagnosticLogStore.append(this, "ACCESSIBILITY", "destroyed package=$packageName")
         clearCollapseTimer()
         hideOverlay()
-        hideTestButton()
         if (activeService === this) {
             activeService = null
         }
         super.onDestroy()
-    }
-
-    private fun showTestScreenshotButtonInternal() {
-        if (!isBetaPackage()) return
-        hideTestButton()
-
-        val density = resources.displayMetrics.density
-        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val params = WindowManager.LayoutParams(
-            dp(48),
-            dp(40),
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = (resources.displayMetrics.widthPixels - dp(64)).coerceAtLeast(dp(8))
-            y = dp(140)
-        }
-
-        val button = TextView(this).apply {
-            text = "截"
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                setColor(Color.argb(235, 15, 23, 42))
-                cornerRadius = 12 * density
-                setStroke(dp(2), COLOR_SUCCESS)
-            }
-            elevation = 10 * density
-            setOnClickListener {
-                takeAccessibilityScreenshotForTestButton()
-            }
-        }
-
-        makeDraggable(button, params, windowManager, persistPosition = false)
-        windowManager.addView(button, params)
-        testButtonView = button
-    }
-
-    private fun hideTestButton() {
-        val view = testButtonView ?: return
-        testButtonView = null
-        runCatching {
-            val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-            windowManager.removeView(view)
-        }
-    }
-
-    private fun takeAccessibilityScreenshotForTestButton() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            reportAccessibilityScreenshotFailure("sdk_${Build.VERSION.SDK_INT}")
-            return
-        }
-        if (isTakingScreenshot) {
-            Toast.makeText(this, "截图正在进行中", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        isTakingScreenshot = true
-        Toast.makeText(this, "正在测试无障碍截图", Toast.LENGTH_SHORT).show()
-        DiagnosticLogStore.append(this, "A11Y_TEST_BUTTON", "request package=$packageName")
-
-        takeScreenshot(
-            Display.DEFAULT_DISPLAY,
-            mainExecutor,
-            object : TakeScreenshotCallback {
-                override fun onSuccess(screenshot: ScreenshotResult) {
-                    isTakingScreenshot = false
-                    val bitmap = screenshot.toBitmap()
-                    if (bitmap == null) {
-                        reportAccessibilityScreenshotFailure("test_bitmap_null")
-                        return
-                    }
-
-                    val savedFile = runCatching {
-                        AccessibilityScreenshotTestStore.save(this@MyAccessibilityService, bitmap)
-                    }.onFailure {
-                        DiagnosticLogStore.append(
-                            this@MyAccessibilityService,
-                            "A11Y_TEST_BUTTON",
-                            "save_failed ${it.javaClass.simpleName}:${it.message}"
-                        )
-                    }.getOrNull()
-
-                    bitmap.recycle()
-                    if (savedFile == null) {
-                        Toast.makeText(this@MyAccessibilityService, "截图成功但保存失败", Toast.LENGTH_LONG).show()
-                        return
-                    }
-
-                    DiagnosticLogStore.append(
-                        this@MyAccessibilityService,
-                        "A11Y_TEST_BUTTON",
-                        "success path=${savedFile.absolutePath}"
-                    )
-                    Toast.makeText(
-                        this@MyAccessibilityService,
-                        "截图成功，已保存到 Download/功德拒絕器/accessibility_screenshot_tests",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-
-                override fun onFailure(errorCode: Int) {
-                    isTakingScreenshot = false
-                    Log.d("A11Y_TEST_BUTTON", "failed code=$errorCode")
-                    reportAccessibilityScreenshotFailure("test_error_$errorCode")
-                }
-            }
-        )
     }
 
     private fun showStatusOverlayInternal() {
@@ -940,7 +823,6 @@ class MyAccessibilityService : AccessibilityService() {
             val service = activeService ?: return
             service.mainHandler.post {
                 service.showStatusOverlayInternal()
-                service.showTestScreenshotButtonInternal()
             }
         }
 
