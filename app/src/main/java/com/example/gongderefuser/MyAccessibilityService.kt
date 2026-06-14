@@ -176,21 +176,26 @@ class MyAccessibilityService : AccessibilityService() {
         OcrHelper.runOrderRegions(this, bitmap) { regionText ->
             runCatching {
                 Log.d("OCR_RESULT", regionText.fullText)
-                val order = OrderParser.parse(
-                    OrderParser.RegionInput(
-                        fullText = regionText.fullText,
-                        cardText = regionText.cardText,
-                        typeText = regionText.typeText,
-                        priceText = regionText.priceText,
-                        tripText = regionText.tripText,
-                        detailText = regionText.detailText,
-                        merchantText = regionText.merchantText,
-                        merchantWideText = regionText.merchantWideText,
-                        addressText = regionText.addressText,
-                        addressWideText = regionText.addressWideText,
-                        addressLowerText = regionText.addressLowerText
+                val order = if (regionText.hasAnchoredCard) {
+                    OrderParser.parse(
+                        OrderParser.RegionInput(
+                            fullText = regionText.fullText,
+                            cardText = regionText.cardText,
+                            typeText = regionText.typeText,
+                            priceText = regionText.priceText,
+                            tripText = regionText.tripText,
+                            detailText = regionText.detailText,
+                            merchantText = regionText.merchantText,
+                            merchantWideText = regionText.merchantWideText,
+                            addressText = regionText.addressText,
+                            addressWideText = regionText.addressWideText,
+                            addressLowerText = regionText.addressLowerText
+                        )
                     )
-                ) ?: OrderParser.parse(regionText.fullText)
+                } else {
+                    DiagnosticLogStore.append(this, "CAPTURE", "skip_no_anchor source=accessibility")
+                    null
+                }
                 val foundOrder = handleAccessibilityOrder(order, bitmap)
                 DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
                 if (!foundOrder) {

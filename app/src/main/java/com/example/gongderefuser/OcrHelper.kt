@@ -17,6 +17,7 @@ object OcrHelper {
     data class OrderRegionText(
         val fullText: String,
         val isPairOffer: Boolean,
+        val hasAnchoredCard: Boolean,
         val cardText: String,
         val typeText: String,
         val priceText: String,
@@ -67,8 +68,9 @@ object OcrHelper {
                 button?.isPair == true ||
                 looksLikePairActionButton(bitmap)
         val profile = if (isPairOffer) RegionProfile.Pair else RegionProfile.Accept
-        val regions = buildAnchoredRegions(bitmap, button, isPairOffer)
-            ?: buildFallbackRegions(bitmap, profile)
+        val anchoredRegions = buildAnchoredRegions(bitmap, button, isPairOffer)
+        val hasAnchoredCard = anchoredRegions != null
+        val regions = anchoredRegions ?: buildFallbackRegions(bitmap, profile)
         val results = mutableMapOf<String, String>()
         var remaining = regions.size
         val lock = Any()
@@ -82,6 +84,7 @@ object OcrHelper {
                         OrderRegionText(
                             fullText = fullText,
                             isPairOffer = isPairOffer,
+                            hasAnchoredCard = hasAnchoredCard,
                             cardText = results["card"].orEmpty(),
                             typeText = results["type"].orEmpty(),
                             priceText = results["price"].orEmpty(),
@@ -137,7 +140,9 @@ object OcrHelper {
             "price" to prepareForOcr(crop(bitmap, 0.05f, profile.priceTop, 0.45f, profile.priceBottom)),
             "trip" to prepareForOcr(crop(bitmap, 0.05f, profile.tripTop, 0.92f, profile.tripBottom)),
             "detail" to prepareForOcr(crop(bitmap, 0.00f, profile.merchantTop - 0.01f, 1.00f, profile.addressBottom + 0.04f)),
+            "merchantWide" to blankBitmap(),
             "merchant" to blankBitmap(),
+            "addressWide" to blankBitmap(),
             "address" to blankBitmap(),
             "addressLower" to blankBitmap()
         )

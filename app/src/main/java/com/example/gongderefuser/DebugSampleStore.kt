@@ -54,6 +54,7 @@ object DebugSampleStore {
                         appendLine("黑名单=${analysis.isBlacklisted} ${analysis.matchedBlacklistKeyword} ${analysis.blacklistNote}")
                     }
                     appendLine("isPairOffer=${regionText.isPairOffer}")
+                    appendLine("hasAnchoredCard=${regionText.hasAnchoredCard}")
                     appendLine("===== FULL =====")
                     appendLine(regionText.fullText)
                     appendLine("===== CARD =====")
