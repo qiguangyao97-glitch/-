@@ -63,6 +63,36 @@ class OrderAnalyzerTest {
     }
 
     @Test
+    fun blacklistAndWhitelistCanBothAffectScoreWithBlacklistRules() {
+        val analysis = OrderAnalyzer.analyzeResult(
+            order = OrderData(
+                price = 120,
+                minutes = 25,
+                distance = 4.0,
+                isTargetOffer = true,
+                storeName = "麥當勞 林口復興",
+                address = "333台灣桃園市龜山區長庚街88號"
+            ),
+            rules = RuleSettings.RuleConfig(
+                minPrice = 150,
+                maxDistance = 999.0,
+                maxMinutes = 999,
+                targetHourly = 300,
+                costPerKm = 1.5
+            ),
+            whitelistEntry = RuleSettings.ListEntry("麥當勞 林口復興", "好商家"),
+            blacklistEntry = RuleSettings.ListEntry("長庚街", "不好送")
+        )
+
+        assertEquals(true, analysis.isWhitelisted)
+        assertEquals(true, analysis.isBlacklisted)
+        assertEquals("麥當勞 林口復興", analysis.matchedWhitelistKeyword)
+        assertEquals("長庚街", analysis.matchedBlacklistKeyword)
+        assertEquals("不建议接单", analysis.recommendation)
+        assertEquals(33, analysis.score)
+    }
+
+    @Test
     fun hiddenLocationRiskDoesNotChangeScore() {
         val analysis = OrderAnalyzer.analyzeResult(
             order = OrderData(

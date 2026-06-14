@@ -41,11 +41,7 @@ object OrderAnalyzer {
     fun analyzeResult(context: Context, order: OrderData): AnalysisResult {
         val settings = RuleSettings.load(context)
         val whitelistEntry = findListEntry(order, settings.whitelistEntries)
-        val blacklistEntry = if (whitelistEntry == null) {
-            findListEntry(order, settings.blacklistEntries)
-        } else {
-            null
-        }
+        val blacklistEntry = findListEntry(order, settings.blacklistEntries)
         val isBlacklisted = blacklistEntry != null
         val rules = if (isBlacklisted) settings.blacklist else settings.normal
         val locationAnalysis = OrderLocationAnalyzer(LocationKeywordRepository.load(context))
