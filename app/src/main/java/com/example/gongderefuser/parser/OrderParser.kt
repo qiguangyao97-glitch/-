@@ -456,10 +456,16 @@ object OrderParser {
     }
 
     private fun parseStoreNameFromDetail(detailLines: List<String>): String {
-        return detailLines
-            .takeWhile { !looksLikeAddressLine(it) }
+        val addressIndex = detailLines.indexOfFirst(::looksLikeAddressLine)
+        val merchantSearchLines = if (addressIndex > 0) {
+            detailLines.take(addressIndex)
+        } else {
+            detailLines
+        }
+        return merchantSearchLines
+            .asReversed()
+            .map(::correctMerchantName)
             .firstOrNull(::isLikelyStoreName)
-            ?.let(::correctMerchantName)
             .orEmpty()
     }
 
@@ -486,6 +492,7 @@ object OrderParser {
 
     private fun looksLikeNoisyMerchantCandidate(candidate: String): Boolean {
         if (candidate.isBlank()) return true
+        if (isUiNoiseLine(candidate)) return true
         val hasMerchantHint = Regex("[A-Za-z]|麥|麦|Pizza|Hut|必勝|必胜|飯|麵|便當|早餐|早點|茶|咖啡|飲|鍋|堡|雞|滷|壽司").containsMatchIn(candidate)
         if (hasMerchantHint) return false
         val suspiciousChars = candidate.count { it in "出图圖体體用智四弧列辆輛門約搔技" }
@@ -650,6 +657,7 @@ object OrderParser {
 
     private fun isUsefulDetailLine(line: String): Boolean {
         return line.length >= 2 &&
+                !isUiNoiseLine(line) &&
                 !line.contains("$") &&
                 !line.contains("分鐘") &&
                 !line.contains("分钟") &&
@@ -741,9 +749,8 @@ object OrderParser {
 
     private fun isLikelyStoreName(line: String): Boolean {
         val normalized = line.trim()
-        val typeWords = setOf("獨享", "独享", "外送", "外送(2)", "外送 (2)", "配對", "配对", "接受")
         return normalized.length >= 2 &&
-                normalized !in typeWords &&
+                !isUiNoiseLine(normalized) &&
                 !line.contains("$") &&
                 !line.contains("分鐘") &&
                 !line.contains("分钟") &&
@@ -755,6 +762,29 @@ object OrderParser {
                 !line.contains("配对") &&
                 !line.contains("總計") &&
                 !line.contains("总计")
+    }
+
+    private fun isUiNoiseLine(line: String): Boolean {
+        val normalized = line
+            .trim()
+            .replace(Regex("\\s+"), "")
+            .replace("：", "")
+            .replace(":", "")
+        if (normalized.isBlank()) return true
+
+        val exactNoiseWords = setOf(
+            "獨享", "独享", "獨亨", "独亨", "獨学", "独学",
+            "外送", "外送2", "外送(2)", "外送（2）",
+            "配對", "配对", "接受", "按受", "接收", "技受", "搔受",
+            "类型", "類型", "金額", "金额", "時間", "时间",
+            "距離", "距离", "預計時薪", "预计时薪", "评分", "評分",
+            "商家", "地址", "行程資訊", "行程资讯", "截图分析", "識別記錄", "识别记录"
+        )
+        if (normalized in exactNoiseWords) return true
+        if (Regex("^[A-Za-zYTP?\"'!|丨lI]*外送(?:\\(?[0-9二兩两]+\\)?)?(?:獨享|独享|獨亨|独亨)?$").matches(normalized)) {
+            return true
+        }
+        return false
     }
 
     private fun looksLikeAddressText(line: String): Boolean {

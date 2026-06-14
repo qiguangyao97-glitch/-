@@ -121,7 +121,9 @@ object OcrHelper {
     private data class DeliveryAnchor(
         val lineX: Int,
         val top: Int,
-        val bottom: Int
+        val bottom: Int,
+        val pickupY: Int,
+        val dropoffY: Int
     )
 
     private fun buildFallbackRegions(bitmap: Bitmap, profile: RegionProfile): List<Pair<String, Bitmap>> {
@@ -160,11 +162,11 @@ object OcrHelper {
             ?: x(0.13f)
         val detailRight = (card.right - cardWidth * 0.05f).toInt()
 
-        val merchantTop = anchor?.let { (it.top - cardHeight * 0.045f).toInt() }
+        val merchantTop = anchor?.let { (it.pickupY - cardHeight * 0.065f).toInt() }
             ?: y(if (isPairOffer) 0.48f else 0.50f)
-        val merchantBottom = anchor?.let { (it.top + cardHeight * 0.14f).toInt() }
+        val merchantBottom = anchor?.let { (it.pickupY + cardHeight * 0.075f).toInt() }
             ?: y(if (isPairOffer) 0.62f else 0.64f)
-        val addressTop = anchor?.let { (it.top + cardHeight * 0.13f).toInt() }
+        val addressTop = anchor?.let { (it.dropoffY - cardHeight * 0.115f).toInt() }
             ?: y(if (isPairOffer) 0.58f else 0.60f)
         val addressBottom = detailBottom
 
@@ -174,9 +176,9 @@ object OcrHelper {
             "price" to prepareForOcr(crop(bitmap, x(0.03f), y(0.13f), x(0.50f), y(0.33f))),
             "trip" to prepareForOcr(crop(bitmap, x(0.03f), y(0.32f), x(0.92f), y(0.48f))),
             "detail" to prepareForOcr(crop(bitmap, detailLeft, detailTop, detailRight, detailBottom)),
-            "merchant" to blankBitmap(),
-            "address" to blankBitmap(),
-            "addressLower" to blankBitmap()
+            "merchant" to prepareForOcr(crop(bitmap, detailLeft, merchantTop, detailRight, merchantBottom)),
+            "address" to prepareForOcr(crop(bitmap, detailLeft, addressTop, detailRight, addressBottom)),
+            "addressLower" to prepareForOcr(crop(bitmap, detailLeft, (addressTop + cardHeight * 0.09f).toInt(), detailRight, addressBottom))
         )
     }
 
@@ -404,7 +406,57 @@ object OcrHelper {
             y += 2
         }
         if (anchorBottom <= anchorTop) return null
-        return DeliveryAnchor(bestX, anchorTop, anchorBottom)
+        val iconCenters = findDeliveryIconCenters(bitmap, bestX, card, top, bottom)
+        return DeliveryAnchor(
+            lineX = bestX,
+            top = anchorTop,
+            bottom = anchorBottom,
+            pickupY = iconCenters.first ?: anchorTop,
+            dropoffY = iconCenters.second ?: anchorBottom
+        )
+    }
+
+    private fun findDeliveryIconCenters(
+        bitmap: Bitmap,
+        lineX: Int,
+        card: Rect,
+        top: Int,
+        bottom: Int
+    ): Pair<Int?, Int?> {
+        val halfWidth = (card.width() * 0.055f).toInt().coerceAtLeast(12)
+        val left = (lineX - halfWidth).coerceAtLeast(0)
+        val right = (lineX + halfWidth).coerceAtMost(bitmap.width - 1)
+        val minWideDarkPixels = 5
+        val groups = mutableListOf<IntRange>()
+        var groupStart = -1
+        var quietRows = 0
+        var y = top
+        while (y < bottom) {
+            var darkCount = 0
+            var x = left
+            while (x <= right) {
+                if (isDarkPixel(bitmap.getPixel(x, y))) darkCount += 1
+                x += 3
+            }
+            if (darkCount >= minWideDarkPixels) {
+                if (groupStart < 0) groupStart = y
+                quietRows = 0
+            } else if (groupStart >= 0) {
+                quietRows += 1
+                if (quietRows >= 5) {
+                    groups.add(groupStart..(y - quietRows))
+                    groupStart = -1
+                    quietRows = 0
+                }
+            }
+            y += 2
+        }
+        if (groupStart >= 0) groups.add(groupStart..bottom)
+
+        val meaningful = groups.filter { it.last - it.first >= 8 }
+        val pickup = meaningful.firstOrNull()?.let { (it.first + it.last) / 2 }
+        val dropoff = meaningful.lastOrNull()?.let { (it.first + it.last) / 2 }
+        return pickup to dropoff
     }
 
     private fun isActionButtonPixel(color: Int): Boolean {

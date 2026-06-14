@@ -518,6 +518,94 @@ class OrderParserTest {
     }
 
     @Test
+    fun parseDoesNotUseExclusiveTextAsMerchantWhenDetailHasStore() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = """
+                    P外送
+                    ${'$'}99
+                    獨亨
+                    28分鐘(8.4公里)總計
+                    麥當勞 龜山忠義 McDonalds S542
+                    333台灣桃園市龜山區樂善里樂學三路
+                    71號
+                    接受
+                """.trimIndent(),
+                cardText = """
+                    Y?外送
+                    ${'$'}99
+                    獨亨
+                    S28分鐘(8.4公里)總計
+                    麥當勞 龜山忠義 McDonalds S542
+                    71號
+                    X
+                    333台灣桃園市龜山區樂善里樂學三路
+                    技受
+                """.trimIndent(),
+                typeText = "P\"外送 獨亨",
+                priceText = "${'$'}99",
+                tripText = "O28分鐘(8.4公里)總計",
+                detailText = """
+                    8分鐘(8.4公里)總計
+                    系當勞龜山忠義 McDonalds S542
+                    33台灣桃園市龜山區樂善里樂學三路
+                    1號
+                """.trimIndent(),
+                merchantText = "麥當勞 龜山忠義 McDonalds S542",
+                addressText = "",
+                addressLowerText = ""
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals(false, order!!.storeName in setOf("獨亨", "獨享", "Y?外送", "外送"))
+    }
+
+    @Test
+    fun parseDoesNotUseUiLabelAsMerchantWhenDetailHasStore() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = """
+                    外送 獨享
+                    ${'$'}98
+                    24分鐘 (7.7公里) 總計
+                    类型
+                    金額
+                    时间
+                    來吃早餐
+                    333台灣桃園市龜山區文化一路83號
+                    接受
+                """.trimIndent(),
+                cardText = """
+                    Y?外送 獨享
+                    ${'$'}98
+                    O24分鐘 (7.7 公里) 總計
+                    类型
+                    金額
+                    时间
+                    來吃早餐
+                    333台灣桃園市龜山區文化一路83號
+                """.trimIndent(),
+                typeText = "外送 獨享",
+                priceText = "${'$'}98",
+                tripText = "24分鐘 (7.7 公里) 總計",
+                detailText = """
+                    类型
+                    金額
+                    來吃早餐
+                    333台灣桃園市龜山區文化一路83號
+                """.trimIndent(),
+                merchantText = "",
+                addressText = "",
+                addressLowerText = ""
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals("來吃早餐", order!!.storeName)
+    }
+
+    @Test
     fun parseRepairsRoadSuffixSplitButKeepsHouseNumberLine() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
