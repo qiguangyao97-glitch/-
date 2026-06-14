@@ -40,6 +40,8 @@ class MyAccessibilityService : AccessibilityService() {
     private var lastShownOrderSignature: String = ""
     private var lastShownOrderTime: Long = 0L
     private var lastOcrAttemptTime: Long = 0L
+    private var screenshotTimeoutRunnable: Runnable? = null
+    private var ocrTimeoutRunnable: Runnable? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -106,15 +108,18 @@ class MyAccessibilityService : AccessibilityService() {
         }
         if (isTakingScreenshot) {
             Log.d("A11Y_SCREENSHOT", "skip, screenshot already running")
+            DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "skip_already_running")
             return true
         }
         isTakingScreenshot = true
         DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "request lastEvent=$lastTargetEventSummary")
+        armScreenshotTimeout()
         takeScreenshot(
             Display.DEFAULT_DISPLAY,
             mainExecutor,
             object : TakeScreenshotCallback {
                 override fun onSuccess(screenshot: ScreenshotResult) {
+                    clearScreenshotTimeout()
                     isTakingScreenshot = false
                     val bitmap = screenshot.toBitmap()
                     if (bitmap == null) {
@@ -126,6 +131,7 @@ class MyAccessibilityService : AccessibilityService() {
                 }
 
                 override fun onFailure(errorCode: Int) {
+                    clearScreenshotTimeout()
                     isTakingScreenshot = false
                     Log.d("A11Y_SCREENSHOT", "failed code=$errorCode")
                     reportAccessibilityScreenshotFailure("error_$errorCode")
@@ -135,17 +141,37 @@ class MyAccessibilityService : AccessibilityService() {
         return true
     }
 
+    private fun armScreenshotTimeout() {
+        clearScreenshotTimeout()
+        screenshotTimeoutRunnable = Runnable {
+            if (isTakingScreenshot) {
+                isTakingScreenshot = false
+                DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "timeout_reset")
+                Log.d("A11Y_SCREENSHOT", "timeout reset")
+            }
+        }.also {
+            mainHandler.postDelayed(it, SCREENSHOT_TIMEOUT_MS)
+        }
+    }
+
+    private fun clearScreenshotTimeout() {
+        screenshotTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        screenshotTimeoutRunnable = null
+    }
+
     private fun processAccessibilityOrderBitmap(bitmap: Bitmap) {
         if (!MonitoringState.isEnabled(this)) {
             bitmap.recycle()
             return
         }
         if (isProcessingOrder) {
+            DiagnosticLogStore.append(this, "CAPTURE", "skip_processing_busy")
             bitmap.recycle()
             return
         }
 
         isProcessingOrder = true
+        armOcrTimeout()
         DiagnosticLogStore.append(this, "CAPTURE", "process source=accessibility ${bitmap.width}x${bitmap.height}")
         OcrHelper.runOrderRegions(this, bitmap) { regionText ->
             runCatching {
@@ -172,8 +198,28 @@ class MyAccessibilityService : AccessibilityService() {
                 Log.e("CAPTURE", "accessibility OCR callback failed", throwable)
                 CrashLogStore.save(this, "accessibility_ocr_callback", throwable)
             }
+            clearOcrTimeout()
             isProcessingOrder = false
+            bitmap.recycle()
         }
+    }
+
+    private fun armOcrTimeout() {
+        clearOcrTimeout()
+        ocrTimeoutRunnable = Runnable {
+            if (isProcessingOrder) {
+                isProcessingOrder = false
+                DiagnosticLogStore.append(this, "CAPTURE", "ocr_timeout_reset")
+                Log.d("CAPTURE", "OCR timeout reset")
+            }
+        }.also {
+            mainHandler.postDelayed(it, OCR_TIMEOUT_MS)
+        }
+    }
+
+    private fun clearOcrTimeout() {
+        ocrTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        ocrTimeoutRunnable = null
     }
 
     private fun handleAccessibilityOrder(order: com.example.gongderefuser.model.OrderData?, bitmap: Bitmap?): Boolean {
@@ -806,6 +852,8 @@ class MyAccessibilityService : AccessibilityService() {
         private const val OVERLAY_PREFS_NAME = "gongde_refuser_overlay"
         private const val KEY_OVERLAY_X = "overlay_x"
         private const val KEY_OVERLAY_Y = "overlay_y"
+        private const val SCREENSHOT_TIMEOUT_MS = 3_500L
+        private const val OCR_TIMEOUT_MS = 8_000L
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
         private val COLOR_DANGER = Color.rgb(239, 68, 68)
