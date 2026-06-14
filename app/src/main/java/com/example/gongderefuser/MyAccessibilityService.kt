@@ -185,7 +185,9 @@ class MyAccessibilityService : AccessibilityService() {
                         tripText = regionText.tripText,
                         detailText = regionText.detailText,
                         merchantText = regionText.merchantText,
+                        merchantWideText = regionText.merchantWideText,
                         addressText = regionText.addressText,
+                        addressWideText = regionText.addressWideText,
                         addressLowerText = regionText.addressLowerText
                     )
                 ) ?: OrderParser.parse(regionText.fullText)

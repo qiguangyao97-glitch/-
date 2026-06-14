@@ -68,8 +68,12 @@ object DebugSampleStore {
                     appendLine(regionText.detailText)
                     appendLine("===== MERCHANT =====")
                     appendLine(regionText.merchantText)
+                    appendLine("===== MERCHANT WIDE =====")
+                    appendLine(regionText.merchantWideText)
                     appendLine("===== ADDRESS =====")
                     appendLine(regionText.addressText)
+                    appendLine("===== ADDRESS WIDE =====")
+                    appendLine(regionText.addressWideText)
                     appendLine("===== ADDRESS LOWER =====")
                     appendLine(regionText.addressLowerText)
                 },
@@ -88,7 +92,9 @@ object DebugSampleStore {
                 tripText = regionText.tripText,
                 detailText = regionText.detailText,
                 merchantText = regionText.merchantText,
+                merchantWideText = regionText.merchantWideText,
                 addressText = regionText.addressText,
+                addressWideText = regionText.addressWideText,
                 addressLowerText = regionText.addressLowerText
             )
         ) ?: OrderParser.parse(regionText.fullText)

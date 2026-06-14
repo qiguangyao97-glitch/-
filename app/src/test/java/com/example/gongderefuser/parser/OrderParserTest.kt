@@ -742,6 +742,58 @@ class OrderParserTest {
     }
 
     @Test
+    fun parseKeepsLeadingLettersFromWideMerchantRegion() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "外送\n${'$'}120\n29分鐘 (6.7公里) 總計\n接受",
+                cardText = "外送\n${'$'}120\n29分鐘 (6.7公里) 總計\nPChome\n333台灣桃園市龜山區樂善里文禾路\n175號\n接受",
+                typeText = "外送",
+                priceText = "${'$'}120",
+                tripText = "29分鐘 (6.7公里) 總計",
+                detailText = "333台灣桃園市龜山區樂善里文禾路\n175號",
+                merchantWideText = "PChome",
+                merchantText = "Chome",
+                addressWideText = "B333台灣桃園市龜山區樂善里文禾路",
+                addressText = "333台灣桃園市龜山區樂善里文禾路",
+                addressLowerText = "175號"
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals("PChome", order!!.storeName)
+        assertEquals(
+            "333台灣桃園市龜山區樂善里文禾路\n175號",
+            order.address
+        )
+    }
+
+    @Test
+    fun parseCleansAddressIconNoiseWithoutDroppingValidNumberStart() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n配對",
+                cardText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n麥味登 龜山華亞店\n333台灣桃園市龜山區文化里文化二路\n211號\n配對",
+                typeText = "外送",
+                priceText = "${'$'}45",
+                tripText = "13分鐘 (2.2公里) 總計",
+                detailText = "麥味登 龜山華亞店",
+                merchantWideText = "9麥味登 龜山華亞店",
+                merchantText = "麥味登 龜山華亞店",
+                addressWideText = "口333台灣桃園市龜山區文化里文化二路",
+                addressText = "333台灣桃園市龜山區文化里文化二路",
+                addressLowerText = "211號"
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals("麥味登 龜山華亞店", order!!.storeName)
+        assertEquals(
+            "333台灣桃園市龜山區文化里文化二路\n211號",
+            order.address
+        )
+    }
+
+    @Test
     fun parseRemovesPickupIconNoiseBeforeMerchantName() {
         val order = OrderParser.parse(
             """

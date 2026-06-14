@@ -17,7 +17,9 @@ object OrderParser {
         val tripText: String,
         val detailText: String = "",
         val merchantText: String,
+        val merchantWideText: String = "",
         val addressText: String,
+        val addressWideText: String = "",
         val addressLowerText: String = ""
     )
 
@@ -80,8 +82,12 @@ object OrderParser {
             val tripText = normalize(input.tripText)
             val detailText = normalize(input.detailText)
             val merchantText = normalize(input.merchantText)
+            val merchantWideText = normalize(input.merchantWideText)
             val addressText = normalize(input.addressText)
+            val addressWideText = normalize(input.addressWideText)
             val addressLowerText = normalize(input.addressLowerText)
+            val combinedMerchantText = mergeRegionText(merchantWideText, merchantText)
+            val combinedAddressText = mergeRegionText(addressWideText, addressText)
             val combinedText = listOf(
                 priceText,
                 tripText,
@@ -98,15 +104,15 @@ object OrderParser {
             val isTargetOffer = isLikelyTargetOffer(combinedText)
             val cardDetailLines = parseCardDetailLines(cardText)
             val regionDetailLines = parseDetailLines(detailText.ifBlank {
-                listOf(merchantText, addressText, addressLowerText).joinToString("\n")
+                listOf(combinedMerchantText, combinedAddressText, addressLowerText).joinToString("\n")
             })
             val detailLines = (cardDetailLines + regionDetailLines)
                 .distinct()
-            val merchantCandidate = parseRegionStoreName(merchantText)
+            val merchantCandidate = parseRegionStoreName(combinedMerchantText)
             val detailStoreCandidate = parseStoreNameFromDetail(detailLines)
             val regionStoreName = chooseStoreName(merchantCandidate, detailStoreCandidate, detailLines)
             val regionAddressLines = parseRegionAddressLines(
-                addressText = addressText,
+                addressText = combinedAddressText,
                 addressLowerText = addressLowerText,
                 detailLines = detailLines,
                 storeName = regionStoreName,
@@ -140,6 +146,15 @@ object OrderParser {
             e.printStackTrace()
             null
         }
+    }
+
+    private fun mergeRegionText(primary: String, secondary: String): String {
+        return listOf(primary, secondary)
+            .flatMap { it.lines() }
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString("\n")
     }
 
     fun buildFailureMessage(screenText: String): String {

@@ -23,7 +23,9 @@ object OcrHelper {
         val tripText: String,
         val detailText: String,
         val merchantText: String,
+        val merchantWideText: String,
         val addressText: String,
+        val addressWideText: String,
         val addressLowerText: String
     )
 
@@ -86,7 +88,9 @@ object OcrHelper {
                             tripText = results["trip"].orEmpty(),
                             detailText = results["detail"].orEmpty(),
                             merchantText = results["merchant"].orEmpty(),
+                            merchantWideText = results["merchantWide"].orEmpty(),
                             addressText = results["address"].orEmpty(),
+                            addressWideText = results["addressWide"].orEmpty(),
                             addressLowerText = results["addressLower"].orEmpty()
                         )
                     )
@@ -158,8 +162,12 @@ object OcrHelper {
             ?: y(if (isPairOffer) 0.49f else 0.51f)
         val detailBottom = (buttonTop - cardHeight * 0.03f).toInt()
             .coerceAtLeast(detailTop + 1)
-        val detailLeft = anchor?.let { it.lineX + (cardWidth * 0.09f).toInt() }
-            ?: x(0.13f)
+        // The pickup/dropoff icons stay at a fixed X within the offer card. Use
+        // them only for Y anchors; keep text crops on fixed card-relative X
+        // positions so leading letters/numbers are not cut off by line jitter.
+        val detailWideLeft = x(0.105f)
+        val detailLeft = x(0.13f)
+        val detailSafeLeft = x(0.145f)
         val detailRight = (card.right - cardWidth * 0.05f).toInt()
 
         val merchantTop = anchor?.let { (it.pickupY - cardHeight * 0.065f).toInt() }
@@ -176,8 +184,10 @@ object OcrHelper {
             "price" to prepareForOcr(crop(bitmap, x(0.03f), y(0.13f), x(0.50f), y(0.33f))),
             "trip" to prepareForOcr(crop(bitmap, x(0.03f), y(0.32f), x(0.92f), y(0.48f))),
             "detail" to prepareForOcr(crop(bitmap, detailLeft, detailTop, detailRight, detailBottom)),
-            "merchant" to prepareForOcr(crop(bitmap, detailLeft, merchantTop, detailRight, merchantBottom)),
-            "address" to prepareForOcr(crop(bitmap, detailLeft, addressTop, detailRight, addressBottom)),
+            "merchantWide" to prepareForOcr(crop(bitmap, detailWideLeft, merchantTop, detailRight, merchantBottom)),
+            "merchant" to prepareForOcr(crop(bitmap, detailSafeLeft, merchantTop, detailRight, merchantBottom)),
+            "addressWide" to prepareForOcr(crop(bitmap, detailWideLeft, addressTop, detailRight, addressBottom)),
+            "address" to prepareForOcr(crop(bitmap, detailSafeLeft, addressTop, detailRight, addressBottom)),
             "addressLower" to prepareForOcr(crop(bitmap, detailLeft, (addressTop + cardHeight * 0.09f).toInt(), detailRight, addressBottom))
         )
     }
