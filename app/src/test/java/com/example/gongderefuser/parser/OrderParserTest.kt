@@ -63,7 +63,7 @@ class OrderParserTest {
         assertNotNull(order)
         assertEquals(2, order!!.deliveryCount)
         assertEquals(true, order.isStackOrder)
-        assertEquals("叠单（2单）", OrderAnalyzer.analyzeResult(order).orderType)
+        assertEquals("2单", OrderAnalyzer.analyzeResult(order).orderType)
     }
 
     @Test
@@ -83,7 +83,7 @@ class OrderParserTest {
         assertNotNull(order)
         assertEquals(1, order!!.deliveryCount)
         assertEquals(false, order.isStackOrder)
-        assertEquals("独享", OrderAnalyzer.analyzeResult(order).orderType)
+        assertEquals("一单", OrderAnalyzer.analyzeResult(order).orderType)
     }
 
     @Test
@@ -152,7 +152,7 @@ class OrderParserTest {
 
         assertNotNull(order)
         assertEquals(true, order!!.isSameLocationStack)
-        assertEquals("夹单（爽单）", OrderAnalyzer.analyzeResult(order).orderType)
+        assertEquals("2单", OrderAnalyzer.analyzeResult(order).orderType)
     }
 
     @Test

@@ -211,11 +211,11 @@ object OrderAnalyzer {
     }
 
     private fun buildOrderType(order: OrderData): String {
-        return when {
-            order.isSameLocationStack -> "夹单（爽单）"
-            order.isStackOrder -> "叠单（${order.deliveryCount}单）"
-            order.isExclusive -> "独享"
-            else -> "独享"
+        val count = order.deliveryCount.coerceAtLeast(1)
+        return if (count == 1) {
+            "一单"
+        } else {
+            "${count}单"
         }
     }
 
