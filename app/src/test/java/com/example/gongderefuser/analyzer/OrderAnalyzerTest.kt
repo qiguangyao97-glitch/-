@@ -63,7 +63,7 @@ class OrderAnalyzerTest {
     }
 
     @Test
-    fun blacklistAndWhitelistCanBothAffectScoreWithBlacklistRules() {
+    fun blacklistAndWhitelistCanBothMatchButOnlyBlacklistChangesScore() {
         val analysis = OrderAnalyzer.analyzeResult(
             order = OrderData(
                 price = 120,
@@ -89,7 +89,7 @@ class OrderAnalyzerTest {
         assertEquals("麥當勞 林口復興", analysis.matchedWhitelistKeyword)
         assertEquals("長庚街", analysis.matchedBlacklistKeyword)
         assertEquals("不建议接单", analysis.recommendation)
-        assertEquals(33, analysis.score)
+        assertEquals(31, analysis.score)
     }
 
     @Test
@@ -103,9 +103,9 @@ class OrderAnalyzerTest {
                 address = "龜山區萬壽路一段"
             ),
             rules = RuleSettings.RuleConfig(
-                minPrice = 0,
-                maxDistance = 999.0,
-                maxMinutes = 999,
+                minPrice = 35,
+                maxDistance = 10.0,
+                maxMinutes = 35,
                 targetHourly = 0
             ),
             whitelistEntry = null,

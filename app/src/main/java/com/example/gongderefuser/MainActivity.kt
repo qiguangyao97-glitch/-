@@ -523,23 +523,23 @@ class MainActivity : AppCompatActivity() {
         addSubHeader(
             layout,
             if (isBlacklistRule) "黑名单规则" else "正常单规则",
-            "修改后点击保存，只影响这一组规则。"
+            "按比例评分：金额越高越加分，时间和距离越低越加分；目标时薪只限制最高建议等级。"
         )
 
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
-        val minPriceInput = addLabeledNumberInput(card, "最低金额", "元").apply {
+        val minPriceInput = addLabeledNumberInput(card, "目标金额", "元，低于按比例扣分，高于按比例加分").apply {
             setText(rule.minPrice.toString())
         }
-        val maxDistanceInput = addLabeledNumberInput(card, "最大公里", "公里").apply {
+        val maxDistanceInput = addLabeledNumberInput(card, "目标最大公里", "公里，低于加分，超过扣分").apply {
             setText(OrderAnalyzer.formatDistance(rule.maxDistance))
         }
-        val maxMinutesInput = addLabeledNumberInput(card, "最大时间", "分钟").apply {
+        val maxMinutesInput = addLabeledNumberInput(card, "目标最大时间", "分钟，低于加分，超过扣分").apply {
             setText(rule.maxMinutes.toString())
         }
-        val targetHourlyInput = addLabeledNumberInput(card, "目标时薪", "元/小时").apply {
+        val targetHourlyInput = addLabeledNumberInput(card, "目标时薪", "元/小时，低于时最高只显示慎重考虑").apply {
             setText(rule.targetHourly.toString())
         }
         val costPerKmInput = addLabeledNumberInput(card, "每公里成本", "元/公里").apply {
@@ -980,6 +980,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.16：实时识别改为宽进严出，无锚点时允许备用区域解析但必须通过订单核心字段校验；调试样本新增带框 OCR 区域图；评分改为比例式，白名单只提示备注不加分；新增外送订单可独立显示。",
             "1.0.15：实时识别改为必须命中真实订单卡片锚点才解析；取消实时整屏文字回退，避免在相册、笔记旧截图或导航地图中误触发。",
             "1.0.14：商家和地址 OCR 改为固定 X 文字起点，并新增宽/安全双区域识别；圆形、方块只用于上下定位，减少图标噪声同时保留开头字母数字。",
             "1.0.13：黑白名单改为同时判断；黑名单命中时优先使用黑名单规则，白名单加分仍保留，避免好商家覆盖风险配送地址。",

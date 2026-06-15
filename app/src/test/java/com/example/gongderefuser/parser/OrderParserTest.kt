@@ -87,6 +87,25 @@ class OrderParserTest {
     }
 
     @Test
+    fun parseAddOnDeliveryOrder() {
+        val order = OrderParser.parse(
+            """
+            新增外送订单
+            外送
+            +${'$'}45
+            13分鐘 (3.3公里) 總計
+            清心福全 林口復興店
+            333台灣桃園市龜山區樂善里樂善二路431號
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(true, order!!.isAddOnOrder)
+        assertEquals("新增外送订单", OrderAnalyzer.analyzeResult(order).orderType)
+    }
+
+    @Test
     fun parseDeliveryCountOnlyUsesDeliveryBadge() {
         val order = OrderParser.parse(
             """

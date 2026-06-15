@@ -14,10 +14,16 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 
 object OcrHelper {
 
+    data class DebugRegion(
+        val name: String,
+        val rect: Rect
+    )
+
     data class OrderRegionText(
         val fullText: String,
         val isPairOffer: Boolean,
         val hasAnchoredCard: Boolean,
+        val debugRegions: List<DebugRegion>,
         val cardText: String,
         val typeText: String,
         val priceText: String,
@@ -85,6 +91,7 @@ object OcrHelper {
                             fullText = fullText,
                             isPairOffer = isPairOffer,
                             hasAnchoredCard = hasAnchoredCard,
+                            debugRegions = regions.map { DebugRegion(it.name, Rect(it.rect)) },
                             cardText = results["card"].orEmpty(),
                             typeText = results["type"].orEmpty(),
                             priceText = results["price"].orEmpty(),
@@ -101,11 +108,11 @@ object OcrHelper {
             }
         }
 
-        regions.forEach { (key, regionBitmap) ->
-            if (regionBitmap.width <= 1 && regionBitmap.height <= 1) {
-                finishOne(key, "")
+        regions.forEach { region ->
+            if (region.bitmap.width <= 1 && region.bitmap.height <= 1) {
+                finishOne(region.name, "")
             } else {
-                runMlKitRegion(regionBitmap) { text -> finishOne(key, text) }
+                runMlKitRegion(region.bitmap) { text -> finishOne(region.name, text) }
             }
         }
     }
@@ -133,18 +140,24 @@ object OcrHelper {
         val dropoffY: Int
     )
 
-    private fun buildFallbackRegions(bitmap: Bitmap, profile: RegionProfile): List<Pair<String, Bitmap>> {
+    private data class RegionCrop(
+        val name: String,
+        val rect: Rect,
+        val bitmap: Bitmap
+    )
+
+    private fun buildFallbackRegions(bitmap: Bitmap, profile: RegionProfile): List<RegionCrop> {
         return listOf(
-            "card" to crop(bitmap, 0.03f, profile.cardTop, 0.97f, 0.97f),
-            "type" to prepareForOcr(crop(bitmap, 0.06f, profile.typeTop, 0.56f, profile.typeBottom)),
-            "price" to prepareForOcr(crop(bitmap, 0.05f, profile.priceTop, 0.45f, profile.priceBottom)),
-            "trip" to prepareForOcr(crop(bitmap, 0.05f, profile.tripTop, 0.92f, profile.tripBottom)),
-            "detail" to prepareForOcr(crop(bitmap, 0.00f, profile.merchantTop - 0.01f, 1.00f, profile.addressBottom + 0.04f)),
-            "merchantWide" to blankBitmap(),
-            "merchant" to blankBitmap(),
-            "addressWide" to blankBitmap(),
-            "address" to blankBitmap(),
-            "addressLower" to blankBitmap()
+            region(bitmap, "card", 0.03f, profile.cardTop, 0.97f, 0.97f),
+            region(bitmap, "type", 0.06f, profile.typeTop, 0.56f, profile.typeBottom, prepare = true),
+            region(bitmap, "price", 0.05f, profile.priceTop, 0.45f, profile.priceBottom, prepare = true),
+            region(bitmap, "trip", 0.05f, profile.tripTop, 0.92f, profile.tripBottom, prepare = true),
+            region(bitmap, "detail", 0.00f, profile.merchantTop - 0.01f, 1.00f, profile.addressBottom + 0.04f, prepare = true),
+            blankRegion("merchantWide"),
+            blankRegion("merchant"),
+            blankRegion("addressWide"),
+            blankRegion("address"),
+            blankRegion("addressLower")
         )
     }
 
@@ -152,7 +165,7 @@ object OcrHelper {
         bitmap: Bitmap,
         button: ActionButton?,
         isPairOffer: Boolean
-    ): List<Pair<String, Bitmap>>? {
+    ): List<RegionCrop>? {
         val actionButton = button ?: return null
         val card = findCardRect(bitmap, actionButton)
         val cardHeight = card.height().coerceAtLeast(1)
@@ -184,16 +197,54 @@ object OcrHelper {
         val addressBottom = detailBottom
 
         return listOf(
-            "card" to crop(bitmap, card),
-            "type" to prepareForOcr(crop(bitmap, x(0.03f), y(0.02f), x(0.55f), y(0.14f))),
-            "price" to prepareForOcr(crop(bitmap, x(0.03f), y(0.13f), x(0.50f), y(0.33f))),
-            "trip" to prepareForOcr(crop(bitmap, x(0.03f), y(0.32f), x(0.92f), y(0.48f))),
-            "detail" to prepareForOcr(crop(bitmap, detailLeft, detailTop, detailRight, detailBottom)),
-            "merchantWide" to prepareForOcr(crop(bitmap, detailWideLeft, merchantTop, detailRight, merchantBottom)),
-            "merchant" to prepareForOcr(crop(bitmap, detailSafeLeft, merchantTop, detailRight, merchantBottom)),
-            "addressWide" to prepareForOcr(crop(bitmap, detailWideLeft, addressTop, detailRight, addressBottom)),
-            "address" to prepareForOcr(crop(bitmap, detailSafeLeft, addressTop, detailRight, addressBottom)),
-            "addressLower" to prepareForOcr(crop(bitmap, detailLeft, (addressTop + cardHeight * 0.09f).toInt(), detailRight, addressBottom))
+            region(bitmap, "card", card, prepare = false),
+            region(bitmap, "type", x(0.03f), y(0.02f), x(0.55f), y(0.14f), prepare = true),
+            region(bitmap, "price", x(0.03f), y(0.13f), x(0.50f), y(0.33f), prepare = true),
+            region(bitmap, "trip", x(0.03f), y(0.32f), x(0.92f), y(0.48f), prepare = true),
+            region(bitmap, "detail", detailLeft, detailTop, detailRight, detailBottom, prepare = true),
+            region(bitmap, "merchantWide", detailWideLeft, merchantTop, detailRight, merchantBottom, prepare = true),
+            region(bitmap, "merchant", detailSafeLeft, merchantTop, detailRight, merchantBottom, prepare = true),
+            region(bitmap, "addressWide", detailWideLeft, addressTop, detailRight, addressBottom, prepare = true),
+            region(bitmap, "address", detailSafeLeft, addressTop, detailRight, addressBottom, prepare = true),
+            region(bitmap, "addressLower", detailLeft, (addressTop + cardHeight * 0.09f).toInt(), detailRight, addressBottom, prepare = true)
+        )
+    }
+
+    private fun blankRegion(name: String): RegionCrop {
+        return RegionCrop(name, Rect(0, 0, 1, 1), blankBitmap())
+    }
+
+    private fun region(
+        bitmap: Bitmap,
+        name: String,
+        leftRatio: Float,
+        topRatio: Float,
+        rightRatio: Float,
+        bottomRatio: Float,
+        prepare: Boolean = false
+    ): RegionCrop {
+        val rect = rect(bitmap, leftRatio, topRatio, rightRatio, bottomRatio)
+        return region(bitmap, name, rect, prepare)
+    }
+
+    private fun region(
+        bitmap: Bitmap,
+        name: String,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+        prepare: Boolean = false
+    ): RegionCrop {
+        return region(bitmap, name, rect(bitmap, left, top, right, bottom), prepare)
+    }
+
+    private fun region(bitmap: Bitmap, name: String, rect: Rect, prepare: Boolean = false): RegionCrop {
+        val cropped = crop(bitmap, rect)
+        return RegionCrop(
+            name = name,
+            rect = Rect(rect),
+            bitmap = if (prepare) prepareForOcr(cropped) else cropped
         )
     }
 
@@ -258,11 +309,7 @@ object OcrHelper {
         rightRatio: Float,
         bottomRatio: Float
     ): Bitmap {
-        val left = (bitmap.width * leftRatio).toInt().coerceIn(0, bitmap.width - 1)
-        val top = (bitmap.height * topRatio).toInt().coerceIn(0, bitmap.height - 1)
-        val right = (bitmap.width * rightRatio).toInt().coerceIn(left + 1, bitmap.width)
-        val bottom = (bitmap.height * bottomRatio).toInt().coerceIn(top + 1, bitmap.height)
-        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        return crop(bitmap, rect(bitmap, leftRatio, topRatio, rightRatio, bottomRatio))
     }
 
     private fun crop(bitmap: Bitmap, rect: Rect): Bitmap {
@@ -276,11 +323,35 @@ object OcrHelper {
         right: Int,
         bottom: Int
     ): Bitmap {
+        return crop(bitmap, rect(bitmap, left, top, right, bottom))
+    }
+
+    private fun rect(
+        bitmap: Bitmap,
+        leftRatio: Float,
+        topRatio: Float,
+        rightRatio: Float,
+        bottomRatio: Float
+    ): Rect {
+        val left = (bitmap.width * leftRatio).toInt()
+        val top = (bitmap.height * topRatio).toInt()
+        val right = (bitmap.width * rightRatio).toInt()
+        val bottom = (bitmap.height * bottomRatio).toInt()
+        return rect(bitmap, left, top, right, bottom)
+    }
+
+    private fun rect(
+        bitmap: Bitmap,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int
+    ): Rect {
         val safeLeft = left.coerceIn(0, bitmap.width - 1)
         val safeTop = top.coerceIn(0, bitmap.height - 1)
         val safeRight = right.coerceIn(safeLeft + 1, bitmap.width)
         val safeBottom = bottom.coerceIn(safeTop + 1, bitmap.height)
-        return Bitmap.createBitmap(bitmap, safeLeft, safeTop, safeRight - safeLeft, safeBottom - safeTop)
+        return Rect(safeLeft, safeTop, safeRight, safeBottom)
     }
 
     private fun findActionButton(bitmap: Bitmap): ActionButton? {

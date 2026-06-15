@@ -256,8 +256,7 @@ class ScreenCaptureService : Service() {
 
     private fun handleOcrText(regionText: OcrHelper.OrderRegionText, bitmap: Bitmap? = null): Boolean {
         if (!regionText.hasAnchoredCard) {
-            DiagnosticLogStore.append(this, "CAPTURE", "skip_no_anchor source=screen_capture")
-            return false
+            DiagnosticLogStore.append(this, "CAPTURE", "fallback_no_anchor source=screen_capture")
         }
         val order = OrderParser.parse(
             OrderParser.RegionInput(
@@ -273,7 +272,7 @@ class ScreenCaptureService : Service() {
                 addressWideText = regionText.addressWideText,
                 addressLowerText = regionText.addressLowerText
             )
-        )
+        ) ?: OrderParser.parse(regionText.fullText)
         return handleOrder(order, bitmap)
     }
 
@@ -288,7 +287,7 @@ class ScreenCaptureService : Service() {
             return false
         }
 
-        val signature = "${order.price}-${order.minutes}-${order.distance}-${order.deliveryCount}-${order.isExclusive}"
+        val signature = "${order.price}-${order.minutes}-${order.distance}-${order.deliveryCount}-${order.isAddOnOrder}"
         val now = System.currentTimeMillis()
         if (signature == lastShownOrderSignature && now - lastShownOrderTime < 30_000) {
             Log.d("ORDER_ANALYSIS", "duplicate order ignored")

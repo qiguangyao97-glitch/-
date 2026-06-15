@@ -37,6 +37,7 @@ object OrderParser {
             val deliveryCount = parseDeliveryCount(normalizedText)
             val isExclusive = deliveryCount <= 1
             val isTargetOffer = isLikelyTargetOffer(normalizedText)
+            val isAddOnOrder = isAddOnOrder(normalizedText)
             val addressLines = parseAddressLines(normalizedText)
             val address = addressLines.joinToString("\n").ifBlank { normalizedText }
             val storeName = parseStoreName(normalizedText, addressLines)
@@ -61,6 +62,7 @@ object OrderParser {
                 deliveryCount = deliveryCount,
                 isExclusive = isExclusive,
                 isTargetOffer = isTargetOffer,
+                isAddOnOrder = isAddOnOrder,
                 address = address,
                 storeName = storeName
             )
@@ -102,6 +104,7 @@ object OrderParser {
             val deliveryCount = parseDeliveryCount(listOf(typeText, cardText, fullText).joinToString("\n"))
             val isExclusive = deliveryCount <= 1
             val isTargetOffer = isLikelyTargetOffer(combinedText)
+            val isAddOnOrder = isAddOnOrder(combinedText)
             val cardDetailLines = parseCardDetailLines(cardText)
             val regionDetailLines = parseDetailLines(detailText.ifBlank {
                 listOf(combinedMerchantText, combinedAddressText, addressLowerText).joinToString("\n")
@@ -139,6 +142,7 @@ object OrderParser {
                 deliveryCount = deliveryCount,
                 isExclusive = isExclusive,
                 isTargetOffer = isTargetOffer,
+                isAddOnOrder = isAddOnOrder,
                 address = address.ifBlank { cardText },
                 storeName = storeName
             )
@@ -806,6 +810,12 @@ object OrderParser {
         val cleaned = correctAddressLine(cleanDetailLine(line))
         return Regex("(台灣|台湾|Taiwan|桃園市|新北市|龜山區|林口區|[路街巷弄號楼樓])").containsMatchIn(cleaned) &&
                 Regex("[0-9]").containsMatchIn(cleaned)
+    }
+
+    private fun isAddOnOrder(text: String): Boolean {
+        return text.contains("新增外送訂單") ||
+                text.contains("新增外送订单") ||
+                Regex("(?m)^\\s*\\+\\s*\\$?\\s*[0-9]{2,4}\\s*$").containsMatchIn(text)
     }
 
     private fun hasSameLocationStackFeature(text: String): Boolean {

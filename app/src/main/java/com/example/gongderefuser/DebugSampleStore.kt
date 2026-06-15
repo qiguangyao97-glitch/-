@@ -2,6 +2,9 @@ package com.example.gongderefuser
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import com.example.gongderefuser.analyzer.OrderAnalyzer
 import com.example.gongderefuser.parser.OrderParser
 import java.io.File
@@ -37,6 +40,7 @@ object DebugSampleStore {
             File(dir, "$name.jpg").outputStream().use { output ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output)
             }
+            saveRegionOverlay(dir, "$name-regions.jpg", bitmap, regionText.debugRegions)
             File(dir, "$name.txt").writeText(
                 buildString {
                     appendLine("parsed=$parsed")
@@ -80,6 +84,62 @@ object DebugSampleStore {
                 },
                 Charsets.UTF_8
             )
+        }
+    }
+
+    private fun saveRegionOverlay(
+        dir: File,
+        fileName: String,
+        source: Bitmap,
+        regions: List<OcrHelper.DebugRegion>
+    ) {
+        if (regions.isEmpty()) return
+        val overlay = source.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(overlay)
+        val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (source.width * 0.006f).coerceAtLeast(4f)
+        }
+        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.WHITE
+            textSize = (source.width * 0.028f).coerceAtLeast(26f)
+        }
+        val labelBackground = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+
+        regions
+            .filter { it.rect.width() > 2 && it.rect.height() > 2 }
+            .forEach { region ->
+                val color = regionColor(region.name)
+                stroke.color = color
+                canvas.drawRect(region.rect, stroke)
+                labelBackground.color = color
+                val label = region.name
+                val padding = 8f
+                val labelWidth = labelPaint.measureText(label) + padding * 2
+                val labelHeight = labelPaint.textSize + padding * 2
+                val left = region.rect.left.toFloat()
+                val top = (region.rect.top - labelHeight).coerceAtLeast(0f)
+                canvas.drawRect(left, top, left + labelWidth, top + labelHeight, labelBackground)
+                canvas.drawText(label, left + padding, top + labelPaint.textSize + padding / 2, labelPaint)
+            }
+
+        File(dir, fileName).outputStream().use { output ->
+            overlay.compress(Bitmap.CompressFormat.JPEG, 90, output)
+        }
+    }
+
+    private fun regionColor(name: String): Int {
+        return when (name) {
+            "card" -> Color.rgb(0, 122, 255)
+            "type" -> Color.rgb(128, 0, 255)
+            "price" -> Color.rgb(255, 149, 0)
+            "trip" -> Color.rgb(255, 214, 10)
+            "merchant", "merchantWide" -> Color.rgb(52, 199, 89)
+            "address", "addressWide", "addressLower" -> Color.rgb(255, 59, 48)
+            else -> Color.rgb(90, 200, 250)
         }
     }
 

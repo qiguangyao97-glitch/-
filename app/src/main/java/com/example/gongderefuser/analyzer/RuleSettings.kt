@@ -44,9 +44,9 @@ object RuleSettings {
         val manualLists = removeImportedLocationListDefaultsIfNeeded(context)
         return Settings(
             normal = RuleConfig(
-                minPrice = prefs.getInt(KEY_NORMAL_MIN_PRICE, 0),
-                maxDistance = prefs.getFloat(KEY_NORMAL_MAX_DISTANCE, 999f).toDouble(),
-                maxMinutes = prefs.getInt(KEY_NORMAL_MAX_MINUTES, 999),
+                minPrice = prefs.getInt(KEY_NORMAL_MIN_PRICE, 35),
+                maxDistance = prefs.getFloat(KEY_NORMAL_MAX_DISTANCE, 10f).toDouble(),
+                maxMinutes = prefs.getInt(KEY_NORMAL_MAX_MINUTES, 35),
                 targetHourly = prefs.getInt(KEY_NORMAL_TARGET_HOURLY, RuleManager.DEFAULT_TARGET_HOURLY),
                 costPerKm = prefs.getFloat(KEY_NORMAL_COST_PER_KM, RuleManager.COST_PER_KM.toFloat()).toDouble()
             ),

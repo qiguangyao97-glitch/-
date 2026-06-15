@@ -176,26 +176,24 @@ class MyAccessibilityService : AccessibilityService() {
         OcrHelper.runOrderRegions(this, bitmap) { regionText ->
             runCatching {
                 Log.d("OCR_RESULT", regionText.fullText)
-                val order = if (regionText.hasAnchoredCard) {
-                    OrderParser.parse(
-                        OrderParser.RegionInput(
-                            fullText = regionText.fullText,
-                            cardText = regionText.cardText,
-                            typeText = regionText.typeText,
-                            priceText = regionText.priceText,
-                            tripText = regionText.tripText,
-                            detailText = regionText.detailText,
-                            merchantText = regionText.merchantText,
-                            merchantWideText = regionText.merchantWideText,
-                            addressText = regionText.addressText,
-                            addressWideText = regionText.addressWideText,
-                            addressLowerText = regionText.addressLowerText
-                        )
-                    )
-                } else {
-                    DiagnosticLogStore.append(this, "CAPTURE", "skip_no_anchor source=accessibility")
-                    null
+                if (!regionText.hasAnchoredCard) {
+                    DiagnosticLogStore.append(this, "CAPTURE", "fallback_no_anchor source=accessibility")
                 }
+                val order = OrderParser.parse(
+                    OrderParser.RegionInput(
+                        fullText = regionText.fullText,
+                        cardText = regionText.cardText,
+                        typeText = regionText.typeText,
+                        priceText = regionText.priceText,
+                        tripText = regionText.tripText,
+                        detailText = regionText.detailText,
+                        merchantText = regionText.merchantText,
+                        merchantWideText = regionText.merchantWideText,
+                        addressText = regionText.addressText,
+                        addressWideText = regionText.addressWideText,
+                        addressLowerText = regionText.addressLowerText
+                    )
+                ) ?: OrderParser.parse(regionText.fullText)
                 val foundOrder = handleAccessibilityOrder(order, bitmap)
                 DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
                 if (!foundOrder) {
@@ -235,7 +233,7 @@ class MyAccessibilityService : AccessibilityService() {
             return false
         }
 
-        val signature = "${order.price}-${order.minutes}-${order.distance}-${order.deliveryCount}-${order.isExclusive}"
+        val signature = "${order.price}-${order.minutes}-${order.distance}-${order.deliveryCount}-${order.isAddOnOrder}"
         val now = System.currentTimeMillis()
         if (signature == lastShownOrderSignature && now - lastShownOrderTime < 30_000) {
             Log.d("ORDER_ANALYSIS", "duplicate order ignored")

@@ -29,6 +29,9 @@ data class OrderData(
     // 是否识别到接單弹窗特征
     val isTargetOffer: Boolean = false,
 
+    // 是否为已接单后的新增外送订单
+    val isAddOnOrder: Boolean = false,
+
     // 店家名称
     val storeName: String = "",
 

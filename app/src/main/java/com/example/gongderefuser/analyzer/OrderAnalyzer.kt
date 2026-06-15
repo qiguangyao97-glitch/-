@@ -62,9 +62,9 @@ object OrderAnalyzer {
         return analyzeResult(
             order = order,
             rules = RuleSettings.RuleConfig(
-                minPrice = 0,
-                maxDistance = 999.0,
-                maxMinutes = 999,
+                minPrice = 35,
+                maxDistance = 10.0,
+                maxMinutes = 35,
                 targetHourly = targetHourly
             ),
             whitelistEntry = null,
@@ -84,18 +84,13 @@ object OrderAnalyzer {
         val netIncome = order.price - cost
         val effectiveHourly = (netIncome / order.minutes) * 60
         val isBlacklisted = blacklistEntry != null
-        val passesRuleLimits = order.price >= rules.minPrice &&
-                order.distance <= rules.maxDistance &&
-                order.minutes <= rules.maxMinutes &&
-                effectiveHourly >= rules.targetHourly
+        val belowTargetHourly = rules.targetHourly > 0 && effectiveHourly < rules.targetHourly
         val score = calculateScore(
             order = order,
             rules = rules,
-            effectiveHourly = effectiveHourly,
-            isWhitelisted = whitelistEntry != null,
-            isBlacklisted = isBlacklisted,
-            passesRuleLimits = passesRuleLimits
+            isBlacklisted = isBlacklisted
         )
+        val recommendation = buildRecommendation(score, belowTargetHourly)
         return AnalysisResult(
             orderType = buildOrderType(order),
             price = order.price,
@@ -104,9 +99,9 @@ object OrderAnalyzer {
             cost = cost,
             netIncome = netIncome,
             effectiveHourly = effectiveHourly,
-            shouldAccept = score >= SCORE_ACCEPT,
+            shouldAccept = recommendation == "建议接单",
             score = score,
-            recommendation = buildRecommendation(score),
+            recommendation = recommendation,
             storeName = order.storeName,
             storeAddress = order.address,
             isWhitelisted = whitelistEntry != null,
@@ -151,44 +146,41 @@ object OrderAnalyzer {
     private fun calculateScore(
         order: OrderData,
         rules: RuleSettings.RuleConfig,
-        effectiveHourly: Double,
-        isWhitelisted: Boolean,
-        isBlacklisted: Boolean,
-        passesRuleLimits: Boolean
+        isBlacklisted: Boolean
     ): Int {
         var score = BASE_SCORE
 
-        if (passesRuleLimits) {
-            score += PASS_RULE_BONUS
-        }
-        if (isWhitelisted) {
-            score += WHITELIST_BONUS
-        }
+        score += proportionalScore(order.price.toDouble(), rules.minPrice.toDouble(), PRICE_WEIGHT, higherIsBetter = true)
+        score += proportionalScore(order.distance, rules.maxDistance, DISTANCE_WEIGHT, higherIsBetter = false)
+        score += proportionalScore(order.minutes.toDouble(), rules.maxMinutes.toDouble(), MINUTES_WEIGHT, higherIsBetter = false)
         if (isBlacklisted) {
             score -= BLACKLIST_PENALTY
         }
         if (order.isSameLocationStack) {
             score += SAME_LOCATION_STACK_BONUS
         }
-        if (order.price < rules.minPrice) {
-            score -= PRICE_PENALTY
-        }
-        if (order.distance > rules.maxDistance) {
-            score -= DISTANCE_PENALTY
-        }
-        if (order.minutes > rules.maxMinutes) {
-            score -= MINUTES_PENALTY
-        }
-        if (effectiveHourly < rules.targetHourly) {
-            score -= HOURLY_PENALTY
-        }
 
         return score.coerceIn(0, 100)
     }
 
-    private fun buildRecommendation(score: Int): String {
+    private fun proportionalScore(
+        actual: Double,
+        target: Double,
+        weight: Int,
+        higherIsBetter: Boolean
+    ): Int {
+        if (target <= 0.0 || target >= 900.0 || actual <= 0.0) return 0
+        val ratio = if (higherIsBetter) {
+            (actual - target) / target
+        } else {
+            (target - actual) / target
+        }
+        return (ratio * weight).toInt().coerceIn(-weight, weight)
+    }
+
+    private fun buildRecommendation(score: Int, belowTargetHourly: Boolean): String {
         return when {
-            score >= SCORE_ACCEPT -> "建议接单"
+            score >= SCORE_ACCEPT && !belowTargetHourly -> "建议接单"
             score >= SCORE_CAUTION -> "慎重考虑"
             else -> "不建议接单"
         }
@@ -207,6 +199,7 @@ object OrderAnalyzer {
     }
 
     private fun buildOrderType(order: OrderData): String {
+        if (order.isAddOnOrder) return "新增外送订单"
         val count = order.deliveryCount.coerceAtLeast(1)
         return if (count == 1) {
             "一单"
@@ -281,15 +274,12 @@ object OrderAnalyzer {
         '門' to '门'
     )
 
-    private const val BASE_SCORE = 70
-    private const val PASS_RULE_BONUS = 15
-    private const val WHITELIST_BONUS = 15
+    private const val BASE_SCORE = 60
+    private const val PRICE_WEIGHT = 20
+    private const val DISTANCE_WEIGHT = 15
+    private const val MINUTES_WEIGHT = 15
     private const val BLACKLIST_PENALTY = 25
     private const val SAME_LOCATION_STACK_BONUS = 10
-    private const val PRICE_PENALTY = 12
-    private const val DISTANCE_PENALTY = 10
-    private const val MINUTES_PENALTY = 8
-    private const val HOURLY_PENALTY = 15
     private const val SCORE_ACCEPT = 75
     private const val SCORE_CAUTION = 55
 }
