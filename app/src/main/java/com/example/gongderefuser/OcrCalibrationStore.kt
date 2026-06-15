@@ -19,6 +19,22 @@ object OcrCalibrationStore {
         "addressLower"
     )
 
+    fun displayName(name: String): String {
+        return when (name) {
+            "card" -> "订单卡片"
+            "type" -> "类型/单数"
+            "price" -> "金额"
+            "trip" -> "时间距离"
+            "detail" -> "商家地址整体"
+            "merchantWide" -> "商家宽框"
+            "merchant" -> "商家精框"
+            "addressWide" -> "地址宽框"
+            "address" -> "地址精框"
+            "addressLower" -> "地址下半"
+            else -> name
+        }
+    }
+
     fun load(context: Context): Map<String, RectF> {
         val prefs = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         return regionNames.associateWith { name ->

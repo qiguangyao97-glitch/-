@@ -108,15 +108,20 @@ object DebugSampleStore {
         val labelBackground = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
         }
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
 
         regions
             .filter { it.rect.width() > 2 && it.rect.height() > 2 }
             .forEach { region ->
                 val color = regionColor(region.name)
                 stroke.color = color
+                fill.color = withAlpha(color, 34)
+                canvas.drawRect(region.rect, fill)
                 canvas.drawRect(region.rect, stroke)
-                labelBackground.color = color
-                val label = region.name
+                labelBackground.color = withAlpha(color, 180)
+                val label = OcrCalibrationStore.displayName(region.name)
                 val padding = 8f
                 val labelWidth = labelPaint.measureText(label) + padding * 2
                 val labelHeight = labelPaint.textSize + padding * 2
@@ -141,6 +146,15 @@ object DebugSampleStore {
             "address", "addressWide", "addressLower" -> Color.rgb(255, 59, 48)
             else -> Color.rgb(90, 200, 250)
         }
+    }
+
+    private fun withAlpha(color: Int, alpha: Int): Int {
+        return Color.argb(
+            alpha.coerceIn(0, 255),
+            Color.red(color),
+            Color.green(color),
+            Color.blue(color)
+        )
     }
 
     private fun parseOrder(regionText: OcrHelper.OrderRegionText) =

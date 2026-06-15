@@ -26,7 +26,6 @@ class OcrCalibrationView(context: Context) : View(context) {
     }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        alpha = 36
     }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -72,7 +71,7 @@ class OcrCalibrationView(context: Context) : View(context) {
         regions.forEach { (name, normalized) ->
             val rect = toViewRect(normalized)
             val color = regionColor(name)
-            fillPaint.color = color
+            fillPaint.color = withAlpha(color, if (name == selectedName) 48 else 28)
             strokePaint.color = color
             strokePaint.strokeWidth = if (name == selectedName) 7f else 4f
             canvas.drawRect(rect, fillPaint)
@@ -176,13 +175,14 @@ class OcrCalibrationView(context: Context) : View(context) {
     }
 
     private fun drawLabel(canvas: Canvas, name: String, rect: RectF, color: Int) {
-        labelBgPaint.color = color
+        labelBgPaint.color = withAlpha(color, if (name == selectedName) 210 else 160)
         val padding = 8f
-        val textWidth = labelPaint.measureText(name)
+        val label = OcrCalibrationStore.displayName(name)
+        val textWidth = labelPaint.measureText(label)
         val labelHeight = labelPaint.textSize + padding * 2
         val top = (rect.top - labelHeight).coerceAtLeast(0f)
         canvas.drawRect(rect.left, top, rect.left + textWidth + padding * 2, top + labelHeight, labelBgPaint)
-        canvas.drawText(name, rect.left + padding, top + labelPaint.textSize + padding / 2, labelPaint)
+        canvas.drawText(label, rect.left + padding, top + labelPaint.textSize + padding / 2, labelPaint)
     }
 
     private fun regionColor(name: String): Int {
@@ -195,6 +195,15 @@ class OcrCalibrationView(context: Context) : View(context) {
             "address", "addressWide", "addressLower" -> Color.rgb(255, 59, 48)
             else -> Color.rgb(90, 200, 250)
         }
+    }
+
+    private fun withAlpha(color: Int, alpha: Int): Int {
+        return Color.argb(
+            alpha.coerceIn(0, 255),
+            Color.red(color),
+            Color.green(color),
+            Color.blue(color)
+        )
     }
 
     private enum class DragMode {
