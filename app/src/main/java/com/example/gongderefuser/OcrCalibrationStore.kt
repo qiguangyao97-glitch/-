@@ -22,6 +22,7 @@ object OcrCalibrationStore {
         return when (name) {
             "actionButton" -> "按钮定位"
             "deliveryAnchor" -> "取送定位"
+            "deliveryAnchorSearch" -> "取送实际搜索"
             "pickupAnchor" -> "取货圆点"
             "dropoffAnchor" -> "送达方块"
             "type" -> "类型/单数"

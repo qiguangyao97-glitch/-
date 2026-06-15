@@ -126,6 +126,7 @@ object ManualOcrDebugStore {
     private fun regionColor(name: String): Int {
         return when (name) {
             "actionButton" -> Color.rgb(255, 45, 85)
+            "deliveryAnchorSearch" -> Color.rgb(0, 180, 255)
             "deliveryAnchor" -> Color.rgb(0, 122, 255)
             "pickupAnchor" -> Color.rgb(90, 200, 250)
             "dropoffAnchor" -> Color.rgb(88, 86, 214)

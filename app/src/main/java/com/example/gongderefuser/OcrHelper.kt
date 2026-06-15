@@ -140,7 +140,8 @@ object OcrHelper {
         val top: Int,
         val bottom: Int,
         val pickupY: Int,
-        val dropoffY: Int
+        val dropoffY: Int,
+        val searchRect: Rect
     )
 
     private data class RegionCrop(
@@ -211,6 +212,7 @@ object OcrHelper {
 
         return listOf(
             region(bitmap, "card", card, prepare = false),
+            anchor?.let { RegionCrop("deliveryAnchorSearch", Rect(it.searchRect), blankBitmap()) } ?: blankRegion("deliveryAnchorSearch"),
             region(bitmap, "type", x(0.03f), y(0.02f) - topFieldShift, x(0.55f), y(0.14f) - topFieldShift, prepare = true),
             region(bitmap, "price", x(0.03f), y(0.13f) - topFieldShift, x(0.50f), y(0.33f) - topFieldShift, prepare = true),
             region(bitmap, "trip", x(0.03f), y(0.32f) - topFieldShift, x(0.92f), y(0.48f) - topFieldShift, prepare = true),
@@ -470,8 +472,12 @@ object OcrHelper {
         val calibrated = calibratedPixelRect(context, bitmap, "deliveryAnchor")
         val left = calibrated?.left ?: (card.left + card.width() * 0.04f).toInt().coerceAtLeast(0)
         val right = calibrated?.right ?: (card.left + card.width() * 0.20f).toInt().coerceAtMost(bitmap.width)
-        val top = calibrated?.top ?: (card.top + card.height() * 0.45f).toInt().coerceAtLeast(0)
-        val bottom = calibrated?.bottom ?: (buttonTop - card.height() * 0.04f).toInt().coerceIn(top + 1, bitmap.height)
+        val baseTop = calibrated?.top ?: (card.top + card.height() * 0.45f).toInt().coerceAtLeast(0)
+        val baseBottom = calibrated?.bottom ?: (buttonTop - card.height() * 0.04f).toInt().coerceIn(baseTop + 1, bitmap.height)
+        val expandedTop = (baseTop - card.height() * 0.08f).toInt()
+        val expandedBottom = (baseBottom + card.height() * 0.10f).toInt()
+        val top = expandedTop.coerceIn(card.top, buttonTop - 1)
+        val bottom = expandedBottom.coerceIn(top + 1, buttonTop)
         var bestX = left
         var bestCount = 0
         var x = left
@@ -510,14 +516,30 @@ object OcrHelper {
             y += 2
         }
         if (anchorBottom <= anchorTop) return null
-        val iconCenters = findDeliveryIconCenters(bitmap, bestX, card, top, bottom)
+        val expectedGap = calibratedIconGap(context, bitmap, card)
+        val iconCenters = findDeliveryIconCenters(bitmap, bestX, card, top, bottom, expectedGap)
         return DeliveryAnchor(
             lineX = bestX,
             top = anchorTop,
             bottom = anchorBottom,
             pickupY = iconCenters.first ?: anchorTop,
-            dropoffY = iconCenters.second ?: anchorBottom
+            dropoffY = iconCenters.second ?: anchorBottom,
+            searchRect = Rect(left, top, right, bottom)
         )
+    }
+
+    private fun calibratedIconGap(context: Context, bitmap: Bitmap, card: Rect): Int {
+        val pickup = calibratedPixelRect(context, bitmap, "pickupAnchor")
+        val dropoff = calibratedPixelRect(context, bitmap, "dropoffAnchor")
+        val calibratedGap = if (pickup != null && dropoff != null) {
+            dropoff.centerY() - pickup.centerY()
+        } else {
+            0
+        }
+        return calibratedGap
+            .takeIf { it > 0 }
+            ?.coerceIn((card.height() * 0.06f).toInt().coerceAtLeast(42), (card.height() * 0.22f).toInt().coerceAtLeast(96))
+            ?: (card.height() * 0.12f).toInt().coerceAtLeast(72)
     }
 
     private fun calibratedPixelRect(context: Context, bitmap: Bitmap, name: String): Rect? {
@@ -614,7 +636,8 @@ object OcrHelper {
         lineX: Int,
         card: Rect,
         top: Int,
-        bottom: Int
+        bottom: Int,
+        expectedGap: Int
     ): Pair<Int?, Int?> {
         val halfWidth = (card.width() * 0.055f).toInt().coerceAtLeast(12)
         val left = (lineX - halfWidth).coerceAtLeast(0)
@@ -647,9 +670,19 @@ object OcrHelper {
         if (groupStart >= 0) groups.add(groupStart..bottom)
 
         val meaningful = groups.filter { it.last - it.first >= 8 }
-        val pickup = meaningful.firstOrNull()?.let { (it.first + it.last) / 2 }
-        val dropoff = meaningful.lastOrNull()?.let { (it.first + it.last) / 2 }
-        return pickup to dropoff
+        if (meaningful.size >= 2) {
+            val pickup = meaningful.first().let { (it.first + it.last) / 2 }
+            val dropoff = meaningful.last().let { (it.first + it.last) / 2 }
+            return pickup to dropoff
+        }
+        val single = meaningful.firstOrNull()?.let { (it.first + it.last) / 2 }
+            ?: return null to null
+        val middle = (top + bottom) / 2
+        return if (single <= middle) {
+            single to (single + expectedGap).coerceAtMost(bottom)
+        } else {
+            (single - expectedGap).coerceAtLeast(top) to single
+        }
     }
 
     private fun isActionButtonPixel(color: Int): Boolean {
