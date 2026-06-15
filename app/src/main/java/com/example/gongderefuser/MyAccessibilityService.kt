@@ -177,9 +177,9 @@ class MyAccessibilityService : AccessibilityService() {
             runCatching {
                 Log.d("OCR_RESULT", regionText.fullText)
                 if (!regionText.hasAnchoredCard) {
-                    DiagnosticLogStore.append(this, "CAPTURE", "fallback_no_anchor source=accessibility")
+                    DiagnosticLogStore.append(this, "CAPTURE", "skip_no_anchor source=accessibility")
                 }
-                val order = OrderParser.parse(
+                val order = if (regionText.hasAnchoredCard) OrderParser.parse(
                     OrderParser.RegionInput(
                         fullText = regionText.fullText,
                         cardText = regionText.cardText,
@@ -193,7 +193,7 @@ class MyAccessibilityService : AccessibilityService() {
                         addressWideText = regionText.addressWideText,
                         addressLowerText = regionText.addressLowerText
                     )
-                ) ?: OrderParser.parse(regionText.fullText)
+                ) else null
                 val foundOrder = handleAccessibilityOrder(order, bitmap)
                 DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
                 if (!foundOrder) {

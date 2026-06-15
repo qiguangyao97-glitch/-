@@ -256,9 +256,9 @@ class ScreenCaptureService : Service() {
 
     private fun handleOcrText(regionText: OcrHelper.OrderRegionText, bitmap: Bitmap? = null): Boolean {
         if (!regionText.hasAnchoredCard) {
-            DiagnosticLogStore.append(this, "CAPTURE", "fallback_no_anchor source=screen_capture")
+            DiagnosticLogStore.append(this, "CAPTURE", "skip_no_anchor source=screen_capture")
         }
-        val order = OrderParser.parse(
+        val order = if (regionText.hasAnchoredCard) OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = regionText.fullText,
                 cardText = regionText.cardText,
@@ -272,13 +272,8 @@ class ScreenCaptureService : Service() {
                 addressWideText = regionText.addressWideText,
                 addressLowerText = regionText.addressLowerText
             )
-        ) ?: OrderParser.parse(regionText.fullText)
+        ) else null
         return handleOrder(order, bitmap)
-    }
-
-    private fun handleOcrText(text: String): Boolean {
-        val order = OrderParser.parse(text)
-        return handleOrder(order)
     }
 
     private fun handleOrder(order: com.example.gongderefuser.model.OrderData?, bitmap: Bitmap? = null): Boolean {

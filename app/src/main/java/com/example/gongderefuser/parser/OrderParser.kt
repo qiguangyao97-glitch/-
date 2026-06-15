@@ -77,7 +77,6 @@ object OrderParser {
 
     fun parse(input: RegionInput): OrderData? {
         return try {
-            val fullText = normalize(input.fullText)
             val cardText = normalize(input.cardText)
             val typeText = normalize(input.typeText)
             val priceText = normalize(input.priceText)
@@ -94,14 +93,13 @@ object OrderParser {
                 priceText,
                 tripText,
                 typeText,
-                cardText,
-                fullText
+                cardText
             ).joinToString("\n")
 
-            val price = parsePriceFromSources(priceText, cardText, fullText)
-            val minutes = parseMinutesFromSources(tripText, cardText, fullText)
-            val distance = parseDistanceFromSources(tripText, cardText, fullText)
-            val deliveryCount = parseDeliveryCount(listOf(typeText, cardText, fullText).joinToString("\n"))
+            val price = parsePriceFromSources(priceText, cardText)
+            val minutes = parseMinutesFromSources(tripText, cardText)
+            val distance = parseDistanceFromSources(tripText, cardText)
+            val deliveryCount = parseDeliveryCount(listOf(typeText, cardText).joinToString("\n"))
             val isExclusive = deliveryCount <= 1
             val isTargetOffer = isLikelyTargetOffer(combinedText)
             val isAddOnOrder = isAddOnOrder(combinedText)

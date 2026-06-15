@@ -74,12 +74,32 @@ object OcrHelper {
                 fullText.contains("配对") ||
                 button?.isPair == true ||
                 looksLikePairActionButton(bitmap)
-        val profile = if (isPairOffer) RegionProfile.Pair else RegionProfile.Accept
-        val anchoredRegions = buildAnchoredRegions(context, bitmap, button, isPairOffer)
+        val anchoredRegions = buildAnchoredRegions(context, bitmap, button)
         val hasAnchoredCard = anchoredRegions != null
-        val regions = anchoredRegions ?: buildFallbackRegions(context, bitmap, profile)
+        val regions = anchoredRegions.orEmpty()
         val debugRegions = calibrationDebugRegions(context, bitmap) +
                 regions.map { DebugRegion(it.name, Rect(it.rect)) }
+        if (regions.isEmpty()) {
+            callback(
+                OrderRegionText(
+                    fullText = fullText,
+                    isPairOffer = isPairOffer,
+                    hasAnchoredCard = false,
+                    debugRegions = debugRegions,
+                    cardText = "",
+                    typeText = "",
+                    priceText = "",
+                    tripText = "",
+                    detailText = "",
+                    merchantText = "",
+                    merchantWideText = "",
+                    addressText = "",
+                    addressWideText = "",
+                    addressLowerText = ""
+                )
+            )
+            return
+        }
         val results = mutableMapOf<String, String>()
         var remaining = regions.size
         val lock = Any()
@@ -158,71 +178,44 @@ object OcrHelper {
         val extraLines: Int get() = (merchantLines - 1) + (addressLines - 1)
     }
 
-    private fun buildFallbackRegions(context: Context, bitmap: Bitmap, profile: RegionProfile): List<RegionCrop> {
-        val calibrated = OcrCalibrationStore.load(context)
-        fun calibratedRegion(name: String, prepare: Boolean = true): RegionCrop {
-            val rect = calibrated[name] ?: OcrCalibrationStore.defaultRegions().getValue(name)
-            return region(bitmap, name, rect.left, rect.top, rect.right, rect.bottom, prepare)
-        }
-        return listOf(
-            calibratedRegion("type"),
-            calibratedRegion("price"),
-            calibratedRegion("trip"),
-            calibratedRegion("merchant"),
-            calibratedRegion("address")
-        )
-    }
-
     private fun buildAnchoredRegions(
         context: Context,
         bitmap: Bitmap,
-        button: ActionButton?,
-        isPairOffer: Boolean
+        button: ActionButton?
     ): List<RegionCrop>? {
         val actionButton = button ?: return null
         val card = findCardRect(bitmap, actionButton)
         val cardHeight = card.height().coerceAtLeast(1)
         val cardWidth = card.width().coerceAtLeast(1)
         val buttonTop = actionButton.rect.top.coerceIn(card.top, card.bottom)
-        val anchor = findDeliveryAnchor(context, bitmap, card, buttonTop)
+        val anchor = findDeliveryAnchor(context, bitmap, card, buttonTop) ?: return null
 
         fun x(relative: Float): Int = (card.left + cardWidth * relative).toInt()
         fun y(relative: Float): Int = (card.top + cardHeight * relative).toInt()
 
         val detailRight = (card.right - cardWidth * 0.05f).toInt()
 
-        val merchantTop = anchor?.let { (it.pickupY - cardHeight * 0.065f).toInt() }
-            ?: y(if (isPairOffer) 0.48f else 0.50f)
-        val merchantBottom = anchor?.let { (it.pickupY + cardHeight * 0.075f).toInt() }
-            ?: y(if (isPairOffer) 0.62f else 0.64f)
-        val addressTop = anchor?.let { (it.dropoffY - cardHeight * 0.115f).toInt() }
-            ?: y(if (isPairOffer) 0.58f else 0.60f)
+        val merchantTop = (anchor.pickupY - cardHeight * 0.065f).toInt()
+        val merchantBottom = (anchor.pickupY + cardHeight * 0.075f).toInt()
+        val addressTop = (anchor.dropoffY - cardHeight * 0.115f).toInt()
         val addressBottom = (buttonTop - cardHeight * 0.03f).toInt()
             .coerceAtLeast(addressTop + 1)
         val merchantFallback = rect(bitmap, x(0.145f), merchantTop, detailRight, merchantBottom)
         val addressFallback = rect(bitmap, x(0.145f), addressTop, detailRight, addressBottom)
         val template = detectOfferLayoutTemplate(context, bitmap, card, actionButton, anchor)
         val topFieldShift = (template.extraLines * template.lineHeight).coerceAtLeast(0)
-        val merchantRect = anchor?.let {
-            anchoredTextRect(context, bitmap, "merchant", "pickupAnchor", it.lineX, it.pickupY, template.merchantLines, template.lineHeight, merchantFallback)
-        } ?: merchantFallback
-        val addressRect = anchor?.let {
-            anchoredTextRect(context, bitmap, "address", "dropoffAnchor", it.lineX, it.dropoffY, template.addressLines, template.lineHeight, addressFallback)
-        } ?: addressFallback
+        val merchantRect = anchoredTextRect(context, bitmap, "merchant", "pickupAnchor", anchor.lineX, anchor.pickupY, template.merchantLines, template.lineHeight, merchantFallback)
+        val addressRect = anchoredTextRect(context, bitmap, "address", "dropoffAnchor", anchor.lineX, anchor.dropoffY, template.addressLines, template.lineHeight, addressFallback)
 
         return listOf(
             region(bitmap, "card", card, prepare = false),
-            anchor?.let { RegionCrop("deliveryAnchorSearch", Rect(it.searchRect), blankBitmap()) } ?: blankRegion("deliveryAnchorSearch"),
+            RegionCrop("deliveryAnchorSearch", Rect(anchor.searchRect), blankBitmap()),
             region(bitmap, "type", x(0.03f), y(0.02f) - topFieldShift, x(0.55f), y(0.14f) - topFieldShift, prepare = true),
             region(bitmap, "price", x(0.03f), y(0.13f) - topFieldShift, x(0.50f), y(0.33f) - topFieldShift, prepare = true),
             region(bitmap, "trip", x(0.03f), y(0.32f) - topFieldShift, x(0.92f), y(0.48f) - topFieldShift, prepare = true),
             region(bitmap, "merchant", merchantRect, prepare = true),
             region(bitmap, "address", addressRect, prepare = true)
         )
-    }
-
-    private fun blankRegion(name: String): RegionCrop {
-        return RegionCrop(name, Rect(0, 0, 1, 1), blankBitmap())
     }
 
     private fun region(
@@ -263,54 +256,6 @@ object OcrHelper {
         return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
             eraseColor(Color.WHITE)
         }
-    }
-
-    private sealed class RegionProfile(
-        val cardTop: Float,
-        val typeTop: Float,
-        val typeBottom: Float,
-        val priceTop: Float,
-        val priceBottom: Float,
-        val tripTop: Float,
-        val tripBottom: Float,
-        val merchantTop: Float,
-        val merchantBottom: Float,
-        val addressTop: Float,
-        val addressBottom: Float,
-        val addressSecondTop: Float,
-        val addressSecondBottom: Float
-    ) {
-        object Accept : RegionProfile(
-            cardTop = 0.56f,
-            typeTop = 0.58f,
-            typeBottom = 0.64f,
-            priceTop = 0.63f,
-            priceBottom = 0.71f,
-            tripTop = 0.73f,
-            tripBottom = 0.79f,
-            merchantTop = 0.80f,
-            merchantBottom = 0.84f,
-            addressTop = 0.84f,
-            addressBottom = 0.955f,
-            addressSecondTop = 0.855f,
-            addressSecondBottom = 0.965f
-        )
-
-        object Pair : RegionProfile(
-            cardTop = 0.54f,
-            typeTop = 0.56f,
-            typeBottom = 0.62f,
-            priceTop = 0.61f,
-            priceBottom = 0.69f,
-            tripTop = 0.70f,
-            tripBottom = 0.76f,
-            merchantTop = 0.77f,
-            merchantBottom = 0.81f,
-            addressTop = 0.81f,
-            addressBottom = 0.94f,
-            addressSecondTop = 0.835f,
-            addressSecondBottom = 0.95f
-        )
     }
 
     private fun crop(
@@ -376,8 +321,10 @@ object OcrHelper {
         val calibrated = calibratedPixelRect(context, bitmap, "actionButton")
         val searchLeft = calibrated?.left ?: (bitmap.width * 0.08f).toInt()
         val searchRight = calibrated?.right ?: (bitmap.width * 0.96f).toInt()
-        val searchTop = calibrated?.top ?: (bitmap.height * 0.58f).toInt()
-        val searchBottom = calibrated?.bottom ?: (bitmap.height * 0.97f).toInt()
+        val baseTop = calibrated?.top ?: (bitmap.height * 0.58f).toInt()
+        val baseBottom = calibrated?.bottom ?: (bitmap.height * 0.97f).toInt()
+        val searchTop = (baseTop - bitmap.height * 0.08f).toInt().coerceAtLeast(0)
+        val searchBottom = (baseBottom + bitmap.height * 0.03f).toInt().coerceAtMost(bitmap.height)
         val minRunWidth = (bitmap.width * 0.48f).toInt()
         val groups = mutableListOf<Pair<IntRange, Boolean>>()
         var groupStart = -1
@@ -470,14 +417,34 @@ object OcrHelper {
 
     private fun findDeliveryAnchor(context: Context, bitmap: Bitmap, card: Rect, buttonTop: Int): DeliveryAnchor? {
         val calibrated = calibratedPixelRect(context, bitmap, "deliveryAnchor")
-        val left = calibrated?.left ?: (card.left + card.width() * 0.04f).toInt().coerceAtLeast(0)
-        val right = calibrated?.right ?: (card.left + card.width() * 0.20f).toInt().coerceAtMost(bitmap.width)
-        val baseTop = calibrated?.top ?: (card.top + card.height() * 0.45f).toInt().coerceAtLeast(0)
-        val baseBottom = calibrated?.bottom ?: (buttonTop - card.height() * 0.04f).toInt().coerceIn(baseTop + 1, bitmap.height)
-        val expandedTop = (baseTop - card.height() * 0.08f).toInt()
-        val expandedBottom = (baseBottom + card.height() * 0.10f).toInt()
-        val top = expandedTop.coerceIn(card.top, buttonTop - 1)
-        val bottom = expandedBottom.coerceIn(top + 1, buttonTop)
+        val pickup = calibratedPixelRect(context, bitmap, "pickupAnchor")
+        val dropoff = calibratedPixelRect(context, bitmap, "dropoffAnchor")
+        val lineHeight = estimateLineHeight(context, bitmap, card)
+        val xRects = listOfNotNull(calibrated, pickup, dropoff)
+        val left = (xRects.minOfOrNull { it.left } ?: (card.left + card.width() * 0.04f).toInt())
+            .minus((card.width() * 0.012f).toInt())
+            .coerceAtLeast(0)
+        val right = (xRects.maxOfOrNull { it.right } ?: (card.left + card.width() * 0.20f).toInt())
+            .plus((card.width() * 0.012f).toInt())
+            .coerceAtMost(bitmap.width)
+        val calibratedTop = listOfNotNull(pickup?.top, dropoff?.top).minOrNull()
+            ?: calibrated?.top
+            ?: (card.top + card.height() * 0.50f).toInt()
+        val calibratedBottom = listOfNotNull(pickup?.bottom, dropoff?.bottom).maxOrNull()
+            ?: calibrated?.bottom
+            ?: (buttonTop - card.height() * 0.04f).toInt()
+        val tripGuard = maxOf(
+            card.top + (card.height() * 0.48f).toInt(),
+            (calibratedPixelRect(context, bitmap, "trip")?.bottom ?: card.top) + lineHeight / 3
+        )
+        val top = maxOf(
+            calibratedTop - lineHeight,
+            tripGuard
+        ).coerceIn(card.top, buttonTop - 1)
+        val bottom = minOf(
+            calibratedBottom + (lineHeight * 1.8f).toInt(),
+            buttonTop - (card.height() * 0.025f).toInt()
+        ).coerceIn(top + 1, buttonTop)
         var bestX = left
         var bestCount = 0
         var x = left

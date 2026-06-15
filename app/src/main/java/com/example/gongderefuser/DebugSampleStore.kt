@@ -163,7 +163,7 @@ object DebugSampleStore {
     }
 
     private fun parseOrder(regionText: OcrHelper.OrderRegionText) =
-        OrderParser.parse(
+        if (regionText.hasAnchoredCard) OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = regionText.fullText,
                 cardText = regionText.cardText,
@@ -177,5 +177,5 @@ object DebugSampleStore {
                 addressWideText = regionText.addressWideText,
                 addressLowerText = regionText.addressLowerText
             )
-        ) ?: OrderParser.parse(regionText.fullText)
+        ) else null
 }

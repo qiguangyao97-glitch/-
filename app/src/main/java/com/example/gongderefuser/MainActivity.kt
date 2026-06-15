@@ -1174,6 +1174,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.27：移除旧 OCR 兜底路径：实时订单、截图分析和调试样本都只使用按钮定位、订单卡片、取送圆点/方块锚点这一套模板；模板定位失败时不再用整屏文字或固定比例框猜订单，避免背景文字、聊天截图和上层弹窗造成假识别。取送实际搜索改为由取货圆点/送达方块校准框推导，并用时间距离区域作为上方保护，减少把钟表图标误当取货圆点的问题。",
             "1.0.26：优化取送锚点识别：实际搜索范围会在校准框基础上轻微上扩、明显下扩，以适配一行/两行版型；只识别到单个图标时不再把圆点和方块设成同一位置，而是按校准的圆点-方块间距补位。调试区域图新增“取送实际搜索”框。",
             "1.0.25：新增订单版型判断：根据取货圆点、送达方块和按钮之间的距离估算商家/地址是一行或两行；商家/地址 OCR 框按行数动态收紧或扩高，商家+地址总行数增加时，类型、金额、时间距离区域按行高整体上移，减少双行版型导致的错位。",
             "1.0.24：商家/地址 OCR 改为单一动态框：先用取送定位找竖线，再用取货圆点和送达方块作为锚点，商家文字和地址文字按相对偏移跟随移动；旧的商家宽框、地址下半等多候选框退出主流程，减少重复地址和过度纠偏。时间距离保持独立框，避免钟表图标干扰取送定位。",
@@ -1485,7 +1486,7 @@ class MainActivity : AppCompatActivity() {
 
         OcrHelper.runOrderRegions(this, bitmap) { regionText ->
             runOnUiThread {
-                val order = OrderParser.parse(
+                val order = if (regionText.hasAnchoredCard) OrderParser.parse(
                     OrderParser.RegionInput(
                         fullText = regionText.fullText,
                         cardText = regionText.cardText,
@@ -1499,11 +1500,11 @@ class MainActivity : AppCompatActivity() {
                         addressWideText = regionText.addressWideText,
                         addressLowerText = regionText.addressLowerText
                     )
-                ) ?: OrderParser.parse(regionText.fullText)
+                ) else null
                 ManualOcrDebugStore.save(this, bitmap, regionText, order, "manual-analysis")
                 if (order == null) {
                     setAnalyzing(false)
-                    showFailureResult(OrderParser.buildFailureMessage(regionText.fullText))
+                    showFailureResult(OrderParser.buildFailureMessage(regionText.cardText.ifBlank { regionText.fullText }))
                 } else {
                     setAnalyzing(false)
                     val analysis = OrderAnalyzer.analyzeResult(this, order)
@@ -1528,7 +1529,7 @@ class MainActivity : AppCompatActivity() {
 
         OcrHelper.runOrderRegions(this, bitmap) { regionText ->
             runOnUiThread {
-                val order = OrderParser.parse(
+                val order = if (regionText.hasAnchoredCard) OrderParser.parse(
                     OrderParser.RegionInput(
                         fullText = regionText.fullText,
                         cardText = regionText.cardText,
@@ -1542,7 +1543,7 @@ class MainActivity : AppCompatActivity() {
                         addressWideText = regionText.addressWideText,
                         addressLowerText = regionText.addressLowerText
                     )
-                ) ?: OrderParser.parse(regionText.fullText)
+                ) else null
                 val savedPath = ManualOcrDebugStore.save(this, bitmap, regionText, order, "calibration")
                 calibrationBitmap = bitmap
                 calibrationSavedPath = savedPath
