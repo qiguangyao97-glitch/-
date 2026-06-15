@@ -988,7 +988,7 @@ class MainActivity : AppCompatActivity() {
         toolbar.addView(topRow)
 
         val hint = TextView(this).apply {
-            text = "先调“按钮定位”，再调“取送定位”；商家和地址框会根据取送定位动态跟随。拖动框移动，拖右下角缩放。"
+            text = "点击上方按钮只显示当前框。先调“按钮定位”，再调“取送定位”；商家和地址会根据取送定位动态跟随。拖动框移动，拖右下角缩放。"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.12f)
@@ -1188,6 +1188,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.22：OCR 校准页改为单框显示，点击上方区域按钮时只显示当前要调整的框，减少重叠干扰；说明中明确商家/地址会跟随取送定位锚点动态移动。",
             "1.0.21：OCR 校准页改为全屏画布，避免拖框时跟随设置页滚动；新增“按钮定位”和“取送定位”两个一级基准框，按钮框优先定位接受/配对，取送框用于定位圆点、方块和竖线，商家/地址识别会跟随锚点动态移动。",
             "1.0.20：OCR 校准框改为中文名称，并使用半透明填充和半透明标签；手动/实时保存的 OCR 区域框图同步中文化，方便直接对照订单卡片内容微调。",
             "1.0.19：OCR 校准页支持在截图上拖动和缩放 OCR 框并保存；保存后的框会作为无锚点 fallback 识别区域，影响手动截图和实时识别。",

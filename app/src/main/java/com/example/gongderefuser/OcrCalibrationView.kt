@@ -82,19 +82,16 @@ class OcrCalibrationView(context: Context) : View(context) {
         updateImageRect(source)
         canvas.drawBitmap(source, null, imageRect, imagePaint)
 
-        regions.forEach { (name, normalized) ->
-            val rect = toViewRect(normalized)
-            val color = regionColor(name)
-            fillPaint.color = withAlpha(color, if (name == selectedName) 48 else 28)
-            strokePaint.color = color
-            strokePaint.strokeWidth = if (name == selectedName) 7f else 4f
-            canvas.drawRect(rect, fillPaint)
-            canvas.drawRect(rect, strokePaint)
-            drawLabel(canvas, name, rect, color)
-            if (name == selectedName) {
-                canvas.drawCircle(rect.right, rect.bottom, 18f, strokePaint)
-            }
-        }
+        val normalized = regions[selectedName] ?: return
+        val rect = toViewRect(normalized)
+        val color = regionColor(selectedName)
+        fillPaint.color = withAlpha(color, 48)
+        strokePaint.color = color
+        strokePaint.strokeWidth = 7f
+        canvas.drawRect(rect, fillPaint)
+        canvas.drawRect(rect, strokePaint)
+        drawLabel(canvas, selectedName, rect, color)
+        canvas.drawCircle(rect.right, rect.bottom, 18f, strokePaint)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -143,9 +140,9 @@ class OcrCalibrationView(context: Context) : View(context) {
     }
 
     private fun hitRegion(x: Float, y: Float): String? {
-        return regions.entries
-            .lastOrNull { toViewRect(it.value).contains(x, y) }
-            ?.key
+        return selectedName.takeIf {
+            regions[it]?.let { rect -> toViewRect(rect).contains(x, y) } == true
+        }
     }
 
     private fun toViewRect(normalized: RectF): RectF {
