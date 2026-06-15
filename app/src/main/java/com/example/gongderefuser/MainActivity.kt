@@ -953,15 +953,52 @@ class MainActivity : AppCompatActivity() {
     private fun showOcrCalibration() {
         currentScreen = Screen.OcrCalibration
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
+        }
+        calibrationBitmap?.let { bitmap ->
+            val view = OcrCalibrationView(this).apply {
+                setImageAndRegions(bitmap, OcrCalibrationStore.load(this@MainActivity))
+            }
+            calibrationView = view
+            root.addView(view, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+            if (calibrationSavedPath.isNotBlank()) {
+                root.addView(TextView(this).apply {
+                    text = "最近生成：manual_ocr_debug"
+                    textSize = 12f
+                    setTextColor(Color.WHITE)
+                    setPadding(dp(10), dp(6), dp(10), dp(6))
+                    background = roundedFill(Color.argb(150, 0, 0, 0), 8f)
+                }, FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.START
+                ).apply {
+                    leftMargin = dp(10)
+                    bottomMargin = dp(10)
+                })
+            }
+        } ?: run {
+            calibrationView = null
+            root.addView(TextView(this).apply {
+                text = "先点上方“选择截图”载入订单截图"
+                textSize = 16f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+            }, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
         }
 
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundColor(COLOR_BACKGROUND)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = roundedFill(Color.argb(205, 248, 250, 252), 18f)
         }
         val topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -970,31 +1007,47 @@ class MainActivity : AppCompatActivity() {
         topRow.addView(createButton(primary = false).apply {
             text = "返回"
             setOnClickListener { navigateBackOneLevel() }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            rightMargin = dp(8)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            rightMargin = dp(4)
         })
-        topRow.addView(TextView(this).apply {
-            text = "OCR 全屏校准"
-            textSize = 18f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(COLOR_TEXT_PRIMARY)
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        topRow.addView(createButton(primary = true).apply {
-            text = "选择截图"
+        topRow.addView(createButton(primary = false).apply {
+            text = "选择"
             setOnClickListener { pickCalibrationScreenshot() }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            leftMargin = dp(8)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = dp(4)
+            rightMargin = dp(4)
+        })
+        topRow.addView(createButton(primary = true).apply {
+            text = "保存"
+            setOnClickListener {
+                val current = calibrationView?.currentRegions().orEmpty()
+                OcrCalibrationStore.save(this@MainActivity, current)
+                Toast.makeText(this@MainActivity, "OCR 框设置已保存", Toast.LENGTH_SHORT).show()
+                showOcrCalibration()
+            }
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = dp(4)
+            rightMargin = dp(4)
+        })
+        topRow.addView(createButton(primary = false).apply {
+            text = "默认"
+            setOnClickListener {
+                OcrCalibrationStore.reset(this@MainActivity)
+                Toast.makeText(this@MainActivity, "已恢复默认 OCR 框", Toast.LENGTH_SHORT).show()
+                showOcrCalibration()
+            }
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = dp(4)
         })
         toolbar.addView(topRow)
 
-        val hint = TextView(this).apply {
-            text = "点击上方按钮只显示当前框。先调“按钮定位”，再调“取送定位”；商家和地址会根据取送定位动态跟随。拖动框移动，拖右下角缩放。"
+        toolbar.addView(TextView(this).apply {
+            text = "图片全屏显示。点下方按钮只显示当前框；先调按钮定位，再调取送定位。"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
-            setLineSpacing(0f, 1.12f)
-            setPadding(0, dp(8), 0, dp(8))
-        }
-        toolbar.addView(hint)
+            setLineSpacing(0f, 1.08f)
+            setPadding(0, dp(6), 0, dp(6))
+        })
 
         val regionPicker = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -1013,82 +1066,15 @@ class MainActivity : AppCompatActivity() {
         regionPicker.addView(regionRow)
         toolbar.addView(regionPicker)
 
-        root.addView(toolbar)
-
-        val canvasArea = FrameLayout(this).apply {
-            setBackgroundColor(Color.BLACK)
-        }
-        calibrationBitmap?.let { bitmap ->
-            val view = OcrCalibrationView(this).apply {
-                setImageAndRegions(bitmap, OcrCalibrationStore.load(this@MainActivity))
-            }
-            calibrationView = view
-            canvasArea.addView(view, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            ))
-            if (calibrationSavedPath.isNotBlank()) {
-                canvasArea.addView(TextView(this).apply {
-                    text = "最近生成：manual_ocr_debug"
-                    textSize = 12f
-                    setTextColor(Color.WHITE)
-                    setPadding(dp(10), dp(6), dp(10), dp(6))
-                    background = roundedFill(Color.argb(150, 0, 0, 0), 8f)
-                }, FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.BOTTOM or Gravity.START
-                ).apply {
-                    leftMargin = dp(10)
-                    bottomMargin = dp(10)
-                })
-            }
-        } ?: run {
-            calibrationView = null
-            canvasArea.addView(TextView(this).apply {
-                text = "先点上方“选择截图”载入订单截图"
-                textSize = 16f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-            }, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            ))
-        }
-        root.addView(canvasArea, LinearLayout.LayoutParams(
+        root.addView(toolbar, FrameLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            0,
-            1f
-        ))
-
-        val bottomRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12), dp(10), dp(12), dp(12))
-            setBackgroundColor(COLOR_BACKGROUND)
-        }
-        bottomRow.addView(createButton(primary = true).apply {
-            text = "保存框设置"
-            setOnClickListener {
-                val current = calibrationView?.currentRegions().orEmpty()
-                OcrCalibrationStore.save(this@MainActivity, current)
-                Toast.makeText(this@MainActivity, "OCR 框设置已保存", Toast.LENGTH_SHORT).show()
-                showOcrCalibration()
-            }
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            rightMargin = dp(6)
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP
+        ).apply {
+            leftMargin = dp(8)
+            topMargin = dp(8)
+            rightMargin = dp(8)
         })
-        bottomRow.addView(createButton(primary = false).apply {
-            text = "恢复默认"
-            setOnClickListener {
-                OcrCalibrationStore.reset(this@MainActivity)
-                Toast.makeText(this@MainActivity, "已恢复默认 OCR 框", Toast.LENGTH_SHORT).show()
-                showOcrCalibration()
-            }
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            leftMargin = dp(6)
-        })
-        root.addView(bottomRow)
 
         setContentView(root)
     }
@@ -1188,6 +1174,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.23：OCR 校准页改为图片全屏铺底，顶部按钮以悬浮工具条显示，不再占用图片布局高度；保存、选择、恢复默认都移到顶部，减少因校准界面压缩图片造成的框位比例偏差。",
             "1.0.22：OCR 校准页改为单框显示，点击上方区域按钮时只显示当前要调整的框，减少重叠干扰；说明中明确商家/地址会跟随取送定位锚点动态移动。",
             "1.0.21：OCR 校准页改为全屏画布，避免拖框时跟随设置页滚动；新增“按钮定位”和“取送定位”两个一级基准框，按钮框优先定位接受/配对，取送框用于定位圆点、方块和竖线，商家/地址识别会跟随锚点动态移动。",
             "1.0.20：OCR 校准框改为中文名称，并使用半透明填充和半透明标签；手动/实时保存的 OCR 区域框图同步中文化，方便直接对照订单卡片内容微调。",
