@@ -149,6 +149,14 @@ object OcrHelper {
         val bitmap: Bitmap
     )
 
+    private data class OfferLayoutTemplate(
+        val merchantLines: Int,
+        val addressLines: Int,
+        val lineHeight: Int
+    ) {
+        val extraLines: Int get() = (merchantLines - 1) + (addressLines - 1)
+    }
+
     private fun buildFallbackRegions(context: Context, bitmap: Bitmap, profile: RegionProfile): List<RegionCrop> {
         val calibrated = OcrCalibrationStore.load(context)
         fun calibratedRegion(name: String, prepare: Boolean = true): RegionCrop {
@@ -192,18 +200,20 @@ object OcrHelper {
             .coerceAtLeast(addressTop + 1)
         val merchantFallback = rect(bitmap, x(0.145f), merchantTop, detailRight, merchantBottom)
         val addressFallback = rect(bitmap, x(0.145f), addressTop, detailRight, addressBottom)
+        val template = detectOfferLayoutTemplate(context, bitmap, card, actionButton, anchor)
+        val topFieldShift = (template.extraLines * template.lineHeight).coerceAtLeast(0)
         val merchantRect = anchor?.let {
-            anchoredTextRect(context, bitmap, "merchant", "pickupAnchor", it.lineX, it.pickupY, merchantFallback)
+            anchoredTextRect(context, bitmap, "merchant", "pickupAnchor", it.lineX, it.pickupY, template.merchantLines, template.lineHeight, merchantFallback)
         } ?: merchantFallback
         val addressRect = anchor?.let {
-            anchoredTextRect(context, bitmap, "address", "dropoffAnchor", it.lineX, it.dropoffY, addressFallback)
+            anchoredTextRect(context, bitmap, "address", "dropoffAnchor", it.lineX, it.dropoffY, template.addressLines, template.lineHeight, addressFallback)
         } ?: addressFallback
 
         return listOf(
             region(bitmap, "card", card, prepare = false),
-            region(bitmap, "type", x(0.03f), y(0.02f), x(0.55f), y(0.14f), prepare = true),
-            region(bitmap, "price", x(0.03f), y(0.13f), x(0.50f), y(0.33f), prepare = true),
-            region(bitmap, "trip", x(0.03f), y(0.32f), x(0.92f), y(0.48f), prepare = true),
+            region(bitmap, "type", x(0.03f), y(0.02f) - topFieldShift, x(0.55f), y(0.14f) - topFieldShift, prepare = true),
+            region(bitmap, "price", x(0.03f), y(0.13f) - topFieldShift, x(0.50f), y(0.33f) - topFieldShift, prepare = true),
+            region(bitmap, "trip", x(0.03f), y(0.32f) - topFieldShift, x(0.92f), y(0.48f) - topFieldShift, prepare = true),
             region(bitmap, "merchant", merchantRect, prepare = true),
             region(bitmap, "address", addressRect, prepare = true)
         )
@@ -531,6 +541,8 @@ object OcrHelper {
         iconName: String,
         detectedIconX: Int,
         detectedIconY: Int,
+        lineCount: Int,
+        lineHeight: Int,
         fallback: Rect
     ): Rect {
         val calibrated = OcrCalibrationStore.load(context)
@@ -538,13 +550,53 @@ object OcrHelper {
         val icon = calibrated[iconName]?.let { normalizedToPixelRect(bitmap, it) } ?: return fallback
         val iconCenterX = icon.centerX()
         val iconCenterY = icon.centerY()
+        val targetHeight = (lineHeight * (lineCount.coerceIn(1, 2) + 0.28f)).toInt()
+            .coerceAtLeast((text.height() * 0.55f).toInt())
+        val relativeCenterY = text.centerY() - iconCenterY
+        val centerY = detectedIconY + relativeCenterY
         return rect(
             bitmap = bitmap,
             left = detectedIconX + (text.left - iconCenterX),
-            top = detectedIconY + (text.top - iconCenterY),
+            top = centerY - targetHeight / 2,
             right = detectedIconX + (text.right - iconCenterX),
-            bottom = detectedIconY + (text.bottom - iconCenterY)
+            bottom = centerY + targetHeight / 2
         )
+    }
+
+    private fun detectOfferLayoutTemplate(
+        context: Context,
+        bitmap: Bitmap,
+        card: Rect,
+        button: ActionButton,
+        anchor: DeliveryAnchor?
+    ): OfferLayoutTemplate {
+        val lineHeight = estimateLineHeight(context, bitmap, card)
+        if (anchor == null) return OfferLayoutTemplate(1, 2, lineHeight)
+
+        val iconDistance = (anchor.dropoffY - anchor.pickupY).coerceAtLeast(1)
+        val merchantLines = if (iconDistance > lineHeight * 2.35f) 2 else 1
+
+        val dropoffToButton = (button.rect.top - anchor.dropoffY).coerceAtLeast(1)
+        val addressLines = if (dropoffToButton > lineHeight * 3.05f) 2 else 1
+
+        return OfferLayoutTemplate(
+            merchantLines = merchantLines.coerceIn(1, 2),
+            addressLines = addressLines.coerceIn(1, 2),
+            lineHeight = lineHeight
+        )
+    }
+
+    private fun estimateLineHeight(context: Context, bitmap: Bitmap, card: Rect): Int {
+        val calibrated = OcrCalibrationStore.load(context)
+        val merchant = calibrated["merchant"]?.let { normalizedToPixelRect(bitmap, it) }
+        val address = calibrated["address"]?.let { normalizedToPixelRect(bitmap, it) }
+        val fromMerchant = merchant?.height()?.takeIf { it > 0 }?.div(2)
+        val fromAddress = address?.height()?.takeIf { it > 0 }?.div(2)
+        val fromCard = (card.height() * 0.07f).toInt()
+        return listOfNotNull(fromMerchant, fromAddress, fromCard)
+            .maxOrNull()
+            ?.coerceIn((bitmap.height * 0.018f).toInt().coerceAtLeast(28), (bitmap.height * 0.055f).toInt().coerceAtLeast(54))
+            ?: (bitmap.height * 0.032f).toInt().coerceAtLeast(42)
     }
 
     private fun normalizedToPixelRect(bitmap: Bitmap, rect: RectF): Rect {
