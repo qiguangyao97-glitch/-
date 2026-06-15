@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity() {
         Rules,
         RuleDetail,
         AppSettings,
+        OcrCalibration,
         History
     }
 
@@ -89,6 +90,16 @@ class MainActivity : AppCompatActivity() {
             }
 
             analyzeImage(uri)
+        }
+
+    private val pickCalibrationImage =
+        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri == null) {
+                setAnalyzing(false)
+                return@registerForActivityResult
+            }
+
+            analyzeCalibrationImage(uri)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -216,6 +227,7 @@ class MainActivity : AppCompatActivity() {
             }
             Screen.Rules,
             Screen.AppSettings,
+            Screen.OcrCalibration,
             Screen.Manual,
             Screen.History -> {
                 showHome()
@@ -885,6 +897,20 @@ class MainActivity : AppCompatActivity() {
             setLineSpacing(0f, 1.12f)
             setPadding(0, dp(8), 0, dp(12))
         })
+        debugCard.addView(createActionCard(
+            title = "OCR 校准",
+            detail = "选择截图生成区域框图",
+            accentColor = COLOR_ACCENT
+        ).apply {
+            setOnClickListener { showOcrCalibration() }
+        })
+        debugCard.addView(TextView(this).apply {
+            text = "手动截图调试路径：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
+            textSize = 12f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.12f)
+            setPadding(0, dp(8), 0, dp(12))
+        })
         debugCard.addView(createSettingsToggleRow(
             title = "记录无障碍事件日志",
             enabled = AppSettings.isAccessibilityLogEnabled(this),
@@ -916,6 +942,37 @@ class MainActivity : AppCompatActivity() {
         versionCard.addView(createUpdateHistoryCard())
         layout.addView(versionCard)
 
+        setBaseContent(layout)
+    }
+
+    private fun showOcrCalibration() {
+        currentScreen = Screen.OcrCalibration
+
+        val layout = createBaseLayout()
+        addSubHeader(layout, "OCR 校准", "先用截图生成 OCR 区域框图，查看框是否切偏。")
+
+        val card = createCard().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        card.addView(createSectionTitle("生成区域框图"))
+        card.addView(TextView(this).apply {
+            text = "选择一张订单截图后，APP 会保存原图、OCR 文本和 -regions.jpg。当前版本用于查看裁切区域；拖动微调并保存参数会在下一步接入。\n路径：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
+            textSize = 13f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.14f)
+            setPadding(0, dp(8), 0, dp(12))
+        })
+        card.addView(createButton(primary = true).apply {
+            text = "选择截图生成 OCR 框图"
+            setOnClickListener {
+                setAnalyzing(true, "请选择校准截图", "生成 OCR 区域框图后会提示保存位置。")
+                pickCalibrationImage.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            }
+        })
+        layout.addView(card)
         setBaseContent(layout)
     }
 
@@ -980,6 +1037,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.18：设置页新增 OCR 校准入口，可选择截图生成原图、OCR 文本和 -regions 区域框图；手动截图分析也会自动保存 OCR 框图到 manual_ocr_debug。",
             "1.0.17：修复手动截图分析时 OCR 裁切函数递归导致闪退的问题；设置页补充说明调试样本中的 -regions 图片就是当前 OCR 裁切区域图。",
             "1.0.16：实时识别改为宽进严出，无锚点时允许备用区域解析但必须通过订单核心字段校验；调试样本新增带框 OCR 区域图；评分改为比例式，白名单只提示备注不加分；新增外送订单可独立显示。",
             "1.0.15：实时识别改为必须命中真实订单卡片锚点才解析；取消实时整屏文字回退，避免在相册、笔记旧截图或导航地图中误触发。",
@@ -1297,6 +1355,7 @@ class MainActivity : AppCompatActivity() {
                         addressLowerText = regionText.addressLowerText
                     )
                 ) ?: OrderParser.parse(regionText.fullText)
+                ManualOcrDebugStore.save(this, bitmap, regionText, order, "manual-analysis")
                 if (order == null) {
                     setAnalyzing(false)
                     showFailureResult(OrderParser.buildFailureMessage(regionText.fullText))
@@ -1306,6 +1365,47 @@ class MainActivity : AppCompatActivity() {
                     OrderHistory.add(this, analysis, "截图")
                     showFloatingAnalysisResult(analysis)
                 }
+            }
+        }
+    }
+
+    private fun analyzeCalibrationImage(uri: Uri) {
+        setAnalyzing(true, "正在生成 OCR 框图", "完成后会保存到手动调试目录。")
+
+        val bitmap = try {
+            loadBitmap(uri)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            setAnalyzing(false)
+            Toast.makeText(this, "图片读取失败", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        OcrHelper.runOrderRegions(this, bitmap) { regionText ->
+            runOnUiThread {
+                val order = OrderParser.parse(
+                    OrderParser.RegionInput(
+                        fullText = regionText.fullText,
+                        cardText = regionText.cardText,
+                        typeText = regionText.typeText,
+                        priceText = regionText.priceText,
+                        tripText = regionText.tripText,
+                        detailText = regionText.detailText,
+                        merchantText = regionText.merchantText,
+                        merchantWideText = regionText.merchantWideText,
+                        addressText = regionText.addressText,
+                        addressWideText = regionText.addressWideText,
+                        addressLowerText = regionText.addressLowerText
+                    )
+                ) ?: OrderParser.parse(regionText.fullText)
+                val savedPath = ManualOcrDebugStore.save(this, bitmap, regionText, order, "calibration")
+                setAnalyzing(false)
+                Toast.makeText(
+                    this,
+                    if (savedPath.isBlank()) "OCR 框图保存失败" else "OCR 框图已保存：manual_ocr_debug",
+                    Toast.LENGTH_LONG
+                ).show()
+                showOcrCalibration()
             }
         }
     }

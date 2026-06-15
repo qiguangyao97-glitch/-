@@ -49,6 +49,10 @@ object AppSettings {
         return DebugFileDirs.resolve(context, "order_captures").absolutePath
     }
 
+    fun manualOcrDebugPath(context: Context): String {
+        return DebugFileDirs.resolve(context, "manual_ocr_debug").absolutePath
+    }
+
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 }
