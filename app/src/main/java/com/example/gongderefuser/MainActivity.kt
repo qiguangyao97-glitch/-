@@ -81,6 +81,9 @@ class MainActivity : AppCompatActivity() {
 
     private var currentScreen = Screen.Home
     private var hasPromptedAccessibility = false
+    private var calibrationBitmap: Bitmap? = null
+    private var calibrationSavedPath: String = ""
+    private var calibrationView: OcrCalibrationView? = null
 
     private val pickOrderImage =
         registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -949,15 +952,15 @@ class MainActivity : AppCompatActivity() {
         currentScreen = Screen.OcrCalibration
 
         val layout = createBaseLayout()
-        addSubHeader(layout, "OCR 校准", "先用截图生成 OCR 区域框图，查看框是否切偏。")
+        addSubHeader(layout, "OCR 校准", "拖动框后保存；无锚点时会用这套框进行 OCR。")
 
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
-        card.addView(createSectionTitle("生成区域框图"))
+        card.addView(createSectionTitle("设置 OCR 框"))
         card.addView(TextView(this).apply {
-            text = "选择一张订单截图后，APP 会保存原图、OCR 文本和 -regions.jpg。当前版本用于查看裁切区域；拖动微调并保存参数会在下一步接入。\n路径：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
+            text = "选择截图后可拖动框，点右下角附近可调整大小。保存后，手动截图和实时识别在没有命中按钮锚点时，会使用这套 fallback 框。\n路径：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
             textSize = 13f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.14f)
@@ -972,6 +975,61 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         })
+        calibrationBitmap?.let { bitmap ->
+            val view = OcrCalibrationView(this).apply {
+                setImageAndRegions(bitmap, OcrCalibrationStore.load(this@MainActivity))
+            }
+            calibrationView = view
+            card.addView(view, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(14)
+                bottomMargin = dp(12)
+            })
+            if (calibrationSavedPath.isNotBlank()) {
+                card.addView(TextView(this).apply {
+                    text = "最近生成：$calibrationSavedPath"
+                    textSize = 12f
+                    setTextColor(COLOR_TEXT_SECONDARY)
+                    setLineSpacing(0f, 1.12f)
+                    setPadding(0, 0, 0, dp(10))
+                })
+            }
+            val buttonRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            buttonRow.addView(createButton(primary = true).apply {
+                text = "保存框设置"
+                setOnClickListener {
+                    val current = calibrationView?.currentRegions().orEmpty()
+                    OcrCalibrationStore.save(this@MainActivity, current)
+                    Toast.makeText(this@MainActivity, "OCR 框设置已保存", Toast.LENGTH_SHORT).show()
+                    showOcrCalibration()
+                }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dp(6)
+            })
+            buttonRow.addView(createButton(primary = false).apply {
+                text = "恢复默认"
+                setOnClickListener {
+                    OcrCalibrationStore.reset(this@MainActivity)
+                    Toast.makeText(this@MainActivity, "已恢复默认 OCR 框", Toast.LENGTH_SHORT).show()
+                    showOcrCalibration()
+                }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(6)
+            })
+            card.addView(buttonRow)
+        } ?: run {
+            calibrationView = null
+            card.addView(TextView(this).apply {
+                text = "还没有载入截图。先点上面的按钮选择一张订单截图。"
+                textSize = 13f
+                setTextColor(COLOR_TEXT_SECONDARY)
+                setPadding(0, dp(12), 0, 0)
+            })
+        }
         layout.addView(card)
         setBaseContent(layout)
     }
@@ -1037,6 +1095,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.19：OCR 校准页支持在截图上拖动和缩放 OCR 框并保存；保存后的框会作为无锚点 fallback 识别区域，影响手动截图和实时识别。",
             "1.0.18：设置页新增 OCR 校准入口，可选择截图生成原图、OCR 文本和 -regions 区域框图；手动截图分析也会自动保存 OCR 框图到 manual_ocr_debug。",
             "1.0.17：修复手动截图分析时 OCR 裁切函数递归导致闪退的问题；设置页补充说明调试样本中的 -regions 图片就是当前 OCR 裁切区域图。",
             "1.0.16：实时识别改为宽进严出，无锚点时允许备用区域解析但必须通过订单核心字段校验；调试样本新增带框 OCR 区域图；评分改为比例式，白名单只提示备注不加分；新增外送订单可独立显示。",
@@ -1399,6 +1458,8 @@ class MainActivity : AppCompatActivity() {
                     )
                 ) ?: OrderParser.parse(regionText.fullText)
                 val savedPath = ManualOcrDebugStore.save(this, bitmap, regionText, order, "calibration")
+                calibrationBitmap = bitmap
+                calibrationSavedPath = savedPath
                 setAnalyzing(false)
                 Toast.makeText(
                     this,

@@ -76,7 +76,7 @@ object OcrHelper {
         val profile = if (isPairOffer) RegionProfile.Pair else RegionProfile.Accept
         val anchoredRegions = buildAnchoredRegions(bitmap, button, isPairOffer)
         val hasAnchoredCard = anchoredRegions != null
-        val regions = anchoredRegions ?: buildFallbackRegions(bitmap, profile)
+        val regions = anchoredRegions ?: buildFallbackRegions(context, bitmap, profile)
         val results = mutableMapOf<String, String>()
         var remaining = regions.size
         val lock = Any()
@@ -146,18 +146,23 @@ object OcrHelper {
         val bitmap: Bitmap
     )
 
-    private fun buildFallbackRegions(bitmap: Bitmap, profile: RegionProfile): List<RegionCrop> {
+    private fun buildFallbackRegions(context: Context, bitmap: Bitmap, profile: RegionProfile): List<RegionCrop> {
+        val calibrated = OcrCalibrationStore.load(context)
+        fun calibratedRegion(name: String, prepare: Boolean = true): RegionCrop {
+            val rect = calibrated[name] ?: OcrCalibrationStore.defaultRegions().getValue(name)
+            return region(bitmap, name, rect.left, rect.top, rect.right, rect.bottom, prepare)
+        }
         return listOf(
-            region(bitmap, "card", 0.03f, profile.cardTop, 0.97f, 0.97f),
-            region(bitmap, "type", 0.06f, profile.typeTop, 0.56f, profile.typeBottom, prepare = true),
-            region(bitmap, "price", 0.05f, profile.priceTop, 0.45f, profile.priceBottom, prepare = true),
-            region(bitmap, "trip", 0.05f, profile.tripTop, 0.92f, profile.tripBottom, prepare = true),
-            region(bitmap, "detail", 0.00f, profile.merchantTop - 0.01f, 1.00f, profile.addressBottom + 0.04f, prepare = true),
-            blankRegion("merchantWide"),
-            blankRegion("merchant"),
-            blankRegion("addressWide"),
-            blankRegion("address"),
-            blankRegion("addressLower")
+            calibratedRegion("card", prepare = false),
+            calibratedRegion("type"),
+            calibratedRegion("price"),
+            calibratedRegion("trip"),
+            calibratedRegion("detail"),
+            calibratedRegion("merchantWide"),
+            calibratedRegion("merchant"),
+            calibratedRegion("addressWide"),
+            calibratedRegion("address"),
+            calibratedRegion("addressLower")
         )
     }
 
