@@ -864,7 +864,7 @@ class MainActivity : AppCompatActivity() {
             }
         ))
         debugCard.addView(TextView(this).apply {
-            text = "路径：${AppSettings.debugSamplePath(this@MainActivity)}"
+            text = "路径：${AppSettings.debugSamplePath(this@MainActivity)}\n每笔会保存原图、OCR 文本和带框图（文件名含 -regions），带框图用于查看当前 OCR 裁切区域。"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.12f)
@@ -980,6 +980,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.17：修复手动截图分析时 OCR 裁切函数递归导致闪退的问题；设置页补充说明调试样本中的 -regions 图片就是当前 OCR 裁切区域图。",
             "1.0.16：实时识别改为宽进严出，无锚点时允许备用区域解析但必须通过订单核心字段校验；调试样本新增带框 OCR 区域图；评分改为比例式，白名单只提示备注不加分；新增外送订单可独立显示。",
             "1.0.15：实时识别改为必须命中真实订单卡片锚点才解析；取消实时整屏文字回退，避免在相册、笔记旧截图或导航地图中误触发。",
             "1.0.14：商家和地址 OCR 改为固定 X 文字起点，并新增宽/安全双区域识别；圆形、方块只用于上下定位，减少图标噪声同时保留开头字母数字。",

@@ -313,7 +313,14 @@ object OcrHelper {
     }
 
     private fun crop(bitmap: Bitmap, rect: Rect): Bitmap {
-        return crop(bitmap, rect.left, rect.top, rect.right, rect.bottom)
+        val safeRect = rect(bitmap, rect.left, rect.top, rect.right, rect.bottom)
+        return Bitmap.createBitmap(
+            bitmap,
+            safeRect.left,
+            safeRect.top,
+            safeRect.width(),
+            safeRect.height()
+        )
     }
 
     private fun crop(
