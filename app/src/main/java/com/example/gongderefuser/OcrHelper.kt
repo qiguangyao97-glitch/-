@@ -156,16 +156,11 @@ object OcrHelper {
             return region(bitmap, name, rect.left, rect.top, rect.right, rect.bottom, prepare)
         }
         return listOf(
-            calibratedRegion("card", prepare = false),
             calibratedRegion("type"),
             calibratedRegion("price"),
             calibratedRegion("trip"),
-            calibratedRegion("detail"),
-            calibratedRegion("merchantWide"),
             calibratedRegion("merchant"),
-            calibratedRegion("addressWide"),
-            calibratedRegion("address"),
-            calibratedRegion("addressLower")
+            calibratedRegion("address")
         )
     }
 
@@ -185,16 +180,6 @@ object OcrHelper {
         fun x(relative: Float): Int = (card.left + cardWidth * relative).toInt()
         fun y(relative: Float): Int = (card.top + cardHeight * relative).toInt()
 
-        val detailTop = anchor?.let { (it.top - cardHeight * 0.05f).toInt() }
-            ?: y(if (isPairOffer) 0.49f else 0.51f)
-        val detailBottom = (buttonTop - cardHeight * 0.03f).toInt()
-            .coerceAtLeast(detailTop + 1)
-        // The pickup/dropoff icons stay at a fixed X within the offer card. Use
-        // them only for Y anchors; keep text crops on fixed card-relative X
-        // positions so leading letters/numbers are not cut off by line jitter.
-        val detailWideLeft = x(0.105f)
-        val detailLeft = x(0.13f)
-        val detailSafeLeft = x(0.145f)
         val detailRight = (card.right - cardWidth * 0.05f).toInt()
 
         val merchantTop = anchor?.let { (it.pickupY - cardHeight * 0.065f).toInt() }
@@ -203,19 +188,24 @@ object OcrHelper {
             ?: y(if (isPairOffer) 0.62f else 0.64f)
         val addressTop = anchor?.let { (it.dropoffY - cardHeight * 0.115f).toInt() }
             ?: y(if (isPairOffer) 0.58f else 0.60f)
-        val addressBottom = detailBottom
+        val addressBottom = (buttonTop - cardHeight * 0.03f).toInt()
+            .coerceAtLeast(addressTop + 1)
+        val merchantFallback = rect(bitmap, x(0.145f), merchantTop, detailRight, merchantBottom)
+        val addressFallback = rect(bitmap, x(0.145f), addressTop, detailRight, addressBottom)
+        val merchantRect = anchor?.let {
+            anchoredTextRect(context, bitmap, "merchant", "pickupAnchor", it.lineX, it.pickupY, merchantFallback)
+        } ?: merchantFallback
+        val addressRect = anchor?.let {
+            anchoredTextRect(context, bitmap, "address", "dropoffAnchor", it.lineX, it.dropoffY, addressFallback)
+        } ?: addressFallback
 
         return listOf(
             region(bitmap, "card", card, prepare = false),
             region(bitmap, "type", x(0.03f), y(0.02f), x(0.55f), y(0.14f), prepare = true),
             region(bitmap, "price", x(0.03f), y(0.13f), x(0.50f), y(0.33f), prepare = true),
             region(bitmap, "trip", x(0.03f), y(0.32f), x(0.92f), y(0.48f), prepare = true),
-            region(bitmap, "detail", detailLeft, detailTop, detailRight, detailBottom, prepare = true),
-            region(bitmap, "merchantWide", detailWideLeft, merchantTop, detailRight, merchantBottom, prepare = true),
-            region(bitmap, "merchant", detailSafeLeft, merchantTop, detailRight, merchantBottom, prepare = true),
-            region(bitmap, "addressWide", detailWideLeft, addressTop, detailRight, addressBottom, prepare = true),
-            region(bitmap, "address", detailSafeLeft, addressTop, detailRight, addressBottom, prepare = true),
-            region(bitmap, "addressLower", detailLeft, (addressTop + cardHeight * 0.09f).toInt(), detailRight, addressBottom, prepare = true)
+            region(bitmap, "merchant", merchantRect, prepare = true),
+            region(bitmap, "address", addressRect, prepare = true)
         )
     }
 
@@ -528,7 +518,32 @@ object OcrHelper {
     private fun calibrationDebugRegions(context: Context, bitmap: Bitmap): List<DebugRegion> {
         return listOfNotNull(
             calibratedPixelRect(context, bitmap, "actionButton")?.let { DebugRegion("actionButton", it) },
-            calibratedPixelRect(context, bitmap, "deliveryAnchor")?.let { DebugRegion("deliveryAnchor", it) }
+            calibratedPixelRect(context, bitmap, "deliveryAnchor")?.let { DebugRegion("deliveryAnchor", it) },
+            calibratedPixelRect(context, bitmap, "pickupAnchor")?.let { DebugRegion("pickupAnchor", it) },
+            calibratedPixelRect(context, bitmap, "dropoffAnchor")?.let { DebugRegion("dropoffAnchor", it) }
+        )
+    }
+
+    private fun anchoredTextRect(
+        context: Context,
+        bitmap: Bitmap,
+        textName: String,
+        iconName: String,
+        detectedIconX: Int,
+        detectedIconY: Int,
+        fallback: Rect
+    ): Rect {
+        val calibrated = OcrCalibrationStore.load(context)
+        val text = calibrated[textName]?.let { normalizedToPixelRect(bitmap, it) } ?: return fallback
+        val icon = calibrated[iconName]?.let { normalizedToPixelRect(bitmap, it) } ?: return fallback
+        val iconCenterX = icon.centerX()
+        val iconCenterY = icon.centerY()
+        return rect(
+            bitmap = bitmap,
+            left = detectedIconX + (text.left - iconCenterX),
+            top = detectedIconY + (text.top - iconCenterY),
+            right = detectedIconX + (text.right - iconCenterX),
+            bottom = detectedIconY + (text.bottom - iconCenterY)
         )
     }
 

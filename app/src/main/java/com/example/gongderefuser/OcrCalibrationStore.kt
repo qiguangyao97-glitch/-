@@ -9,32 +9,26 @@ object OcrCalibrationStore {
     val regionNames = listOf(
         "actionButton",
         "deliveryAnchor",
-        "card",
+        "pickupAnchor",
+        "dropoffAnchor",
         "type",
         "price",
         "trip",
-        "detail",
-        "merchantWide",
         "merchant",
-        "addressWide",
-        "address",
-        "addressLower"
+        "address"
     )
 
     fun displayName(name: String): String {
         return when (name) {
             "actionButton" -> "按钮定位"
             "deliveryAnchor" -> "取送定位"
-            "card" -> "订单卡片"
+            "pickupAnchor" -> "取货圆点"
+            "dropoffAnchor" -> "送达方块"
             "type" -> "类型/单数"
             "price" -> "金额"
             "trip" -> "时间距离"
-            "detail" -> "商家地址整体"
-            "merchantWide" -> "商家宽框"
-            "merchant" -> "商家精框"
-            "addressWide" -> "地址宽框"
-            "address" -> "地址精框"
-            "addressLower" -> "地址下半"
+            "merchant" -> "商家文字"
+            "address" -> "地址文字"
             else -> name
         }
     }
@@ -76,16 +70,13 @@ object OcrCalibrationStore {
         return mapOf(
             "actionButton" to RectF(0.08f, 0.86f, 0.94f, 0.95f),
             "deliveryAnchor" to RectF(0.06f, 0.72f, 0.22f, 0.91f),
-            "card" to RectF(0.03f, 0.54f, 0.97f, 0.97f),
+            "pickupAnchor" to RectF(0.09f, 0.755f, 0.15f, 0.805f),
+            "dropoffAnchor" to RectF(0.09f, 0.835f, 0.15f, 0.885f),
             "type" to RectF(0.06f, 0.56f, 0.56f, 0.64f),
             "price" to RectF(0.05f, 0.61f, 0.45f, 0.71f),
             "trip" to RectF(0.05f, 0.70f, 0.92f, 0.79f),
-            "detail" to RectF(0.08f, 0.76f, 0.96f, 0.91f),
-            "merchantWide" to RectF(0.11f, 0.745f, 0.96f, 0.805f),
             "merchant" to RectF(0.145f, 0.745f, 0.96f, 0.805f),
-            "addressWide" to RectF(0.11f, 0.795f, 0.96f, 0.905f),
-            "address" to RectF(0.145f, 0.795f, 0.96f, 0.905f),
-            "addressLower" to RectF(0.13f, 0.84f, 0.96f, 0.915f)
+            "address" to RectF(0.145f, 0.795f, 0.96f, 0.905f)
         )
     }
 

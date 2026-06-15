@@ -1042,7 +1042,7 @@ class MainActivity : AppCompatActivity() {
         toolbar.addView(topRow)
 
         toolbar.addView(TextView(this).apply {
-            text = "图片全屏显示。点下方按钮只显示当前框；先调按钮定位，再调取送定位。"
+            text = "图片全屏显示。先调按钮定位、取送定位、取货圆点、送达方块；商家/地址文字框会按圆点和方块动态跟随。"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.08f)
@@ -1100,10 +1100,10 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(12), dp(7), dp(12), dp(7))
             background = roundedFill(
                 when (name) {
-                    "actionButton" -> COLOR_DANGER
-                    "deliveryAnchor" -> COLOR_ACCENT
-                    else -> COLOR_MUTED
-                },
+            "actionButton" -> COLOR_DANGER
+            "deliveryAnchor", "pickupAnchor", "dropoffAnchor" -> COLOR_ACCENT
+            else -> COLOR_MUTED
+        },
                 999f
             )
             setOnClickListener {
@@ -1174,6 +1174,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryItems(): List<String> {
         return listOf(
+            "1.0.24：商家/地址 OCR 改为单一动态框：先用取送定位找竖线，再用取货圆点和送达方块作为锚点，商家文字和地址文字按相对偏移跟随移动；旧的商家宽框、地址下半等多候选框退出主流程，减少重复地址和过度纠偏。时间距离保持独立框，避免钟表图标干扰取送定位。",
             "1.0.23：OCR 校准页改为图片全屏铺底，顶部按钮以悬浮工具条显示，不再占用图片布局高度；保存、选择、恢复默认都移到顶部，减少因校准界面压缩图片造成的框位比例偏差。",
             "1.0.22：OCR 校准页改为单框显示，点击上方区域按钮时只显示当前要调整的框，减少重叠干扰；说明中明确商家/地址会跟随取送定位锚点动态移动。",
             "1.0.21：OCR 校准页改为全屏画布，避免拖框时跟随设置页滚动；新增“按钮定位”和“取送定位”两个一级基准框，按钮框优先定位接受/配对，取送框用于定位圆点、方块和竖线，商家/地址识别会跟随锚点动态移动。",

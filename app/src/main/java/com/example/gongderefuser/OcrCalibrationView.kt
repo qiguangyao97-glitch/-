@@ -219,6 +219,8 @@ class OcrCalibrationView(context: Context) : View(context) {
         return when (name) {
             "actionButton" -> Color.rgb(255, 45, 85)
             "deliveryAnchor" -> Color.rgb(0, 122, 255)
+            "pickupAnchor" -> Color.rgb(90, 200, 250)
+            "dropoffAnchor" -> Color.rgb(88, 86, 214)
             "card" -> Color.rgb(0, 122, 255)
             "type" -> Color.rgb(128, 0, 255)
             "price" -> Color.rgb(255, 149, 0)
