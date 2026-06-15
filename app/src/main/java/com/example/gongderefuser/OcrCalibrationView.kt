@@ -14,7 +14,7 @@ class OcrCalibrationView(context: Context) : View(context) {
     private var bitmap: Bitmap? = null
     private val regions = linkedMapOf<String, RectF>()
     private val imageRect = RectF()
-    private var selectedName: String = "merchant"
+    private var selectedName: String = "actionButton"
     private var lastX = 0f
     private var lastY = 0f
     private var mode = DragMode.None
@@ -42,7 +42,7 @@ class OcrCalibrationView(context: Context) : View(context) {
         OcrCalibrationStore.regionNames.forEach { name ->
             regions[name] = RectF(savedRegions[name] ?: OcrCalibrationStore.defaultRegions().getValue(name))
         }
-        selectedName = regions.keys.firstOrNull { it == "merchant" } ?: regions.keys.first()
+        selectedName = regions.keys.firstOrNull { it == "actionButton" } ?: regions.keys.first()
         requestLayout()
         invalidate()
     }
@@ -51,13 +51,27 @@ class OcrCalibrationView(context: Context) : View(context) {
         return regions.mapValues { RectF(it.value) }
     }
 
+    fun selectRegion(name: String) {
+        if (regions.containsKey(name)) {
+            selectedName = name
+            invalidate()
+        }
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec).coerceAtLeast(1)
         val source = bitmap
-        val height = if (source == null) {
+        val desiredHeight = if (source == null) {
             width
         } else {
             (width * source.height.toFloat() / source.width.toFloat()).toInt()
+        }
+        val heightMode = MeasureSpec.getMode(heightMeasureSpec)
+        val heightSize = MeasureSpec.getSize(heightMeasureSpec)
+        val height = when (heightMode) {
+            MeasureSpec.EXACTLY -> heightSize
+            MeasureSpec.AT_MOST -> desiredHeight.coerceAtMost(heightSize)
+            else -> desiredHeight
         }
         setMeasuredDimension(width, height.coerceAtLeast(1))
     }
@@ -65,7 +79,7 @@ class OcrCalibrationView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val source = bitmap ?: return
-        imageRect.set(0f, 0f, width.toFloat(), height.toFloat())
+        updateImageRect(source)
         canvas.drawBitmap(source, null, imageRect, imagePaint)
 
         regions.forEach { (name, normalized) ->
@@ -85,8 +99,10 @@ class OcrCalibrationView(context: Context) : View(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (bitmap == null) return false
+        updateImageRect(bitmap ?: return false)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
                 val hit = hitRegion(event.x, event.y)
                 if (hit != null) selectedName = hit
                 val rect = toViewRect(regions.getValue(selectedName))
@@ -118,6 +134,7 @@ class OcrCalibrationView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP,
             MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
                 mode = DragMode.None
                 return true
             }
@@ -138,6 +155,22 @@ class OcrCalibrationView(context: Context) : View(context) {
             imageRect.left + imageRect.width() * normalized.right,
             imageRect.top + imageRect.height() * normalized.bottom
         )
+    }
+
+    private fun updateImageRect(source: Bitmap) {
+        val viewWidth = width.toFloat().coerceAtLeast(1f)
+        val viewHeight = height.toFloat().coerceAtLeast(1f)
+        val sourceRatio = source.width.toFloat() / source.height.toFloat()
+        val viewRatio = viewWidth / viewHeight
+        if (viewRatio > sourceRatio) {
+            val imageWidth = viewHeight * sourceRatio
+            val left = (viewWidth - imageWidth) / 2f
+            imageRect.set(left, 0f, left + imageWidth, viewHeight)
+        } else {
+            val imageHeight = viewWidth / sourceRatio
+            val top = (viewHeight - imageHeight) / 2f
+            imageRect.set(0f, top, viewWidth, top + imageHeight)
+        }
     }
 
     private fun clamp(rect: RectF): RectF {
@@ -187,6 +220,8 @@ class OcrCalibrationView(context: Context) : View(context) {
 
     private fun regionColor(name: String): Int {
         return when (name) {
+            "actionButton" -> Color.rgb(255, 45, 85)
+            "deliveryAnchor" -> Color.rgb(0, 122, 255)
             "card" -> Color.rgb(0, 122, 255)
             "type" -> Color.rgb(128, 0, 255)
             "price" -> Color.rgb(255, 149, 0)

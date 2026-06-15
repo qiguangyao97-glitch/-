@@ -8,6 +8,7 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
@@ -68,15 +69,17 @@ object OcrHelper {
         fullText: String,
         callback: (OrderRegionText) -> Unit
     ) {
-        val button = findActionButton(bitmap)
+        val button = findActionButton(context, bitmap)
         val isPairOffer = fullText.contains("配對") ||
                 fullText.contains("配对") ||
                 button?.isPair == true ||
                 looksLikePairActionButton(bitmap)
         val profile = if (isPairOffer) RegionProfile.Pair else RegionProfile.Accept
-        val anchoredRegions = buildAnchoredRegions(bitmap, button, isPairOffer)
+        val anchoredRegions = buildAnchoredRegions(context, bitmap, button, isPairOffer)
         val hasAnchoredCard = anchoredRegions != null
         val regions = anchoredRegions ?: buildFallbackRegions(context, bitmap, profile)
+        val debugRegions = calibrationDebugRegions(context, bitmap) +
+                regions.map { DebugRegion(it.name, Rect(it.rect)) }
         val results = mutableMapOf<String, String>()
         var remaining = regions.size
         val lock = Any()
@@ -91,7 +94,7 @@ object OcrHelper {
                             fullText = fullText,
                             isPairOffer = isPairOffer,
                             hasAnchoredCard = hasAnchoredCard,
-                            debugRegions = regions.map { DebugRegion(it.name, Rect(it.rect)) },
+                            debugRegions = debugRegions,
                             cardText = results["card"].orEmpty(),
                             typeText = results["type"].orEmpty(),
                             priceText = results["price"].orEmpty(),
@@ -167,6 +170,7 @@ object OcrHelper {
     }
 
     private fun buildAnchoredRegions(
+        context: Context,
         bitmap: Bitmap,
         button: ActionButton?,
         isPairOffer: Boolean
@@ -176,7 +180,7 @@ object OcrHelper {
         val cardHeight = card.height().coerceAtLeast(1)
         val cardWidth = card.width().coerceAtLeast(1)
         val buttonTop = actionButton.rect.top.coerceIn(card.top, card.bottom)
-        val anchor = findDeliveryAnchor(bitmap, card, buttonTop)
+        val anchor = findDeliveryAnchor(context, bitmap, card, buttonTop)
 
         fun x(relative: Float): Int = (card.left + cardWidth * relative).toInt()
         fun y(relative: Float): Int = (card.top + cardHeight * relative).toInt()
@@ -366,11 +370,12 @@ object OcrHelper {
         return Rect(safeLeft, safeTop, safeRight, safeBottom)
     }
 
-    private fun findActionButton(bitmap: Bitmap): ActionButton? {
-        val searchLeft = (bitmap.width * 0.08f).toInt()
-        val searchRight = (bitmap.width * 0.96f).toInt()
-        val searchTop = (bitmap.height * 0.58f).toInt()
-        val searchBottom = (bitmap.height * 0.97f).toInt()
+    private fun findActionButton(context: Context, bitmap: Bitmap): ActionButton? {
+        val calibrated = calibratedPixelRect(context, bitmap, "actionButton")
+        val searchLeft = calibrated?.left ?: (bitmap.width * 0.08f).toInt()
+        val searchRight = calibrated?.right ?: (bitmap.width * 0.96f).toInt()
+        val searchTop = calibrated?.top ?: (bitmap.height * 0.58f).toInt()
+        val searchBottom = calibrated?.bottom ?: (bitmap.height * 0.97f).toInt()
         val minRunWidth = (bitmap.width * 0.48f).toInt()
         val groups = mutableListOf<Pair<IntRange, Boolean>>()
         var groupStart = -1
@@ -461,11 +466,12 @@ object OcrHelper {
         return Rect(left, top, right, bottom)
     }
 
-    private fun findDeliveryAnchor(bitmap: Bitmap, card: Rect, buttonTop: Int): DeliveryAnchor? {
-        val left = (card.left + card.width() * 0.04f).toInt().coerceAtLeast(0)
-        val right = (card.left + card.width() * 0.20f).toInt().coerceAtMost(bitmap.width)
-        val top = (card.top + card.height() * 0.45f).toInt().coerceAtLeast(0)
-        val bottom = (buttonTop - card.height() * 0.04f).toInt().coerceIn(top + 1, bitmap.height)
+    private fun findDeliveryAnchor(context: Context, bitmap: Bitmap, card: Rect, buttonTop: Int): DeliveryAnchor? {
+        val calibrated = calibratedPixelRect(context, bitmap, "deliveryAnchor")
+        val left = calibrated?.left ?: (card.left + card.width() * 0.04f).toInt().coerceAtLeast(0)
+        val right = calibrated?.right ?: (card.left + card.width() * 0.20f).toInt().coerceAtMost(bitmap.width)
+        val top = calibrated?.top ?: (card.top + card.height() * 0.45f).toInt().coerceAtLeast(0)
+        val bottom = calibrated?.bottom ?: (buttonTop - card.height() * 0.04f).toInt().coerceIn(top + 1, bitmap.height)
         var bestX = left
         var bestCount = 0
         var x = left
@@ -511,6 +517,28 @@ object OcrHelper {
             bottom = anchorBottom,
             pickupY = iconCenters.first ?: anchorTop,
             dropoffY = iconCenters.second ?: anchorBottom
+        )
+    }
+
+    private fun calibratedPixelRect(context: Context, bitmap: Bitmap, name: String): Rect? {
+        val normalized = OcrCalibrationStore.load(context)[name] ?: return null
+        return normalizedToPixelRect(bitmap, normalized)
+    }
+
+    private fun calibrationDebugRegions(context: Context, bitmap: Bitmap): List<DebugRegion> {
+        return listOfNotNull(
+            calibratedPixelRect(context, bitmap, "actionButton")?.let { DebugRegion("actionButton", it) },
+            calibratedPixelRect(context, bitmap, "deliveryAnchor")?.let { DebugRegion("deliveryAnchor", it) }
+        )
+    }
+
+    private fun normalizedToPixelRect(bitmap: Bitmap, rect: RectF): Rect {
+        return rect(
+            bitmap,
+            (bitmap.width * rect.left).toInt(),
+            (bitmap.height * rect.top).toInt(),
+            (bitmap.width * rect.right).toInt(),
+            (bitmap.height * rect.bottom).toInt()
         )
     }
 

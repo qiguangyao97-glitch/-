@@ -7,6 +7,8 @@ object OcrCalibrationStore {
     private const val PREF_NAME = "gongde_refuser_ocr_calibration"
 
     val regionNames = listOf(
+        "actionButton",
+        "deliveryAnchor",
         "card",
         "type",
         "price",
@@ -21,6 +23,8 @@ object OcrCalibrationStore {
 
     fun displayName(name: String): String {
         return when (name) {
+            "actionButton" -> "按钮定位"
+            "deliveryAnchor" -> "取送定位"
             "card" -> "订单卡片"
             "type" -> "类型/单数"
             "price" -> "金额"
@@ -70,6 +74,8 @@ object OcrCalibrationStore {
 
     fun defaultRegions(): Map<String, RectF> {
         return mapOf(
+            "actionButton" to RectF(0.08f, 0.86f, 0.94f, 0.95f),
+            "deliveryAnchor" to RectF(0.06f, 0.72f, 0.22f, 0.91f),
             "card" to RectF(0.03f, 0.54f, 0.97f, 0.97f),
             "type" to RectF(0.06f, 0.56f, 0.56f, 0.64f),
             "price" to RectF(0.05f, 0.61f, 0.45f, 0.71f),

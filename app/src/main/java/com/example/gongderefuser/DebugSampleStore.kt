@@ -138,6 +138,8 @@ object DebugSampleStore {
 
     private fun regionColor(name: String): Int {
         return when (name) {
+            "actionButton" -> Color.rgb(255, 45, 85)
+            "deliveryAnchor" -> Color.rgb(0, 122, 255)
             "card" -> Color.rgb(0, 122, 255)
             "type" -> Color.rgb(128, 0, 255)
             "price" -> Color.rgb(255, 149, 0)
