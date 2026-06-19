@@ -1,5 +1,6 @@
 package com.example.gongderefuser.parser
 
+import android.util.Log
 import com.example.gongderefuser.model.OrderData
 
 /**
@@ -105,11 +106,8 @@ object OrderParser {
             val priceText = normalize(input.priceText)
             val tripText = normalize(input.tripText)
             val sameDropoffText = normalize(input.sameDropoffText)
-            val merchantText = normalize(input.merchantText)
-            val merchantWideText = normalize(input.merchantWideText)
-            val addressText = normalize(input.addressText)
-            val addressWideText = normalize(input.addressWideText)
-            val addressLowerText = normalize(input.addressLowerText)
+            val rawMerchant = input.merchantText.trim()
+            val rawAddress = input.addressText.trim()
             val combinedText = listOf(
                 priceText,
                 tripText,
@@ -123,11 +121,25 @@ object OrderParser {
             val isExclusive = deliveryCount <= 1
             val isTargetOffer = isLikelyTargetOffer(combinedText)
             val isAddOnOrder = isAddOnOrder(combinedText)
-            val storeName = selectRegionMerchant(merchantText, merchantWideText)
-            val addressSelection = selectRegionAddress(addressText, addressWideText, addressLowerText, storeName)
-            val address = addressSelection.text
+            val storeName = rawMerchant
+            val address = rawAddress
+            val merchantStatus = if (storeName.isNotBlank()) "OK" else "PARSE_FAILED"
+            val addressStatus = if (address.isNotBlank()) "OK" else "PARSE_FAILED"
             val sameDropoffMatched = matchesSameDropoff(sameDropoffText)
             val isSameLocationStack = sameDropoffMatched || hasSameLocationStackFeature(combinedText)
+            runCatching {
+                Log.d(
+                    "UBER_TEXT_DIRECT_DEBUG",
+                    """
+                    商家OCR原文=$rawMerchant
+                    最終商家=$storeName
+                    商家狀態=$merchantStatus
+                    地址OCR原文=$rawAddress
+                    最終地址=$address
+                    地址狀態=$addressStatus
+                    """.trimIndent()
+                )
+            }
 
             OrderData(
                 price = price,
@@ -142,12 +154,12 @@ object OrderParser {
                 isTargetOffer = isTargetOffer,
                 isAddOnOrder = isAddOnOrder,
                 address = address,
-                addressSource = addressSelection.source,
+                addressSource = "ADDRESS_DIRECT",
                 storeName = storeName,
                 priceStatus = fieldStatus(priceText, price > 0),
                 tripStatus = fieldStatus(tripText, minutes > 0 && distance > 0.0),
-                merchantStatus = fieldStatus(merchantText.ifBlank { merchantWideText }, storeName.isNotBlank()),
-                addressStatus = fieldStatus(addressSelection.text, address.isNotBlank()),
+                merchantStatus = merchantStatus,
+                addressStatus = addressStatus,
                 typeStatus = fieldStatus(typeText, typeText.isNotBlank())
             )
         } catch (e: Exception) {

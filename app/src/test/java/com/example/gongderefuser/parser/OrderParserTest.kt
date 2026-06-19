@@ -70,6 +70,36 @@ class OrderParserTest {
     }
 
     @Test
+    fun parseRegionUsesRawMerchantAndAddressTextDirectly() {
+        val order = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "",
+                cardText = "",
+                typeText = "外送",
+                priceText = "${'$'}99",
+                tripText = "20分鐘 (4.0公里) 總計",
+                merchantText = "路易莎咖啡環球購物中心桃園A8",
+                addressText = """
+                    244台灣新北市林口區南勢里文化三路
+                    一段247號
+                """.trimIndent()
+            )
+        )
+
+        assertNotNull(order)
+        assertEquals("路易莎咖啡環球購物中心桃園A8", order!!.storeName)
+        assertEquals("OK", order.merchantStatus)
+        assertEquals(
+            """
+            244台灣新北市林口區南勢里文化三路
+            一段247號
+            """.trimIndent(),
+            order.address
+        )
+        assertEquals("OK", order.addressStatus)
+    }
+
+    @Test
     fun parseKeepsMergedMinutePrefixWithoutForcedCorrection() {
         val order = OrderParser.parse(
             """
