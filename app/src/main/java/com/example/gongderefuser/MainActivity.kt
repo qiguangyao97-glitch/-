@@ -95,6 +95,7 @@ class MainActivity : AppCompatActivity() {
     private var soundTestExpanded = false
     private var debugInfoExpanded = false
     private var currentListIsWhitelist = true
+    private var pendingImportIsWhitelist = true
     private var calibrationBitmap: Bitmap? = null
     private var calibrationSavedPath: String = ""
     private var calibrationView: OcrCalibrationView? = null
@@ -117,6 +118,12 @@ class MainActivity : AppCompatActivity() {
             }
 
             analyzeCalibrationImage(uri)
+        }
+
+    private val pickTagImportFile =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            importListEntriesFromFile(uri, pendingImportIsWhitelist)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1235,33 +1242,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showImportListDialog(isWhitelist: Boolean) {
-        val input = createNumberlessInput("每行一个：名称|备注").apply {
-            setSingleLine(false)
-            minLines = 8
+        pendingImportIsWhitelist = isWhitelist
+        pickTagImportFile.launch(arrayOf("text/plain", "text/*", "application/octet-stream", "*/*"))
+    }
+
+    private fun importListEntriesFromFile(uri: Uri, isWhitelist: Boolean) {
+        val text = runCatching {
+            contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+        }.getOrElse {
+            Toast.makeText(this, "读取文件失败：${it.message.orEmpty()}", Toast.LENGTH_LONG).show()
+            return
         }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(10), dp(18), 0)
-            addView(input)
+
+        val imported = RuleSettings.parseEntries(text)
+        if (imported.isEmpty()) {
+            Toast.makeText(this, "没有可导入内容，请确认格式为：名称|备注", Toast.LENGTH_LONG).show()
+            return
         }
-        AlertDialog.Builder(this)
-            .setTitle(if (isWhitelist) "导入标签备注" else "导入避雷标签")
-            .setView(content)
-            .setPositiveButton("导入") { _, _ ->
-                val imported = RuleSettings.parseEntries(input.text.toString())
-                if (imported.isEmpty()) {
-                    Toast.makeText(this, "没有可导入内容", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                val target = if (isWhitelist) whitelistTags else blacklistTags
-                val merged = (target + imported).distinctBy { it.keyword }
-                target.clear()
-                target.addAll(merged)
-                persistListTags(isWhitelist)
-                Toast.makeText(this, "已导入 ${imported.size} 条", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("取消", null)
-            .show()
+
+        val target = if (isWhitelist) whitelistTags else blacklistTags
+        val beforeCount = target.size
+        val merged = (target + imported).distinctBy { it.keyword }
+        target.clear()
+        target.addAll(merged)
+        persistListTags(isWhitelist)
+        Toast.makeText(this, "已导入 ${target.size - beforeCount} 条，跳过 ${imported.size - (target.size - beforeCount)} 条重复", Toast.LENGTH_LONG).show()
     }
 
     private fun exportListEntries(isWhitelist: Boolean) {
