@@ -24,8 +24,21 @@ android {
         }
     }
 
+    signingConfigs {
+        create("sharedDebug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "gongdebug"
+            keyAlias = "gongdebug"
+            keyPassword = "gongdebug"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("sharedDebug")
+        }
         release {
+            signingConfig = signingConfigs.getByName("sharedDebug")
             optimization {
                 enable = false
             }
