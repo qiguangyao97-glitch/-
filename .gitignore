@@ -16,3 +16,5 @@
 local.properties
 rollback_backup_*/
 apk_archive/
+tmp_*/
+realtime_samples/

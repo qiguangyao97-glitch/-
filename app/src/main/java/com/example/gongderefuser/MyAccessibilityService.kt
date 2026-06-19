@@ -6,8 +6,10 @@ import android.app.AlertDialog
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioAttributes
 import android.os.Build
 import android.media.MediaPlayer
 import android.os.Handler
@@ -19,6 +21,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -28,7 +31,12 @@ import android.widget.Toast
 import com.example.gongderefuser.analyzer.OrderAnalyzer
 import com.example.gongderefuser.analyzer.OrderAnalyzer.AnalysisResult
 import com.example.gongderefuser.analyzer.RuleSettings
+import com.example.gongderefuser.model.OrderData
 import com.example.gongderefuser.parser.OrderParser
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MyAccessibilityService : AccessibilityService() {
 
@@ -42,10 +50,23 @@ class MyAccessibilityService : AccessibilityService() {
     private var lastOcrAttemptTime: Long = 0L
     private var screenshotTimeoutRunnable: Runnable? = null
     private var ocrTimeoutRunnable: Runnable? = null
+    private var secondCheckRunnable: Runnable? = null
+    private var secondCheckSignature: String = ""
+    private var lastPendingOrder: OrderData? = null
+    private var pendingOrderEventRunnable: Runnable? = null
+    private var consecutiveNoOrderCount: Int = 0
+    private var currentOverlayOrderLabel: String = ""
+    private var isDetectionScheduled: Boolean = false
+    private var pendingDetectionAfterCurrent: Boolean = false
+    private var currentBurstDetectCount: Int = 0
+    private var lastDetectionEventTime: Long = 0L
+    private var lastScreenshotRequestTime: Long = 0L
+    private var popupCandidateUntilTime: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         activeService = this
+        syncForegroundNotification()
         showStatusOverlayInternal()
         DiagnosticLogStore.append(this, "ACCESSIBILITY", "connected package=$packageName")
         Log.d("TARGET_SERVICE", "connected")
@@ -57,6 +78,8 @@ class MyAccessibilityService : AccessibilityService() {
         val packageName = event?.packageName?.toString() ?: return
         if (packageName != "com.ubercab.driver") return
         val now = System.currentTimeMillis()
+        sampleTargetAccessibilityEvent(event)
+        logFullAccessibilityEvent(event, now)
 
         if (AppSettings.isAccessibilityLogEnabled(this)) {
             Log.d(
@@ -66,33 +89,71 @@ class MyAccessibilityService : AccessibilityService() {
         }
         lastTargetEventSummary = "type=${event.eventType} class=${event.className} time=$now"
 
-        if (now - CaptureTrigger.lastTriggerTime < 4_000) return
+        Log.i("ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
+        DiagnosticLogStore.append(this, "ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
+        scheduleEventDrivenCapture(event, now)
+    }
 
-        CaptureTrigger.lastTriggerTime = now
-        Log.d("TARGET_TRIGGER", "target event detected")
-
-        CaptureTrigger.pendingCaptureCount = 2
-        listOf(420L, 1200L).forEach { delay ->
-            Handler(Looper.getMainLooper()).postDelayed({
-                triggerCapture()
-            }, delay)
+    private fun scheduleEventDrivenCapture(event: AccessibilityEvent, now: Long) {
+        if (!shouldTriggerOrderDetection(event)) {
+            logObservation(
+                "ORDER_DETECTION_WAIT",
+                "ignoredEvent type=${eventTypeName(event.eventType)} class=${event.className}"
+            )
+            return
         }
+        if (now - lastDetectionEventTime > DETECTION_BURST_RESET_MS) {
+            currentBurstDetectCount = 0
+            pendingDetectionAfterCurrent = false
+        }
+        lastDetectionEventTime = now
+
+        if (isDetectionScheduled || isTakingScreenshot || isProcessingOrder) {
+            pendingDetectionAfterCurrent = true
+            logObservation(
+                "ORDER_DETECTION_WAIT",
+                "pendingAfterCurrent=true count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
+            )
+            return
+        }
+        if (currentBurstDetectCount >= maxDetectionsForCurrentWindow()) {
+            logObservation(
+                "ORDER_DETECTION_WAIT",
+                "skipBurstLimit count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
+            )
+            return
+        }
+        scheduleDetectionAfterDelay(ORDER_EVENT_STABLE_DELAY_MS)
+    }
+
+    private fun scheduleDetectionAfterDelay(delayMs: Long) {
+        if (isDetectionScheduled) return
+        isDetectionScheduled = true
+        pendingOrderEventRunnable = Runnable {
+            pendingOrderEventRunnable = null
+            isDetectionScheduled = false
+            triggerCapture()
+        }
+        logObservation("ORDER_DETECTION_WAIT", "scheduled delayMs=$delayMs count=${currentBurstDetectCount + 1}")
+        mainHandler.postDelayed(pendingOrderEventRunnable!!, delayMs)
     }
 
     private fun triggerCapture() {
         if (!MonitoringState.isEnabled(this)) return
         val now = System.currentTimeMillis()
-        if (now - lastShownOrderTime < 6_000) {
-            Log.d("TARGET_TRIGGER", "skip, recent order shown")
+        val waitMs = MIN_SCREENSHOT_INTERVAL_MS - (now - lastScreenshotRequestTime)
+        if (waitMs > 0) {
+            logObservation("ORDER_DETECTION_WAIT", "reschedule reason=SCREENSHOT_INTERVAL waitMs=$waitMs")
+            scheduleDetectionAfterDelay(waitMs)
             return
         }
-        if (now - lastOcrAttemptTime < 650) {
-            Log.d("TARGET_TRIGGER", "skip, recent OCR attempt")
-            return
-        }
+        currentBurstDetectCount += 1
         lastOcrAttemptTime = now
+        lastScreenshotRequestTime = now
 
         Log.d("TARGET_TRIGGER", "set capture flag")
+        Log.i("ORDER_ANALYSIS_START", "source=accessibility_event")
+        DiagnosticLogStore.append(this, "ORDER_ANALYSIS_START", "source=accessibility_event")
         tryAccessibilityScreenshot()
     }
 
@@ -101,7 +162,7 @@ class MyAccessibilityService : AccessibilityService() {
         Toast.makeText(this, "无障碍截图失败：$reason", Toast.LENGTH_SHORT).show()
     }
 
-    private fun tryAccessibilityScreenshot(): Boolean {
+    private fun tryAccessibilityScreenshot(isSecondCheck: Boolean = false): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             reportAccessibilityScreenshotFailure("sdk_${Build.VERSION.SDK_INT}")
             return false
@@ -112,7 +173,7 @@ class MyAccessibilityService : AccessibilityService() {
             return true
         }
         isTakingScreenshot = true
-        DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "request lastEvent=$lastTargetEventSummary")
+        DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "request secondCheckRunning=$isSecondCheck lastEvent=$lastTargetEventSummary")
         armScreenshotTimeout()
         takeScreenshot(
             Display.DEFAULT_DISPLAY,
@@ -127,14 +188,20 @@ class MyAccessibilityService : AccessibilityService() {
                         return
                     }
                     DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "success ${bitmap.width}x${bitmap.height}")
-                    processAccessibilityOrderBitmap(bitmap)
+                    processAccessibilityOrderBitmap(bitmap, isSecondCheck)
                 }
 
                 override fun onFailure(errorCode: Int) {
                     clearScreenshotTimeout()
                     isTakingScreenshot = false
                     Log.d("A11Y_SCREENSHOT", "failed code=$errorCode")
+                    if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
+                        DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "failed_interval_too_short_no_toast code=$errorCode")
+                        finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck)
+                        return
+                    }
                     reportAccessibilityScreenshotFailure("error_$errorCode")
+                    finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck)
                 }
             }
         )
@@ -159,7 +226,7 @@ class MyAccessibilityService : AccessibilityService() {
         screenshotTimeoutRunnable = null
     }
 
-    private fun processAccessibilityOrderBitmap(bitmap: Bitmap) {
+    private fun processAccessibilityOrderBitmap(bitmap: Bitmap, isSecondCheck: Boolean = false) {
         if (!MonitoringState.isEnabled(this)) {
             bitmap.recycle()
             return
@@ -171,11 +238,18 @@ class MyAccessibilityService : AccessibilityService() {
         }
 
         isProcessingOrder = true
+        val ocrStartMs = System.currentTimeMillis()
         armOcrTimeout()
         DiagnosticLogStore.append(this, "CAPTURE", "process source=accessibility ${bitmap.width}x${bitmap.height}")
+        logObservation("OCR_START", "source=accessibility width=${bitmap.width} height=${bitmap.height} secondCheck=$isSecondCheck")
         OcrHelper.runOrderRegions(this, bitmap) { regionText ->
             runCatching {
                 Log.d("OCR_RESULT", regionText.fullText)
+                val ocrTimeMs = System.currentTimeMillis() - ocrStartMs
+                logObservation(
+                    "OCR_FINISH",
+                    "OCR_TIME_MS=$ocrTimeMs hasAnchoredCard=${regionText.hasAnchoredCard} textLength=${regionText.fullText.length}"
+                )
                 if (!regionText.hasAnchoredCard) {
                     DiagnosticLogStore.append(this, "CAPTURE", "skip_no_anchor source=accessibility")
                 }
@@ -187,6 +261,7 @@ class MyAccessibilityService : AccessibilityService() {
                         priceText = regionText.priceText,
                         tripText = regionText.tripText,
                         detailText = regionText.detailText,
+                        sameDropoffText = regionText.sameDropoffText,
                         merchantText = regionText.merchantText,
                         merchantWideText = regionText.merchantWideText,
                         addressText = regionText.addressText,
@@ -194,19 +269,46 @@ class MyAccessibilityService : AccessibilityService() {
                         addressLowerText = regionText.addressLowerText
                     )
                 ) else null
-                val foundOrder = handleAccessibilityOrder(order, bitmap)
-                DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
+                val foundOrder = handleAccessibilityOrder(order, bitmap, isSecondCheck, regionText.tripText)
+                if (!isSecondCheck) {
+                    DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
+                }
                 if (!foundOrder) {
                     DiagnosticLogStore.append(this, "CAPTURE", "no_order source=accessibility")
+                    if (isSecondCheck) {
+                        DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckIgnoredReason=no_order")
+                        logObservation("OCR_RETRY", "secondCheckIgnoredReason=no_order")
+                    }
                 }
+                finishDetectionCycle(foundOrder, isSecondCheck)
             }.onFailure { throwable ->
+                val ocrTimeMs = System.currentTimeMillis() - ocrStartMs
+                logObservation("OCR_FAILED", "OCR_TIME_MS=$ocrTimeMs error=${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}")
                 Log.e("CAPTURE", "accessibility OCR callback failed", throwable)
                 CrashLogStore.save(this, "accessibility_ocr_callback", throwable)
+                finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck)
             }
             clearOcrTimeout()
             isProcessingOrder = false
             bitmap.recycle()
         }
+    }
+
+    private fun finishDetectionCycle(foundOrder: Boolean, isSecondCheck: Boolean) {
+        if (isSecondCheck) return
+        if (foundOrder) {
+            pendingDetectionAfterCurrent = false
+            logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=ORDER_HANDLED")
+            return
+        }
+        if (pendingDetectionAfterCurrent && currentBurstDetectCount < maxDetectionsForCurrentWindow()) {
+            pendingDetectionAfterCurrent = false
+            logObservation("ORDER_DETECTION_WAIT", "reschedule reason=PENDING_EVENT_AFTER_EMPTY")
+            scheduleDetectionAfterDelay(0L)
+            return
+        }
+        pendingDetectionAfterCurrent = false
+        logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=NO_ORDER")
     }
 
     private fun armOcrTimeout() {
@@ -227,35 +329,219 @@ class MyAccessibilityService : AccessibilityService() {
         ocrTimeoutRunnable = null
     }
 
-    private fun handleAccessibilityOrder(order: com.example.gongderefuser.model.OrderData?, bitmap: Bitmap?): Boolean {
-        if (order == null) {
-            Log.d("ORDER_ANALYSIS", "incomplete order ignored")
+    private fun handleAccessibilityOrder(
+        order: com.example.gongderefuser.model.OrderData?,
+        bitmap: Bitmap?,
+        isSecondCheck: Boolean = false,
+        tripText: String = ""
+    ): Boolean {
+        val gate = OrderResultGate.evaluate(order, tripText = tripText)
+        Log.i("ORDER_POPUP_VALIDATION", gate.debugLog)
+        DiagnosticLogStore.append(this, "ORDER_POPUP_VALIDATION", gate.debugLog)
+        if (!gate.shouldShow) {
+            Log.d("ORDER_ANALYSIS", "invalid order ignored ${gate.skipResultReason}")
+            DiagnosticLogStore.append(this, "CAPTURE", "skipResultReason=${gate.skipResultReason}")
+            Log.i("ORDER_ANALYSIS_FINISH", "shown=false reason=${gate.skipResultReason}")
+            DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=false reason=${gate.skipResultReason}")
+            if (gate.skipResultReason == "OCR_MONEY_INVALID") {
+                Log.i("OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
+                DiagnosticLogStore.append(this, "OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
+            }
+            handleInvalidOrderLifecycle(gate.skipResultReason)
             return false
         }
+        val validOrder = order ?: return false
+        consecutiveNoOrderCount = 0
 
-        val signature = "${order.price}-${order.minutes}-${order.distance}-${order.deliveryCount}-${order.isAddOnOrder}"
+        val signature = orderSignature(validOrder)
         val now = System.currentTimeMillis()
+        if (isSecondCheck) {
+            DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckRunning=true")
+            if (signature == secondCheckSignature) {
+                DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckChanged=false secondCheckIgnoredReason=same_result")
+                return true
+            }
+            val analysis = OrderAnalyzer.analyzeResult(this, validOrder)
+            DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckChanged=true")
+            lastShownOrderSignature = signature
+            lastShownOrderTime = now
+            secondCheckSignature = signature
+            val newOrderLabel = orderLabel(validOrder)
+            logObservation("ORDER_UPDATED", orderDetails(validOrder))
+            mainHandler.post {
+                logPopupShowOrReplace(analysis, newOrderLabel)
+                showAnalysisOverlayInternal(analysis, playTone = false)
+                currentOverlayOrderLabel = newOrderLabel
+            }
+            return true
+        }
         if (signature == lastShownOrderSignature && now - lastShownOrderTime < 30_000) {
             Log.d("ORDER_ANALYSIS", "duplicate order ignored")
-            return true
+            DiagnosticLogStore.append(this, "CAPTURE", "skipResultReason=DUPLICATE_RESULT")
+            Log.i("ORDER_ANALYSIS_FINISH", "shown=false reason=DUPLICATE_RESULT")
+            DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=false reason=DUPLICATE_RESULT")
+            return false
+        }
+        if (lastShownOrderSignature.isNotBlank() && signature != lastShownOrderSignature) {
+            logObservation(
+                "ORDER_REPLACED",
+                "old=${currentOverlayOrderLabel.ifBlank { lastShownOrderSignature }} new=${orderLabel(validOrder)}"
+            )
+        } else {
+            logObservation("ORDER_DETECTED", orderDetails(validOrder))
         }
 
         lastShownOrderSignature = signature
         lastShownOrderTime = now
 
-        val analysis = OrderAnalyzer.analyzeResult(this, order)
-        val screenshotPath = bitmap?.takeIf {
-            AppSettings.isOrderCaptureEnabled(this)
-        }?.let {
-            OrderCaptureStore.saveOrderCapture(this, it, analysis)
-        }.orEmpty()
-        OrderHistory.add(this, analysis, "实时", screenshotPath)
+        lastPendingOrder = validOrder
+        val analysis = OrderAnalyzer.analyzeResult(this, validOrder)
+        OrderHistory.add(this, analysis, "实时", "")
 
-        Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(order))
+        Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(this, validOrder))
         mainHandler.post {
+            val newOrderLabel = orderLabel(validOrder)
+            logPopupShowOrReplace(analysis, newOrderLabel)
             showAnalysisOverlayInternal(analysis)
+            currentOverlayOrderLabel = newOrderLabel
         }
+        Log.i("ORDER_ANALYSIS_FINISH", "shown=true signature=$signature")
+        DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=true signature=$signature")
         return true
+    }
+
+    private fun handleInvalidOrderLifecycle(reason: String) {
+        if (reason == "ALL_CORE_FIELDS_EMPTY" && System.currentTimeMillis() <= popupCandidateUntilTime) {
+            pendingDetectionAfterCurrent = true
+            logObservation("OCR_RETRY", "reason=POPUP_CANDIDATE_FIELDS_EMPTY")
+        }
+        if (reason == "NO_ORDER_CARD" || reason == "ALL_CORE_FIELDS_EMPTY") {
+            if (lastShownOrderSignature.isBlank() && overlayView == null) {
+                consecutiveNoOrderCount = 0
+                return
+            }
+            consecutiveNoOrderCount += 1
+            if (consecutiveNoOrderCount >= ORDER_END_INVALID_COUNT) {
+                Log.i("ORDER_SESSION_END", "reason=$reason")
+                DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason")
+                logObservation("ORDER_LOST", "reason=$reason")
+                lastShownOrderSignature = ""
+                secondCheckSignature = ""
+                lastPendingOrder = null
+                mainHandler.post {
+                    logObservation("POPUP_HIDE", "reason=ORDER_LOST")
+                    hideOverlay()
+                }
+            }
+        } else {
+            consecutiveNoOrderCount = 0
+        }
+    }
+
+    private fun shouldTriggerOrderDetection(event: AccessibilityEvent): Boolean {
+        val className = event.className?.toString().orEmpty()
+        val now = System.currentTimeMillis()
+        return when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+                true
+            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                if (lastShownOrderSignature.isBlank() && overlayView == null) {
+                    if (className == "android.widget.ImageView") {
+                        popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+                        true
+                    } else {
+                        now <= popupCandidateUntilTime && (
+                                className == "android.widget.FrameLayout" ||
+                                        className == "android.view.ViewGroup" ||
+                                        className == "android.widget.TextView"
+                                )
+                    }
+                } else {
+                    className == "android.widget.ImageView" ||
+                            className == "android.widget.FrameLayout" ||
+                            className == "android.view.ViewGroup" ||
+                            className == "android.widget.TextView" ||
+                            className == "com.ubercab.carbon.core.CarbonActivity"
+                }
+            }
+            else -> false
+        }
+    }
+
+    private fun maxDetectionsForCurrentWindow(): Int {
+        return if (System.currentTimeMillis() <= popupCandidateUntilTime) {
+            MAX_DETECTIONS_PER_POPUP_CANDIDATE
+        } else {
+            MAX_DETECTIONS_PER_BURST
+        }
+    }
+
+    private fun scheduleSecondCheck(signature: String) {
+        secondCheckRunnable?.let(mainHandler::removeCallbacks)
+        secondCheckSignature = signature
+        secondCheckRunnable = Runnable {
+            secondCheckRunnable = null
+            if (!MonitoringState.isEnabled(this)) {
+                DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckScheduled=false secondCheckIgnoredReason=monitoring_off")
+                return@Runnable
+            }
+            DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckRunning=true")
+            tryAccessibilityScreenshot(isSecondCheck = true)
+        }.also {
+            DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckScheduled=true")
+            logObservation("OCR_RETRY", "delayMs=5000 reason=SECOND_CHECK")
+            mainHandler.postDelayed(it, 5_000)
+        }
+    }
+
+    private fun logFullAccessibilityEvent(event: AccessibilityEvent, timestampMs: Long) {
+        val message = buildString {
+            appendLine("===== A11Y EVENT =====")
+            appendLine("type=${eventTypeName(event.eventType)}")
+            appendLine("package=${event.packageName?.toString().orEmpty()}")
+            appendLine("class=${event.className?.toString().orEmpty()}")
+            appendLine("text=${event.text}")
+            append("time=${humanSecondFormatter.format(Date(timestampMs))}")
+        }
+        Log.i("A11Y_EVENT", message)
+        DiagnosticLogStore.append(this, "A11Y_EVENT", message)
+    }
+
+    private fun logObservation(tag: String, message: String) {
+        Log.i(tag, message)
+        DiagnosticLogStore.append(this, tag, message)
+    }
+
+    private fun logPopupShowOrReplace(analysis: AnalysisResult, newOrderLabel: String) {
+        val oldOrderLabel = currentOverlayOrderLabel
+        if (overlayView != null && oldOrderLabel.isNotBlank() && oldOrderLabel != newOrderLabel) {
+            logObservation("POPUP_REPLACE", "oldOrder=$oldOrderLabel newOrder=$newOrderLabel")
+        } else {
+            logObservation("POPUP_SHOW", "score=${analysis.score} recommendation=${analysis.recommendation}")
+        }
+    }
+
+    private fun orderDetails(order: OrderData): String {
+        return "money=${order.price} distance=${OrderAnalyzer.formatDistance(order.distance)} minutes=${order.minutes} orders=${order.deliveryCount}"
+    }
+
+    private fun orderLabel(order: OrderData): String {
+        return "${order.price}元/${order.deliveryCount}单"
+    }
+
+    private fun orderSignature(order: com.example.gongderefuser.model.OrderData): String {
+        return listOf(
+            order.price,
+            order.minutes,
+            order.distance,
+            order.deliveryCount,
+            order.isAddOnOrder,
+            order.isSameLocationStack,
+            order.storeName.trim(),
+            order.address.trim()
+        ).joinToString("|")
     }
 
     private fun ScreenshotResult.toBitmap(): Bitmap? {
@@ -276,7 +562,13 @@ class MyAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         DiagnosticLogStore.append(this, "ACCESSIBILITY", "destroyed package=$packageName")
         clearCollapseTimer()
+        pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
+        pendingOrderEventRunnable = null
+        isDetectionScheduled = false
+        pendingDetectionAfterCurrent = false
+        currentBurstDetectCount = 0
         hideOverlay()
+        stopForegroundCompat()
         if (activeService === this) {
             activeService = null
         }
@@ -286,59 +578,12 @@ class MyAccessibilityService : AccessibilityService() {
     private fun showStatusOverlayInternal() {
         clearCollapseTimer()
         hideOverlay()
-
-        if (!MonitoringState.isEnabled(this)) return
-
-        val density = resources.displayMetrics.density
-        val overlaySize = (40 * density).toInt()
-        val isWorking = isMonitoringWorking()
-        val params = WindowManager.LayoutParams(
-            overlaySize,
-            overlaySize,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = getOverlayX((12 * density).toInt())
-            y = getOverlayY((56 * density).toInt())
-        }
-
-        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val container = FrameLayout(this).apply {
-            background = GradientDrawable().apply {
-                setColor(Color.argb(238, 255, 255, 255))
-                cornerRadius = 12 * density
-                setStroke((1 * density).toInt(), Color.argb(160, 148, 163, 184))
-            }
-            elevation = 8 * density
-        }
-
-        val dot = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(if (isWorking) COLOR_SUCCESS else COLOR_DANGER)
-            }
-        }
-
-        container.addView(
-            dot,
-            FrameLayout.LayoutParams((13 * density).toInt(), (13 * density).toInt()).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        makeDraggable(container, params, windowManager, persistPosition = true)
-        windowManager.addView(container, params)
-        overlayView = container
     }
 
-    private fun showAnalysisOverlayInternal(analysis: AnalysisResult) {
+    private fun showAnalysisOverlayInternal(analysis: AnalysisResult, playTone: Boolean = true) {
         clearCollapseTimer()
         hideOverlay()
-        playAnalysisTone(analysis)
+        if (playTone) playAnalysisTone(analysis)
 
         val density = resources.displayMetrics.density
         val displayWidth = resources.displayMetrics.widthPixels
@@ -369,7 +614,7 @@ class MyAccessibilityService : AccessibilityService() {
         overlayView = scrollContainer
 
         collapseRunnable = Runnable {
-            showStatusOverlayInternal()
+            hideOverlay()
         }.also {
             mainHandler.postDelayed(it, 30_000)
         }
@@ -379,19 +624,52 @@ class MyAccessibilityService : AccessibilityService() {
         if (!AppSettings.isSoundEnabled(this)) return
 
         val soundRes = when (analysis.recommendation) {
-            "建议接单" -> R.raw.whitelist_accept
-            "慎重考虑" -> R.raw.normal_order
-            else -> R.raw.blacklist_reject
+            "掙他娘的" -> R.raw.sound_level_4
+            "站著掙" -> R.raw.sound_level_3
+            "跪著送" -> R.raw.sound_level_2
+            else -> R.raw.sound_level_1
         }
 
         runCatching {
-            val player = MediaPlayer.create(this, soundRes) ?: return
-            player.setOnCompletionListener { it.release() }
+            val descriptor = resources.openRawResourceFd(soundRes) ?: return
+            val player = MediaPlayer()
+            player.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            player.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
+            descriptor.close()
+            player.setOnCompletionListener { mediaPlayer ->
+                mediaPlayer.release()
+            }
             player.setOnErrorListener { mediaPlayer, _, _ ->
                 mediaPlayer.release()
                 true
             }
+            player.prepare()
             player.start()
+        }
+    }
+
+    private fun syncForegroundNotification() {
+        if (MonitoringState.isEnabled(this)) {
+            startForeground(
+                MonitorNotificationHelper.NOTIFICATION_ID,
+                MonitorNotificationHelper.createRunningNotification(this)
+            )
+        } else {
+            stopForegroundCompat()
+        }
+    }
+
+    private fun stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
         }
     }
 
@@ -400,14 +678,14 @@ class MyAccessibilityService : AccessibilityService() {
         val accentColor = recommendationColor(analysis)
 
         val background = GradientDrawable().apply {
-            setColor(Color.argb(246, 255, 255, 255))
+            setColor(Color.argb(150, 255, 255, 255))
             cornerRadius = 16 * density
             setStroke((2 * density).toInt(), accentColor)
         }
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             this.background = background
             elevation = 10 * density
         }
@@ -423,7 +701,7 @@ class MyAccessibilityService : AccessibilityService() {
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            setPadding(0, dp(8), 0, dp(8))
+            setPadding(0, dp(7), 0, dp(7))
             setBackground(GradientDrawable().apply {
                 setColor(accentColor)
                 cornerRadius = 12 * density
@@ -442,7 +720,7 @@ class MyAccessibilityService : AccessibilityService() {
                 setColor(Color.rgb(241, 245, 249))
             })
             setOnClickListener {
-                showStatusOverlayInternal()
+                hideOverlay()
             }
         }
 
@@ -466,39 +744,79 @@ class MyAccessibilityService : AccessibilityService() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(8)
+                bottomMargin = dp(5)
             }
         )
 
         addMerchantStatusBlock(card, analysis)
         addListMatchBlock(card, analysis)
-        addResultLine(card, "类型", analysis.orderType)
-        if (analysis.isSameLocationStack) {
-            addResultLine(card, "爽单", "取货或配送地点相同")
-        }
-        addResultLine(card, "金额", "${analysis.price} 元")
+        addResultLine(card, "配送数量", "${analysis.deliveryCount} 单")
+        addResultLine(card, "金额", formatPriceWithSubsidy(analysis))
         addResultLine(card, "时间", "${analysis.minutes} 分钟")
         addResultLine(card, "距离", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
-        addResultLine(card, "预计时薪", "${OrderAnalyzer.formatMoney(analysis.effectiveHourly)} 元/小时")
+        addResultLine(card, "预计时薪", "${formatOriginalHourly(analysis)} 元/小时")
+        addResultLine(card, "元/公里", "${formatOriginalYuanPerKm(analysis)} 元/km")
+        addResultLine(card, "平均单价", "${formatOriginalAveragePrice(analysis)} 元")
 
         return card
     }
 
+    private fun acceptModeLabel(mode: RuleSettings.AcceptMode): String {
+        return when (mode) {
+            RuleSettings.AcceptMode.REWARD -> "趟奖模式"
+            RuleSettings.AcceptMode.NORMAL -> "正常模式"
+        }
+    }
+
+    private fun formatPriceWithSubsidy(analysis: AnalysisResult): String {
+        val rewardTotal = rewardTripTotal(analysis)
+        return if (rewardTotal > 0) {
+            "${analysis.originalPrice} 元（+趟奖 ${rewardTotal} 元）"
+        } else {
+            "${analysis.originalPrice} 元"
+        }
+    }
+
+    private fun formatOriginalHourly(analysis: AnalysisResult): String {
+        val hourly = if (analysis.minutes > 0) {
+            analysis.originalPrice.toDouble() / analysis.minutes * 60.0
+        } else {
+            0.0
+        }
+        return OrderAnalyzer.formatMoney(hourly)
+    }
+
+    private fun formatOriginalYuanPerKm(analysis: AnalysisResult): String {
+        val yuanPerKm = if (analysis.distance > 0.0) {
+            analysis.originalPrice.toDouble() / analysis.distance
+        } else {
+            0.0
+        }
+        return OrderAnalyzer.formatMoney(yuanPerKm)
+    }
+
+    private fun formatOriginalAveragePrice(analysis: AnalysisResult): String {
+        val averagePrice = analysis.originalPrice.toDouble() / analysis.deliveryCount.coerceAtLeast(1)
+        return OrderAnalyzer.formatMoney(averagePrice)
+    }
+
+    private fun rewardTripTotal(analysis: AnalysisResult): Int {
+        if (analysis.acceptMode != RuleSettings.AcceptMode.REWARD || analysis.rewardPerTrip <= 0) {
+            return 0
+        }
+        return analysis.rewardPerTrip * analysis.deliveryCount.coerceAtLeast(1)
+    }
+
     private fun recommendationColor(analysis: AnalysisResult): Int {
         return when (analysis.recommendation) {
-            "建议接单" -> COLOR_SUCCESS
-            "慎重考虑" -> COLOR_WARNING
+            "掙他娘的" -> COLOR_GOLD
+            "站著掙" -> COLOR_SUCCESS
+            "跪著送" -> COLOR_WARNING
             else -> COLOR_DANGER
         }
     }
 
     private fun showAddListEntryDialog(keyword: String, isWhitelist: Boolean) {
-        val keywordInput = EditText(this).apply {
-            hint = "商家名称或地址关键词"
-            setText(keyword)
-            setSingleLine(false)
-            minLines = if (keyword.contains('\n')) 2 else 1
-        }
         val noteInput = EditText(this).apply {
             hint = if (isWhitelist) {
                 "备注：位置、出餐速度等"
@@ -511,12 +829,18 @@ class MyAccessibilityService : AccessibilityService() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(10), dp(18), 0)
-            addView(keywordInput)
+            addView(TextView(this@MyAccessibilityService).apply {
+                text = keyword
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_TEXT_PRIMARY)
+                setPadding(0, 0, 0, dp(10))
+            })
             addView(noteInput)
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (isWhitelist) "添加白名单" else "添加黑名单")
+            .setTitle(if (isWhitelist) "添加标签备注" else "添加避雷标签")
             .setView(content)
             .setPositiveButton("保存", null)
             .setNegativeButton("取消", null)
@@ -525,17 +849,16 @@ class MyAccessibilityService : AccessibilityService() {
         dialog.setOnShowListener {
             dialog.window?.setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val keyword = keywordInput.text.toString().trim()
                 val note = noteInput.text.toString().trim()
                 if (keyword.length < 2) {
-                    keywordInput.error = "至少两个字"
+                    Toast.makeText(this, "标签名称太短", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
                 val saved = saveListEntry(keyword, note, isWhitelist)
                 Toast.makeText(
                     this,
                     if (saved) {
-                        "已添加到${if (isWhitelist) "白名单" else "黑名单"}"
+                        "已添加到${if (isWhitelist) "标签备注" else "避雷标签"}"
                     } else {
                         "名单里已有相同商家或地址"
                     },
@@ -553,12 +876,12 @@ class MyAccessibilityService : AccessibilityService() {
         if (cleanKeyword.length < 2 || cleanKeyword == "未识别") return
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("添加名单")
+            .setTitle("添加标签")
             .setMessage(cleanKeyword)
-            .setPositiveButton("加白名单") { _, _ ->
+            .setPositiveButton("加标签备注") { _, _ ->
                 showAddListEntryDialog(cleanKeyword, isWhitelist = true)
             }
-            .setNegativeButton("加黑名单") { _, _ ->
+            .setNegativeButton("加避雷标签") { _, _ ->
                 showAddListEntryDialog(cleanKeyword, isWhitelist = false)
             }
             .setNeutralButton("取消", null)
@@ -603,9 +926,11 @@ class MyAccessibilityService : AccessibilityService() {
         }
 
         val labelView = TextView(this).apply {
-            text = label
-            textSize = 12f
-            setTextColor(COLOR_TEXT_SECONDARY)
+            text = "$label："
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_RESULT_LABEL)
+            setSingleLine(true)
         }
 
         val valueView = TextView(this).apply {
@@ -615,55 +940,45 @@ class MyAccessibilityService : AccessibilityService() {
             gravity = Gravity.END
             setTextColor(COLOR_TEXT_PRIMARY)
             maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setSingleLine(false)
+            setLineSpacing(0f, 1.08f)
         }
 
         row.addView(
             labelView,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            LinearLayout.LayoutParams(dp(76), LinearLayout.LayoutParams.WRAP_CONTENT)
         )
         row.addView(
             valueView,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.35f)
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         )
         parent.addView(row)
     }
 
     private fun addMerchantStatusBlock(parent: LinearLayout, analysis: AnalysisResult) {
-        val accentColor = when {
-            analysis.isBlacklisted -> COLOR_DANGER
-            analysis.isWhitelisted -> COLOR_SUCCESS
-            else -> Color.rgb(218, 225, 233)
-        }
-        val fillColor = when {
-            analysis.isBlacklisted -> Color.rgb(254, 202, 202)
-            analysis.isWhitelisted -> Color.rgb(187, 247, 208)
-            else -> Color.WHITE
-        }
-
         val block = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(6)
+                bottomMargin = dp(3)
             }
         }
-        addColoredResultLine(
-            block,
-            "商家",
-            analysis.storeName.ifBlank { "未识别" },
-            fillColor,
-            accentColor
-        )
-        addColoredResultLine(
-            block,
-            "地址",
-            analysis.storeAddress.ifBlank { "未识别" },
-            fillColor,
-            accentColor
-        )
+        addClickableResultLine(block, "商家", analysis.storeName.ifBlank { "未识别" })
+        addClickableResultLine(block, "地址", analysis.storeAddress.ifBlank { "未识别" })
         parent.addView(block)
+    }
+
+    private fun addClickableResultLine(parent: LinearLayout, label: String, value: String) {
+        addResultLine(parent, label, value)
+        val row = parent.getChildAt(parent.childCount - 1)
+        row?.setOnClickListener {
+            if (value.isNotBlank() && value != "未识别") {
+                showListActionChoice(value)
+            }
+        }
     }
 
     private fun addListMatchBlock(parent: LinearLayout, analysis: AnalysisResult) {
@@ -671,42 +986,74 @@ class MyAccessibilityService : AccessibilityService() {
         val isWhitelisted = analysis.isWhitelisted
         if (!isBlacklisted && !isWhitelisted) return
 
-        val label = if (isBlacklisted) "命中黑名单" else "命中白名单"
         val keyword = if (isBlacklisted) analysis.matchedBlacklistKeyword else analysis.matchedWhitelistKeyword
         val note = if (isBlacklisted) analysis.blacklistNote else analysis.whitelistNote
-        val fillColor = if (isBlacklisted) Color.rgb(220, 38, 38) else Color.rgb(22, 163, 74)
+        val hitTarget = when {
+            analysis.isAddressBlacklisted -> "地址"
+            analysis.isMerchantBlacklisted -> "商家"
+            analysis.isAddressWhitelisted -> "地址"
+            analysis.isMerchantWhitelisted -> "商家"
+            else -> keyword.ifBlank { "已命中标签规则" }
+        }
+        addHighlightedResultLine(
+            parent = parent,
+            label = if (isBlacklisted) "命中避雷标签" else "命中标签备注",
+            value = hitTarget,
+            fillColor = if (isBlacklisted) Color.rgb(254, 226, 226) else Color.rgb(220, 252, 231),
+            strokeColor = if (isBlacklisted) COLOR_DANGER else COLOR_SUCCESS
+        )
+        if (note.isNotBlank()) addResultLine(parent, "备注", twoLine(note))
+    }
 
-        val block = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+    private fun addHighlightedResultLine(
+        parent: LinearLayout,
+        label: String,
+        value: String,
+        fillColor: Int,
+        strokeColor: Int
+    ) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(5), dp(8), dp(5))
             background = GradientDrawable().apply {
                 setColor(fillColor)
-                cornerRadius = 12 * resources.displayMetrics.density
+                cornerRadius = 10 * resources.displayMetrics.density
+                setStroke(dp(1), strokeColor)
             }
         }
-        block.addView(TextView(this).apply {
-            text = label
-            textSize = 14f
+        row.addView(TextView(this).apply {
+            text = "$label："
+            textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-        })
-        block.addView(TextView(this).apply {
-            text = buildString {
-                append("标签：").append(keyword.ifBlank { "已命中名单规则" })
-                if (note.isNotBlank()) append("\n备注：").append(note)
-            }
+            setSingleLine(true)
+            setTextColor(strokeColor)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(TextView(this).apply {
+            text = value
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setLineSpacing(0f, 1.12f)
-            setPadding(0, dp(4), 0, 0)
-        })
-        parent.addView(block, LinearLayout.LayoutParams(
+            gravity = Gravity.END
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextColor(COLOR_TEXT_PRIMARY)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.4f))
+        parent.addView(row, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            bottomMargin = dp(6)
+            topMargin = dp(3)
+            bottomMargin = dp(3)
         })
+    }
+
+    private fun twoLine(value: String): String {
+        return value.lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .take(2)
+            .joinToString("\n")
+            .ifBlank { value.take(42) }
     }
 
     private fun addColoredResultLine(
@@ -734,9 +1081,11 @@ class MyAccessibilityService : AccessibilityService() {
             text = value
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.END
+            gravity = if (label == "商家" || label == "地址") Gravity.START else Gravity.END
             setTextColor(COLOR_TEXT_PRIMARY)
-            maxLines = if (label == "地址") 4 else 2
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setSingleLine(false)
             setLineSpacing(0f, 1.08f)
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         if (value != "未识别") {
@@ -757,6 +1106,7 @@ class MyAccessibilityService : AccessibilityService() {
     private fun hideOverlay() {
         val view = overlayView ?: return
         overlayView = null
+        currentOverlayOrderLabel = ""
         runCatching {
             val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             windowManager.removeView(view)
@@ -849,6 +1199,148 @@ class MyAccessibilityService : AccessibilityService() {
             .apply()
     }
 
+    private fun sampleTargetAccessibilityEvent(event: AccessibilityEvent) {
+        if (!shouldSampleAccessibilityEvent(event.eventType)) return
+        if (event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            DiagnosticLogStore.append(
+                this,
+                "A11Y_EVENT",
+                "eventType=${eventTypeName(event.eventType)} eventClassName=${event.className} eventText=${event.text} eventContentDescription=${event.contentDescription}"
+            )
+            return
+        }
+
+        runCatching {
+            val dir = DebugFileDirs.resolve(this, "accessibility-click-debug")
+            val timestamp = clickDebugFormatter.format(Date())
+            val file = File(dir, "accessibility-click-debug-$timestamp.txt")
+            file.writeText(buildClickDebugText(event), Charsets.UTF_8)
+            DiagnosticLogStore.append(this, "A11Y_CLICK", "saved=${file.absolutePath}")
+        }.onFailure {
+            DiagnosticLogStore.append(this, "A11Y_CLICK", "save_failed=${it.javaClass.simpleName}:${it.message}")
+        }
+    }
+
+    private fun buildClickDebugText(event: AccessibilityEvent): String {
+        val source = event.source
+        val nodes = collectLikelyButtonNodes(rootInActiveWindow)
+        return buildString {
+            appendLine("time=${humanDebugFormatter.format(Date())}")
+            appendLine("eventType=${eventTypeName(event.eventType)}")
+            appendLine("eventClassName=${event.className?.toString().orEmpty()}")
+            appendLine("eventText=${event.text.joinToString("|")}")
+            appendLine("eventContentDescription=${event.contentDescription?.toString().orEmpty()}")
+            appendLine()
+            appendLine("[SOURCE]")
+            appendNodeInfo("source", source)
+            appendLine()
+            appendLine("[LIKELY_BUTTON_NODES]")
+            if (nodes.isEmpty()) {
+                appendLine("empty")
+            } else {
+                nodes.forEachIndexed { index, node ->
+                    appendNodeInfo("node#$index", node)
+                }
+            }
+            appendLine()
+            appendLine("[PENDING_ORDER]")
+            appendPendingOrder(lastPendingOrder)
+        }
+    }
+
+    private fun StringBuilder.appendNodeInfo(prefix: String, node: AccessibilityNodeInfo?) {
+        if (node == null) {
+            appendLine("$prefix=null")
+            return
+        }
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        appendLine("$prefix:")
+        if (prefix == "source") {
+            appendLine("sourceClassName=${node.className?.toString().orEmpty()}")
+            appendLine("sourceText=${node.text?.toString().orEmpty()}")
+            appendLine("sourceContentDescription=${node.contentDescription?.toString().orEmpty()}")
+            appendLine("sourceViewId=${node.viewIdResourceName.orEmpty()}")
+            appendLine("sourceClickable=${node.isClickable}")
+            appendLine("sourceEnabled=${node.isEnabled}")
+            appendLine("sourceBounds=$bounds")
+        } else {
+            appendLine("nodeClass=${node.className?.toString().orEmpty()}")
+            appendLine("nodeText=${node.text?.toString().orEmpty()}")
+            appendLine("nodeDesc=${node.contentDescription?.toString().orEmpty()}")
+            appendLine("nodeViewId=${node.viewIdResourceName.orEmpty()}")
+            appendLine("nodeClickable=${node.isClickable}")
+            appendLine("nodeEnabled=${node.isEnabled}")
+            appendLine("nodeBounds=$bounds")
+        }
+    }
+
+    private fun StringBuilder.appendPendingOrder(order: OrderData?) {
+        if (order == null) {
+            appendLine("pendingOrder=null")
+            return
+        }
+        appendLine("price=${order.price}")
+        appendLine("minutes=${order.minutes}")
+        appendLine("distance=${order.distance}")
+        appendLine("merchant=${order.storeName}")
+        appendLine("address=${order.address}")
+        appendLine("sameDropoff=${order.isSameLocationStack}")
+    }
+
+    private fun collectLikelyButtonNodes(root: AccessibilityNodeInfo?): List<AccessibilityNodeInfo> {
+        if (root == null) return emptyList()
+        val result = mutableListOf<AccessibilityNodeInfo>()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        while (queue.isNotEmpty() && result.size < MAX_CLICK_DEBUG_NODES) {
+            val node = queue.removeFirst()
+            if (isLikelyButtonNode(node, screenWidth, screenHeight)) {
+                result.add(node)
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
+            }
+        }
+        return result
+    }
+
+    private fun isLikelyButtonNode(node: AccessibilityNodeInfo, screenWidth: Int, screenHeight: Int): Boolean {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        val className = node.className?.toString().orEmpty()
+        val hasText = !node.text.isNullOrBlank()
+        val hasDesc = !node.contentDescription.isNullOrBlank()
+        val inLowerHalf = bounds.centerY() >= screenHeight / 2
+        val nearTopRightClose = bounds.centerX() >= (screenWidth * 0.68f).toInt() &&
+                bounds.centerY() <= (screenHeight * 0.62f).toInt()
+        return node.isClickable ||
+                className.contains("Button", ignoreCase = true) ||
+                hasText ||
+                hasDesc ||
+                inLowerHalf ||
+                nearTopRightClose
+    }
+
+    private fun shouldSampleAccessibilityEvent(eventType: Int): Boolean {
+        return eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+                eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+                eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+                eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+    }
+
+    private fun eventTypeName(eventType: Int): String {
+        return when (eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> "TYPE_VIEW_CLICKED"
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "TYPE_WINDOW_CONTENT_CHANGED"
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> "TYPE_WINDOWS_CHANGED"
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "TYPE_WINDOW_STATE_CHANGED"
+            else -> eventType.toString()
+        }
+    }
+
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
     }
@@ -859,12 +1351,25 @@ class MyAccessibilityService : AccessibilityService() {
         private const val KEY_OVERLAY_Y = "overlay_y"
         private const val SCREENSHOT_TIMEOUT_MS = 3_500L
         private const val OCR_TIMEOUT_MS = 8_000L
+        private const val ORDER_EVENT_STABLE_DELAY_MS = 300L
+        private const val ORDER_END_INVALID_COUNT = 2
+        private const val DETECTION_BURST_RESET_MS = 1_500L
+        private const val MAX_DETECTIONS_PER_BURST = 2
+        private const val MAX_DETECTIONS_PER_POPUP_CANDIDATE = 4
+        private const val POPUP_CANDIDATE_WINDOW_MS = 2_000L
+        private const val MIN_SCREENSHOT_INTERVAL_MS = 1_000L
+        private const val MAX_CLICK_DEBUG_NODES = 30
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
         private val COLOR_DANGER = Color.rgb(239, 68, 68)
         private val COLOR_WARNING = Color.rgb(245, 158, 11)
+        private val COLOR_GOLD = Color.rgb(126, 87, 194)
         private val COLOR_TEXT_PRIMARY = Color.rgb(22, 27, 34)
         private val COLOR_TEXT_SECONDARY = Color.rgb(88, 96, 105)
+        private val COLOR_RESULT_LABEL = Color.rgb(45, 55, 72)
+        private val clickDebugFormatter = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US)
+        private val humanDebugFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+        private val humanSecondFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
         @Volatile
         private var activeService: MyAccessibilityService? = null
@@ -877,7 +1382,7 @@ class MyAccessibilityService : AccessibilityService() {
                 runCatching {
                     service.showAnalysisOverlayInternal(analysis)
                 }.onFailure {
-                    service.showStatusOverlayInternal()
+                    service.hideOverlay()
                 }
             }
             return true
@@ -887,6 +1392,13 @@ class MyAccessibilityService : AccessibilityService() {
             val service = activeService ?: return
             service.mainHandler.post {
                 service.showStatusOverlayInternal()
+            }
+        }
+
+        fun refreshForegroundNotification() {
+            val service = activeService ?: return
+            service.mainHandler.post {
+                service.syncForegroundNotification()
             }
         }
 

@@ -16,9 +16,12 @@ android {
         minSdk = 28
         targetSdk = 28
         versionCode = 28
-        versionName = "1.0.27"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -71,5 +74,4 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
-    implementation("com.github.equationl.paddleocr4android:paddleocr4android:v1.2.9")
 }

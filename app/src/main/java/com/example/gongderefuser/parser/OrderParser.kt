@@ -1,13 +1,18 @@
 package com.example.gongderefuser.parser
 
-import com.example.gongderefuser.MerchantDictionaryStore
-import com.example.gongderefuser.OcrCorrectionStore
 import com.example.gongderefuser.model.OrderData
 
 /**
  * 訂單文字解析器
  */
 object OrderParser {
+
+    data class DistanceDebug(
+        val raw: String = "",
+        val parsed: Double = 0.0,
+        val corrected: Boolean = false,
+        val correctionReason: String = ""
+    )
 
     data class RegionInput(
         val fullText: String,
@@ -16,12 +21,31 @@ object OrderParser {
         val priceText: String,
         val tripText: String,
         val detailText: String = "",
+        val sameDropoffText: String = "",
         val merchantText: String,
         val merchantWideText: String = "",
         val addressText: String,
         val addressWideText: String = "",
         val addressLowerText: String = ""
     )
+
+    private data class AddressSelection(
+        val text: String,
+        val source: String
+    )
+
+    @Volatile
+    private var lastDistanceDebug: DistanceDebug = DistanceDebug()
+
+    fun distanceDebugInfo(): String {
+        val debug = lastDistanceDebug
+        return buildString {
+            appendLine("distanceRaw=${debug.raw}")
+            appendLine("distanceParsed=${debug.parsed}")
+            appendLine("distanceCorrected=${debug.corrected}")
+            appendLine("distanceCorrectionReason=${debug.correctionReason}")
+        }.trim()
+    }
 
     /**
      * 从画面文字中解析订单
@@ -77,59 +101,33 @@ object OrderParser {
 
     fun parse(input: RegionInput): OrderData? {
         return try {
-            val cardText = normalize(input.cardText)
             val typeText = normalize(input.typeText)
             val priceText = normalize(input.priceText)
             val tripText = normalize(input.tripText)
-            val detailText = normalize(input.detailText)
+            val sameDropoffText = normalize(input.sameDropoffText)
             val merchantText = normalize(input.merchantText)
             val merchantWideText = normalize(input.merchantWideText)
             val addressText = normalize(input.addressText)
             val addressWideText = normalize(input.addressWideText)
             val addressLowerText = normalize(input.addressLowerText)
-            val combinedMerchantText = mergeRegionText(merchantWideText, merchantText)
-            val combinedAddressText = mergeRegionText(addressWideText, addressText)
             val combinedText = listOf(
                 priceText,
                 tripText,
-                typeText,
-                cardText
+                typeText
             ).joinToString("\n")
 
-            val price = parsePriceFromSources(priceText, cardText)
-            val minutes = parseMinutesFromSources(tripText, cardText)
-            val distance = parseDistanceFromSources(tripText, cardText)
-            val deliveryCount = parseDeliveryCount(listOf(typeText, cardText).joinToString("\n"))
+            val price = parsePriceFromSources(priceText)
+            val minutes = parseMinutesFromSources(tripText)
+            val distance = parseDistanceFromSources(tripText)
+            val deliveryCount = parseDeliveryCount(typeText)
             val isExclusive = deliveryCount <= 1
             val isTargetOffer = isLikelyTargetOffer(combinedText)
             val isAddOnOrder = isAddOnOrder(combinedText)
-            val cardDetailLines = parseCardDetailLines(cardText)
-            val regionDetailLines = parseDetailLines(detailText.ifBlank {
-                listOf(combinedMerchantText, combinedAddressText, addressLowerText).joinToString("\n")
-            })
-            val detailLines = (cardDetailLines + regionDetailLines)
-                .distinct()
-            val merchantCandidate = parseRegionStoreName(combinedMerchantText)
-            val detailStoreCandidate = parseStoreNameFromDetail(detailLines)
-            val regionStoreName = chooseStoreName(merchantCandidate, detailStoreCandidate, detailLines)
-            val regionAddressLines = parseRegionAddressLines(
-                addressText = combinedAddressText,
-                addressLowerText = addressLowerText,
-                detailLines = detailLines,
-                storeName = regionStoreName,
-                detailStoreCandidate = detailStoreCandidate
-            )
-            val fallbackAddressLines = parseAddressLines(cardText)
-            val address = regionAddressLines
-                .ifEmpty { fallbackAddressLines }
-                .joinToString("\n")
-            val storeName = regionStoreName
-                .ifBlank { parseStoreName(cardText, fallbackAddressLines) }
-            val isSameLocationStack = hasSameLocationStackFeature(combinedText)
-
-            if (!isTargetOffer || price <= 0 || minutes <= 0 || distance <= 0) {
-                return null
-            }
+            val storeName = selectRegionMerchant(merchantText, merchantWideText)
+            val addressSelection = selectRegionAddress(addressText, addressWideText, addressLowerText, storeName)
+            val address = addressSelection.text
+            val sameDropoffMatched = matchesSameDropoff(sameDropoffText)
+            val isSameLocationStack = sameDropoffMatched || hasSameLocationStackFeature(combinedText)
 
             OrderData(
                 price = price,
@@ -137,17 +135,38 @@ object OrderParser {
                 distance = distance,
                 isStackOrder = deliveryCount > 1,
                 isSameLocationStack = isSameLocationStack,
+                sameDropoffText = sameDropoffText,
+                sameDropoffMatched = sameDropoffMatched,
                 deliveryCount = deliveryCount,
                 isExclusive = isExclusive,
                 isTargetOffer = isTargetOffer,
                 isAddOnOrder = isAddOnOrder,
-                address = address.ifBlank { cardText },
-                storeName = storeName
+                address = address,
+                addressSource = addressSelection.source,
+                storeName = storeName,
+                priceStatus = fieldStatus(priceText, price > 0),
+                tripStatus = fieldStatus(tripText, minutes > 0 && distance > 0.0),
+                merchantStatus = fieldStatus(merchantText.ifBlank { merchantWideText }, storeName.isNotBlank()),
+                addressStatus = fieldStatus(addressSelection.text, address.isNotBlank()),
+                typeStatus = fieldStatus(typeText, typeText.isNotBlank())
             )
         } catch (e: Exception) {
             e.printStackTrace()
             null
         }
+    }
+
+    private fun fieldStatus(source: String, parsed: Boolean): String {
+        return when {
+            parsed -> "OK"
+            source.isBlank() -> "MISSING"
+            else -> "PARSE_FAILED"
+        }
+    }
+
+    private fun matchesSameDropoff(text: String): Boolean {
+        if (text.isBlank()) return false
+        return listOf('訂', '單', '相', '同').all { text.contains(it) }
     }
 
     private fun mergeRegionText(primary: String, secondary: String): String {
@@ -157,6 +176,35 @@ object OrderParser {
             .filter { it.isNotBlank() }
             .distinct()
             .joinToString("\n")
+    }
+
+    private fun selectRegionMerchant(
+        merchantText: String,
+        merchantWideText: String
+    ): String {
+        return parseRegionStoreName(merchantText)
+            .ifBlank { parseRegionStoreName(merchantWideText) }
+    }
+
+    private fun selectRegionAddress(
+        addressText: String,
+        addressWideText: String,
+        addressLowerText: String,
+        storeName: String
+    ): AddressSelection {
+        val addressLines = parseAddressLines(addressText)
+            .filter { line -> line != storeName }
+        val wideLines = parseAddressLines(addressWideText)
+            .filter { line -> line != storeName }
+        val lowerLines = parseAddressLines(addressLowerText)
+            .filter { line -> line != storeName }
+
+        val (selectedLines, source) = when {
+            addressLines.isNotEmpty() -> addressLines to "ADDRESS"
+            wideLines.isNotEmpty() -> wideLines to "ADDRESS_WIDE"
+            else -> lowerLines to "ADDRESS_LOWER"
+        }
+        return AddressSelection(selectedLines.joinToString("\n"), source)
     }
 
     fun buildFailureMessage(screenText: String): String {
@@ -194,8 +242,6 @@ object OrderParser {
             .replace('）', ')')
             .replace('＄', '$')
             .replace('，', ',')
-            .replace("公里總計", "公里)總計")
-            .replace("公里总计", "公里)總計")
             .replace(Regex("[\\t\\u00A0]+"), " ")
             .lines()
             .joinToString("\n") { line ->
@@ -204,15 +250,39 @@ object OrderParser {
     }
 
     private fun parsePrice(text: String): Int {
+        val normalizedPriceText = normalizePriceOcr(text)
         val patterns = listOf(
             Regex("(?:NT\\$|TWD\\$|\\$)\\s*([0-9]{2,4})", RegexOption.IGNORE_CASE),
             Regex("金額\\s*([0-9]{2,4})"),
             Regex("費用\\s*([0-9]{2,4})")
         )
 
-        return patterns.firstNotNullOfOrNull { regex ->
-            regex.find(text)?.groupValues?.get(1)?.toIntOrNull()
-        } ?: 0
+        patterns.firstNotNullOfOrNull { regex ->
+            regex.find(normalizedPriceText)
+                ?.groupValues
+                ?.get(1)
+                ?.toIntOrNull()
+                ?.takeIf { it in 20..500 }
+        }?.let { return it }
+
+        return Regex("\\d+")
+            .findAll(normalizedPriceText)
+            .mapNotNull { it.value.toIntOrNull() }
+            .filter { it in 20..500 }
+            .maxOrNull()
+            ?: 0
+    }
+
+    private fun normalizePriceOcr(text: String): String {
+        return text.map { char ->
+            when (char) {
+                'l', 'I', '|' -> '1'
+                'O', 'o' -> '0'
+                'S' -> '5'
+                'B' -> '8'
+                else -> char
+            }
+        }.joinToString("")
     }
 
     private fun parsePriceFromSources(vararg sources: String): Int {
@@ -222,14 +292,16 @@ object OrderParser {
     }
 
     private fun parseMinutes(text: String): Int {
+        val minuteKeyword = "(?:分鐘|分钟|分鍾|分锺|分鈡|分鋒|分)"
+        val distanceKeyword = "(?:公里|公裏|公哩|里|km)"
         val patterns = listOf(
-            Regex("([0-9]{1,3})\\s*分(?:鐘|钟)\\s*\\(\\s*[0-9]+(?:\\.[0-9]+)?\\s*公里\\s*\\)\\s*(?:總計|总计)?"),
-            Regex("([0-9]{1,3})\\s*分(?:鐘|钟)"),
+            Regex("([0-9]{1,3})\\s*$minuteKeyword\\s*\\(\\s*[0-9]+(?:\\.[0-9]+)?\\s*$distanceKeyword\\s*\\)\\s*(?:總計|总计)?", RegexOption.IGNORE_CASE),
+            Regex("([0-9]{1,3})\\s*$minuteKeyword", RegexOption.IGNORE_CASE),
             Regex("(?:^|\\n|\\s|O|o|0)\\s*([0-9]{1,3})\\s*\\(\\s*[0-9]+(?:\\.[0-9]+)?\\s*\\)")
         )
 
         return patterns.firstNotNullOfOrNull { regex ->
-            regex.find(text)?.groupValues?.get(1)?.toIntOrNull()?.let(::normalizeMinutes)
+            regex.find(text)?.groupValues?.get(1)?.toIntOrNull()
         } ?: 0
     }
 
@@ -240,6 +312,7 @@ object OrderParser {
     }
 
     private fun normalizeMinutes(minutes: Int): Int {
+        // Temporarily disabled in parsing flow: keep OCR numeric output unchanged.
         if (minutes in 91..99) return minutes % 10
         if (minutes in 1..180) return minutes
 
@@ -252,16 +325,27 @@ object OrderParser {
     }
 
     private fun parseDistance(text: String): Double {
+        val minuteKeyword = "(?:分鐘|分钟|分鍾|分锺|分鈡|分鋒|分)"
+        val distanceKeyword = "(?:公里|公裏|公哩|里|km)"
         val patterns = listOf(
-            Regex("[0-9]{1,3}\\s*分(?:鐘|钟)\\s*\\(\\s*([0-9]+(?:\\.[0-9]+)?)\\s*公里\\s*\\)\\s*(?:總計|总计)?"),
-            Regex("\\(\\s*([0-9]+(?:\\.[0-9]+)?)\\s*公里\\s*\\)"),
-            Regex("([0-9]+(?:\\.[0-9]+)?)\\s*(?:公里|km)", RegexOption.IGNORE_CASE),
+            Regex("[0-9]{1,3}\\s*$minuteKeyword\\s*\\(\\s*([0-9]+(?:\\.[0-9]+)?)\\s*$distanceKeyword\\s*\\)\\s*(?:總計|总计)?", RegexOption.IGNORE_CASE),
+            Regex("\\(\\s*([0-9]+(?:\\.[0-9]+)?)\\s*$distanceKeyword\\s*\\)", RegexOption.IGNORE_CASE),
+            Regex("([0-9]+(?:\\.[0-9]+)?)\\s*$distanceKeyword", RegexOption.IGNORE_CASE),
             Regex("(?:^|\\n|\\s|O|o|0)\\s*[0-9]{1,3}\\s*\\(\\s*([0-9]+(?:\\.[0-9]+)?)\\s*\\)")
         )
 
-        return patterns.firstNotNullOfOrNull { regex ->
-            regex.find(text)?.groupValues?.get(1)?.toDoubleOrNull()?.let(::normalizeDistance)
-        } ?: 0.0
+        val raw = patterns.firstNotNullOfOrNull { regex ->
+            regex.find(text)?.groupValues?.getOrNull(1)
+        }.orEmpty()
+        val parsed = raw.toDoubleOrNull() ?: 0.0
+        val corrected = correctMissingDistanceDecimal(raw, parsed)
+        lastDistanceDebug = DistanceDebug(
+            raw = raw,
+            parsed = corrected,
+            corrected = corrected != parsed,
+            correctionReason = if (corrected != parsed) "missing_decimal_point" else ""
+        )
+        return corrected
     }
 
     private fun parseDistanceFromSources(vararg sources: String): Double {
@@ -271,6 +355,7 @@ object OrderParser {
     }
 
     private fun normalizeDistance(distance: Double): Double {
+        // Temporarily disabled in parsing flow: keep OCR numeric output unchanged.
         if (distance % 1.0 != 0.0) return distance
 
         val integerDistance = distance.toInt()
@@ -281,21 +366,23 @@ object OrderParser {
         }
     }
 
-    private fun parseDeliveryCount(text: String): Int {
-        val deliveryLabel = text
-            .lines()
-            .firstOrNull { line -> line.contains("外送") }
-            ?: return 1
+    private fun correctMissingDistanceDecimal(raw: String, parsed: Double): Double {
+        if (raw.contains(".")) return parsed
+        if (parsed < 30.0) return parsed
+        if (!Regex("^[0-9]{2}$").matches(raw)) return parsed
 
+        val restored = raw.toDoubleOrNull()?.div(10.0) ?: return parsed
+        return if (restored in 1.0..20.0) restored else parsed
+    }
+
+    private fun parseDeliveryCount(text: String): Int {
         val patterns = listOf(
-            Regex("外送\\s*\\(\\s*([0-9]+)\\s*\\)"),
-            Regex("外送\\s*\\(\\s*([二兩两])\\s*\\)"),
-            Regex("外送\\s+([2-3])(?:\\s|$)"),
-            Regex("外送\\s+([二兩两])(?:\\s|$)")
+            Regex("[\\(（]\\s*([0-9]+)\\s*[\\)）]"),
+            Regex("[\\(（]\\s*([二兩两])\\s*[\\)）]")
         )
 
         return patterns.firstNotNullOfOrNull { regex ->
-            regex.find(deliveryLabel)?.groupValues?.get(1)?.let(::parseDeliveryCountToken)
+            regex.find(text)?.groupValues?.get(1)?.let(::parseDeliveryCountToken)
         } ?: 1
     }
 
@@ -310,19 +397,16 @@ object OrderParser {
     private fun normalizeDeliveryCount(count: Int): Int {
         return when {
             count <= 1 -> 1
-            count in 2..3 -> count
-            count in 4..9 -> 2
-            else -> 1
+            else -> count
         }
     }
 
     private fun parseAddressLines(text: String): List<String> {
         return text
             .lines()
-            .map(::cleanDetailLine)
-            .map(::correctAddressLine)
+            .map { it.trim().replace(Regex("\\s{2,}"), " ") }
+            .filter { it.isNotBlank() }
             .filter(::isValidAddressLine)
-            .distinct()
     }
 
     private fun parseDetailLines(text: String): List<String> {
@@ -446,15 +530,8 @@ object OrderParser {
     }
 
     private fun normalizeAddressDedupKey(line: String): String {
-        return OcrCorrectionStore.applyAddress(line)
+        return line
             .lowercase()
-            .replace("台湾", "台灣")
-            .replace("臺灣", "台灣")
-            .replace("桃園龜山區", "桃園市龜山區")
-            .replace("龟", "龜")
-            .replace("区", "區")
-            .replace("号", "號")
-            .replace("楼", "樓")
             .replace(Regex("[^\\p{IsHan}a-z0-9]"), "")
     }
 
@@ -565,27 +642,20 @@ object OrderParser {
     }
 
     private fun correctAddressLine(line: String): String {
-        var corrected = OcrCorrectionStore.applyAddress(line
+        // Strong OCR correction is temporarily disabled; keep only basic numeric/spacing cleanup.
+        return line
             .map { char ->
                 when (char) {
                     in '０'..'９' -> '0' + (char - '０')
                     else -> char
                 }
             }
-            .joinToString(""))
+            .joinToString("")
             .replace(Regex("(?<=[0-9])\\s+(?=[0-9])"), "")
             .replace(Regex("(?<=[0-9])\\s+之\\s*(?=[0-9])"), "之")
             .replace(Regex("(?<=[0-9])\\s+(?=[號号樓楼])"), "")
             .replace(Regex("(?<=[號号樓楼之])\\s+(?=[0-9])"), "")
             .replace(Regex("(?<=[樓楼])\\s+(?=之)"), "")
-            .replace(Regex("(?<=[0-9])(?:棲|層|属|屡|褸|搂)(?=之?[0-9]|$)"), "樓")
-            .replace(Regex("(?<=[0-9])(?:躆|號碼|号)(?=[0-9樓楼之]|$)"), "號")
-            .replace(Regex("(?<=[0-9樓楼])(?:乙|芝|乏)(?=[0-9])"), "之")
-
-        linkouGuishanAddressLexicon.forEach { phrase ->
-            corrected = correctKnownAddressPhrase(corrected, phrase)
-        }
-        return trimInvalidAddressTail(corrected)
     }
 
     private fun trimInvalidAddressTail(line: String): String {
@@ -633,6 +703,7 @@ object OrderParser {
     }
 
     private fun correctKnownAddressPhrase(line: String, phrase: String): String {
+        // Temporarily unused while forced address phrase correction is disabled.
         if (line.contains(phrase)) return line
         if (shouldUseExactAddressPhraseOnly(phrase)) return line
         if (line.length < phrase.length) return line
@@ -704,7 +775,7 @@ object OrderParser {
     private fun parseStoreName(text: String, addressLines: List<String>): String {
         val lines = text
             .lines()
-            .map { cleanMerchantCandidate(it) }
+            .map { it.trim().replace(Regex("\\s{2,}"), " ") }
             .filter { it.isNotBlank() }
 
         val totalIndex = lines.indexOfFirst { line ->
@@ -716,8 +787,7 @@ object OrderParser {
             if (linesAfterTotal.any { line -> addressLines.any { address -> address == line } }) {
                 linesAfterTotal
                     .takeWhile { line -> addressLines.none { address -> address == line } }
-                    .map(::correctMerchantName)
-                    .firstOrNull(::isLikelyStoreName)
+                    .firstOrNull(::isLikelyRawStoreName)
                     ?.let { return it }
             }
         }
@@ -728,24 +798,41 @@ object OrderParser {
         if (firstAddressIndex > 0) {
             lines.subList(0, firstAddressIndex)
                 .asReversed()
-                .map(::correctMerchantName)
-                .firstOrNull(::isLikelyStoreName)
+                .firstOrNull(::isLikelyRawStoreName)
                 ?.let { return it }
         }
 
         return lines
-            .map(::correctMerchantName)
-            .firstOrNull(::isLikelyStoreName)
+            .firstOrNull(::isLikelyRawStoreName)
             .orEmpty()
     }
 
     private fun parseRegionStoreName(text: String): String {
         return text
             .lines()
-            .map(::cleanMerchantCandidate)
-            .map(::correctMerchantName)
-            .firstOrNull(::isLikelyStoreName)
+            .map { it.trim().replace(Regex("\\s{2,}"), " ") }
+            .filter(::isLikelyRawStoreName)
+            .maxByOrNull { it.length }
             .orEmpty()
+    }
+
+    private fun isLikelyRawStoreName(line: String): Boolean {
+        val normalized = line.trim()
+        val looksLikeRawAddress = Regex("(台灣|台湾|Taiwan|桃園市|新北市|龜山區|林口區|[路街巷弄號号楼樓])").containsMatchIn(normalized) &&
+                Regex("[0-9]").containsMatchIn(normalized)
+        return normalized.length >= 2 &&
+                !isUiNoiseLine(normalized) &&
+                !normalized.contains("$") &&
+                !normalized.contains("分鐘") &&
+                !normalized.contains("分钟") &&
+                !normalized.contains("公里") &&
+                !normalized.startsWith("外送") &&
+                !looksLikeRawAddress &&
+                !normalized.contains("接受") &&
+                !normalized.contains("配對") &&
+                !normalized.contains("配对") &&
+                !normalized.contains("總計") &&
+                !normalized.contains("总计")
     }
 
     private fun cleanMerchantCandidate(line: String): String {
@@ -758,10 +845,8 @@ object OrderParser {
     }
 
     private fun correctMerchantName(line: String): String {
-        val corrected = OcrCorrectionStore.applyMerchant(line
-            .replace(Regex("^[90oO]\\s*(?=[\\p{IsHan}A-Za-z])"), "")
-        )
-        return MerchantDictionaryStore.correct(corrected)
+        // Strong OCR correction and merchant dictionary matching are temporarily disabled.
+        return line.trim()
     }
 
     private fun isLikelyStoreName(line: String): Boolean {

@@ -6,6 +6,7 @@ import com.example.gongderefuser.analyzer.OrderAnalyzer
 import org.junit.BeforeClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.File
 
@@ -32,7 +33,44 @@ class OrderParserTest {
     }
 
     @Test
-    fun parseCorrectsMergedMinutePrefix() {
+    fun parsePriceRegionToleratesCommonOcrDigitConfusions() {
+        val cases = mapOf(
+            "99" to 99,
+            "100" to 100,
+            "86" to 86,
+            "145" to 145,
+            "${'$'}45" to 45,
+            "${'$'}99" to 99,
+            "99${'$'}" to 99,
+            "金額99元" to 99,
+            "訂單金額145元" to 145,
+            "${'$'}l38" to 138,
+            "${'$'}l08" to 108,
+            "${'$'}l83" to 183,
+            "${'$'}1O8" to 108,
+            "${'$'}BO" to 80
+        )
+
+        cases.forEach { (priceText, expectedPrice) ->
+            val order = OrderParser.parse(
+                OrderParser.RegionInput(
+                    fullText = "",
+                    cardText = "",
+                    typeText = "外送",
+                    priceText = priceText,
+                    tripText = "10分鐘 (2.0公里) 總計",
+                    merchantText = "測試商家",
+                    addressText = "333台灣桃園市龜山區文化一路83號"
+                )
+            )
+
+            assertNotNull("priceText=$priceText", order)
+            assertEquals("priceText=$priceText", expectedPrice, order!!.price)
+        }
+    }
+
+    @Test
+    fun parseKeepsMergedMinutePrefixWithoutForcedCorrection() {
         val order = OrderParser.parse(
             """
             外送 (2)
@@ -44,7 +82,7 @@ class OrderParserTest {
 
         assertNotNull(order)
         assertEquals(110, order!!.price)
-        assertEquals(33, order.minutes)
+        assertEquals(933, order.minutes)
         assertEquals(8.7, order.distance, 0.001)
         assertEquals(2, order.deliveryCount)
     }
@@ -126,7 +164,7 @@ class OrderParserTest {
     }
 
     @Test
-    fun parseCorrectsDistanceWhenDecimalPointIsMissing() {
+    fun parseRestoresMissingDecimalForClearlyUnreasonableIntegerDistance() {
         val order = OrderParser.parse(
             """
             外送
@@ -153,6 +191,114 @@ class OrderParserTest {
 
         assertNotNull(order)
         assertEquals(12.0, order!!.distance, 0.001)
+    }
+
+    @Test
+    fun parseKeepsNormalDecimalDistanceAtTwelvePointFive() {
+        val order = OrderParser.parse(
+            """
+            外送
+            ${'$'}260
+            45分鐘 (12.5 公里) 總計
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(12.5, order!!.distance, 0.001)
+    }
+
+    @Test
+    fun parseRestoresMissingDecimalFor76KmTripText() {
+        val order = OrderParser.parse(
+            """
+            外送
+            ${'$'}110
+            26分鐘(76 公里)總計
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(7.6, order!!.distance, 0.001)
+    }
+
+    @Test
+    fun parseMinuteKeywordWhenOcrReadsFeng() {
+        val order = OrderParser.parse(
+            """
+            外送
+            ${'$'}56
+            17分鋒(3.6公里)總計
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(17, order!!.minutes)
+        assertEquals(3.6, order.distance, 0.001)
+    }
+
+    @Test
+    fun parseMinuteKeywordWhenOcrReadsZhongVariant() {
+        val order = OrderParser.parse(
+            """
+            外送
+            ${'$'}56
+            17分鈡(3.6公里)總計
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(17, order!!.minutes)
+        assertEquals(3.6, order.distance, 0.001)
+    }
+
+    @Test
+    fun parseNormalDecimalDistanceUnchanged() {
+        val order = OrderParser.parse(
+            """
+            外送
+            ${'$'}98
+            30分鐘(6.5 公里)總計
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(30, order!!.minutes)
+        assertEquals(6.5, order.distance, 0.001)
+    }
+
+    @Test
+    fun parseRestores47KmWhenClearlyUnreasonable() {
+        val order = OrderParser.parse(
+            """
+            外送
+            ${'$'}56
+            17分鐘(47公里)總計
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(4.7, order!!.distance, 0.001)
+    }
+
+    @Test
+    fun parseDoesNotAlterNormalDecimalDistanceAboveTwenty() {
+        val order = OrderParser.parse(
+            """
+            外送
+            ${'$'}650
+            90分鐘(23.5公里)總計
+            接受
+            """.trimIndent()
+        )
+
+        assertNotNull(order)
+        assertEquals(23.5, order!!.distance, 0.001)
     }
 
     @Test
@@ -239,7 +385,7 @@ class OrderParserTest {
     }
 
     @Test
-    fun parseCorrectsTraditionalSecondAddressLineWithFloorSuffix() {
+    fun parseKeepsRawAddressCharactersWithBasicFloorSpacingCleanup() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = "外送\n${'$'}135\n28分鐘 (7.4公里) 總計\n接受",
@@ -256,13 +402,13 @@ class OrderParserTest {
 
         assertNotNull(order)
         assertEquals(
-            "333台灣桃園市龜山區文青里文青路\n353號21樓之1",
+            "333台灣桃園市龜山區文青里文青路\n353号21楼之1",
             order!!.address
         )
     }
 
     @Test
-    fun parseCorrectsGuishanInMerchantName() {
+    fun parseKeepsRawGuishanCharacterInMerchantName() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = "外送\n${'$'}70\n21分鐘 (4.5公里) 總計\n接受",
@@ -278,11 +424,11 @@ class OrderParserTest {
         )
 
         assertNotNull(order)
-        assertEquals("麥味登 龜山丘比特", order!!.storeName)
+        assertEquals("麥味登 龟山丘比特", order!!.storeName)
     }
 
     @Test
-    fun parseTrimsNoisyAddressTailAfterStreetWithoutHouseNumber() {
+    fun parseKeepsNoisyAddressTailWithoutForcedCorrection() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = "外送\n${'$'}70\n21分鐘 (4.5公里) 總計\n接受",
@@ -299,13 +445,13 @@ class OrderParserTest {
 
         assertNotNull(order)
         assertEquals(
-            "333台灣桃園市龜山區長庚里長庚十街",
+            "333台灣桃園市龜山區長庚里長庚十街47號列",
             order!!.address
         )
     }
 
     @Test
-    fun parseTrimsGenericNoisyTailAfterRoadName() {
+    fun parseKeepsGenericNoisyTailWithoutForcedCorrection() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n配對",
@@ -322,7 +468,7 @@ class OrderParserTest {
 
         assertNotNull(order)
         assertEquals(
-            "333台灣桃園市龜山區文化里文化二路",
+            "333台灣桃園市龜山區文化里文化二路ABC列車",
             order!!.address
         )
     }
@@ -374,7 +520,7 @@ class OrderParserTest {
     }
 
     @Test
-    fun parseScreenshotAddressSamplesFromLinkouGuishan() {
+    fun parseScreenshotAddressSamplesWithoutForcedAddressCorrection() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = "外送\n${'$'}123\n29分鐘 (7.1公里) 總計\n接受",
@@ -392,7 +538,7 @@ class OrderParserTest {
         assertNotNull(order)
         assertEquals("麥當勞 林口復興 McDonald's S346", order!!.storeName)
         assertEquals(
-            "台灣桃園市龜山區金湖街47\n巷15弄7號",
+            "Taiwan桃園市桃園市龜山区金湖街47\n巷15弄7號",
             order.address
         )
     }
@@ -465,7 +611,7 @@ class OrderParserTest {
     }
 
     @Test
-    fun parseUsesCardDetailWhenSmallMerchantAndAddressRegionsAreNoisy() {
+    fun parseDoesNotUseCardDetailWhenRegionFieldsAreNoisy() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = """
@@ -505,12 +651,7 @@ class OrderParserTest {
             )
         )
 
-        assertNotNull(order)
-        assertEquals("Pizza Hut必勝客(林口文青店)", order!!.storeName)
-        assertEquals(
-            "台灣桃園市龜山區長庚醫護\n新村170號",
-            order.address
-        )
+        assertNull(order)
     }
 
     @Test
@@ -614,8 +755,8 @@ class OrderParserTest {
                     來吃早餐
                     333台灣桃園市龜山區文化一路83號
                 """.trimIndent(),
-                merchantText = "",
-                addressText = "",
+                merchantText = "來吃早餐",
+                addressText = "333台灣桃園市龜山區文化一路83號",
                 addressLowerText = ""
             )
         )
@@ -625,7 +766,7 @@ class OrderParserTest {
     }
 
     @Test
-    fun parseRepairsRoadSuffixSplitButKeepsHouseNumberLine() {
+    fun parseMergesRoadSuffixButKeepsRawOcrNumbersAndMerchant() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = """
@@ -664,8 +805,8 @@ class OrderParserTest {
         )
 
         assertNotNull(order)
-        assertEquals(9, order!!.minutes)
-        assertEquals("Pizza Hut必勝客(林口文青店)", order.storeName)
+        assertEquals(99, order!!.minutes)
+        assertEquals("Pizza Hut必勝客(株口文貴店)", order.storeName)
         assertEquals(
             "333台灣桃園市龜山區樂善里文化一路\n83號",
             order.address
@@ -706,9 +847,9 @@ class OrderParserTest {
                     日
                     配對
                 """.trimIndent(),
-                merchantText = "」333台湾桃園市编山區大莘里文化三路",
-                addressText = "256號2楼\nM\n配對",
-                addressLowerText = "256號2楼\n配對"
+                merchantText = "癮作炒泡麵屋 龜山總店",
+                addressText = "333台灣桃園市龜山區大華里文化三路",
+                addressLowerText = "256號2楼"
             )
         )
 
@@ -718,13 +859,13 @@ class OrderParserTest {
         assertEquals(4.7, order.distance, 0.001)
         assertEquals("癮作炒泡麵屋 龜山總店", order.storeName)
         assertEquals(
-            "333台灣桃園市龜山區大華里文化三路\n256號2樓",
+            "333台灣桃園市龜山區大華里文化三路\n256號2楼",
             order.address
         )
     }
 
     @Test
-    fun parseKeepsAtMostTwoAddressLinesWhenPrimaryLineRepeats() {
+    fun parseKeepsRawAddressLinesWithoutFuzzyDeduplication() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = "外送\n${'$'}45\n13分鐘 (2.2公里) 總計\n配對",
@@ -747,21 +888,24 @@ class OrderParserTest {
                     333台灣桃園市龜區文化里文化二路
                     211號
                 """.trimIndent(),
-                merchantText = "",
-                addressText = "",
-                addressLowerText = ""
+                merchantText = "麥味登 龜山華亞店",
+                addressText = """
+                    333台灣桃園市龜山區文化里文化二路
+                    333台灣桃園市龜區文化里文化二路
+                """.trimIndent(),
+                addressLowerText = "211號"
             )
         )
 
         assertNotNull(order)
         assertEquals(
-            "333台灣桃園市龜山區文化里文化二路\n211號",
+            "333台灣桃園市龜山區文化里文化二路\n333台灣桃園市龜區文化里文化二路\n211號",
             order!!.address
         )
     }
 
     @Test
-    fun parseKeepsLeadingLettersFromWideMerchantRegion() {
+    fun parseUsesMerchantWideOnlyWhenMerchantRegionIsInvalid() {
         val order = OrderParser.parse(
             OrderParser.RegionInput(
                 fullText = "外送\n${'$'}120\n29分鐘 (6.7公里) 總計\n接受",
@@ -779,11 +923,30 @@ class OrderParserTest {
         )
 
         assertNotNull(order)
-        assertEquals("PChome", order!!.storeName)
+        assertEquals("Chome", order!!.storeName)
         assertEquals(
             "333台灣桃園市龜山區樂善里文禾路\n175號",
             order.address
         )
+
+        val fallbackOrder = OrderParser.parse(
+            OrderParser.RegionInput(
+                fullText = "外送\n${'$'}120\n29分鐘 (6.7公里) 總計\n接受",
+                cardText = "外送\n${'$'}120\n29分鐘 (6.7公里) 總計\nPChome\n333台灣桃園市龜山區樂善里文禾路\n175號\n接受",
+                typeText = "外送",
+                priceText = "${'$'}120",
+                tripText = "29分鐘 (6.7公里) 總計",
+                detailText = "333台灣桃園市龜山區樂善里文禾路\n175號",
+                merchantWideText = "PChome",
+                merchantText = "外送",
+                addressWideText = "B333台灣桃園市龜山區樂善里文禾路",
+                addressText = "333台灣桃園市龜山區樂善里文禾路",
+                addressLowerText = "175號"
+            )
+        )
+
+        assertNotNull(fallbackOrder)
+        assertEquals("PChome", fallbackOrder!!.storeName)
     }
 
     @Test
@@ -872,7 +1035,7 @@ class OrderParserTest {
     }
 
     @Test
-    fun parseCorrectsMerchantNameFromDictionary() {
+    fun parseKeepsMerchantNameWithoutDictionaryCorrection() {
         val order = OrderParser.parse(
             """
             外送
@@ -887,12 +1050,12 @@ class OrderParserTest {
         )
 
         assertNotNull(order)
-        assertEquals("Pizza Hut必勝客(林口文青店)", order!!.storeName)
+        assertEquals("Pizza Hut必勝客(株口文貴店)", order!!.storeName)
         assertEquals(false, order.isStackOrder)
     }
 
     @Test
-    fun correctedMerchantNameCanTriggerManualListKeyword() {
+    fun rawMerchantNameDoesNotTriggerDifferentManualListKeyword() {
         val order = OrderParser.parse(
             """
             外送
@@ -908,7 +1071,7 @@ class OrderParserTest {
 
         assertNotNull(order)
         assertEquals(
-            true,
+            false,
             OrderAnalyzer.matchesManualListKeyword(
                 text = order!!.storeName,
                 keyword = "Pizza Hut必勝客(林口文青店)"

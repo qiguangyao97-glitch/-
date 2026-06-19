@@ -26,7 +26,12 @@ object MonitoringState {
             .putBoolean(KEY_ENABLED, enabled)
             .apply()
 
-        if (!enabled) {
+        if (enabled) {
+            MonitorNotificationHelper.showRunning(appContext)
+            MyAccessibilityService.refreshForegroundNotification()
+        } else {
+            MonitorNotificationHelper.cancel(appContext)
+            MyAccessibilityService.refreshForegroundNotification()
             appContext.stopService(Intent(appContext, ScreenCaptureService::class.java))
         }
 

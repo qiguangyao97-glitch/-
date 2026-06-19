@@ -107,7 +107,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun startInForeground() {
-        startForeground(1, createNotification())
+        startForeground(MonitorNotificationHelper.NOTIFICATION_ID, createNotification())
     }
 
     private fun startCapture() {
@@ -266,6 +266,7 @@ class ScreenCaptureService : Service() {
                 priceText = regionText.priceText,
                 tripText = regionText.tripText,
                 detailText = regionText.detailText,
+                sameDropoffText = regionText.sameDropoffText,
                 merchantText = regionText.merchantText,
                 merchantWideText = regionText.merchantWideText,
                 addressText = regionText.addressText,
@@ -273,34 +274,39 @@ class ScreenCaptureService : Service() {
                 addressLowerText = regionText.addressLowerText
             )
         ) else null
-        return handleOrder(order, bitmap)
+        return handleOrder(order, bitmap, regionText.tripText)
     }
 
-    private fun handleOrder(order: com.example.gongderefuser.model.OrderData?, bitmap: Bitmap? = null): Boolean {
-        if (order == null) {
-            Log.d("ORDER_ANALYSIS", "incomplete order ignored")
+    private fun handleOrder(
+        order: com.example.gongderefuser.model.OrderData?,
+        bitmap: Bitmap? = null,
+        tripText: String = ""
+    ): Boolean {
+        val gate = OrderResultGate.evaluate(order, tripText = tripText)
+        Log.i("ORDER_POPUP_VALIDATION", gate.debugLog)
+        DiagnosticLogStore.append(this, "ORDER_POPUP_VALIDATION", gate.debugLog)
+        if (!gate.shouldShow) {
+            Log.d("ORDER_ANALYSIS", "invalid order ignored ${gate.skipResultReason}")
+            DiagnosticLogStore.append(this, "CAPTURE", "skipResultReason=${gate.skipResultReason}")
             return false
         }
+        val validOrder = order ?: return false
 
-        val signature = "${order.price}-${order.minutes}-${order.distance}-${order.deliveryCount}-${order.isAddOnOrder}"
+        val signature = "${validOrder.price}-${validOrder.minutes}-${validOrder.distance}-${validOrder.deliveryCount}-${validOrder.isAddOnOrder}"
         val now = System.currentTimeMillis()
         if (signature == lastShownOrderSignature && now - lastShownOrderTime < 30_000) {
             Log.d("ORDER_ANALYSIS", "duplicate order ignored")
-            return true
+            DiagnosticLogStore.append(this, "CAPTURE", "skipResultReason=DUPLICATE_RESULT")
+            return false
         }
 
         lastShownOrderSignature = signature
         lastShownOrderTime = now
 
-        val analysis = OrderAnalyzer.analyzeResult(this, order)
-        val screenshotPath = bitmap?.takeIf {
-            AppSettings.isOrderCaptureEnabled(this)
-        }?.let {
-            OrderCaptureStore.saveOrderCapture(this, it, analysis)
-        }.orEmpty()
-        OrderHistory.add(this, analysis, "实时", screenshotPath)
+        val analysis = OrderAnalyzer.analyzeResult(this, validOrder)
+        OrderHistory.add(this, analysis, "实时", "")
 
-        Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(order))
+        Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(this, validOrder))
 
         val shownByAccessibility = MyAccessibilityService.showFeedback(analysis)
         if (!shownByAccessibility) {
@@ -341,27 +347,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun createNotification(): Notification {
-
-        val channelId = "capture"
-
-        val channel = NotificationChannel(
-            channelId,
-            "Screen Capture",
-            NotificationManager.IMPORTANCE_LOW
-        )
-
-        val manager =
-            getSystemService(Context.NOTIFICATION_SERVICE)
-                    as NotificationManager
-
-        manager.createNotificationChannel(channel)
-
-        return Notification.Builder(this, channelId)
-            .setContentTitle("功德拒絕器運行中")
-            .setContentText("后台实时监测 目標平台 订单")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setOngoing(true)
-            .build()
+        return MonitorNotificationHelper.createRunningNotification(this)
     }
 
     private fun showStoppedNotification(message: String) {
@@ -400,8 +386,18 @@ class ScreenCaptureService : Service() {
         runCatching { unregisterReceiver(screenReceiver) }
         DiagnosticLogStore.append(this, "SERVICE", "destroyed package=$packageName")
         stopCapture()
+        stopForegroundCompat()
         MyAccessibilityService.refreshStatusOverlay()
         super.onDestroy()
+    }
+
+    private fun stopForegroundCompat() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

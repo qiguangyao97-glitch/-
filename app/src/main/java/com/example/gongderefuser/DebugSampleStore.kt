@@ -54,12 +54,31 @@ object DebugSampleStore {
                         appendLine("时间=${analysis.minutes} 分钟")
                         appendLine("距离=${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
                         appendLine("预计时薪=${OrderAnalyzer.formatMoney(analysis.effectiveHourly)} 元/小时")
-                        appendLine("白名单=${analysis.isWhitelisted} ${analysis.matchedWhitelistKeyword} ${analysis.whitelistNote}")
-                        appendLine("黑名单=${analysis.isBlacklisted} ${analysis.matchedBlacklistKeyword} ${analysis.blacklistNote}")
+                        appendLine("元/公里=${OrderAnalyzer.formatMoney(analysis.yuanPerKm)} 元/公里")
+                        appendLine("配送数量=${analysis.deliveryCount}")
+                        appendLine("同地點配送=${analysis.isSameLocationStack}")
+                        appendLine("标签备注=${analysis.isWhitelisted} ${analysis.matchedWhitelistKeyword} ${analysis.whitelistNote}")
+                        appendLine("避雷标签=${analysis.isBlacklisted} ${analysis.matchedBlacklistKeyword} ${analysis.blacklistNote}")
+                        order?.let {
+                            appendLine("sameDropoffText=${it.sameDropoffText}")
+                            appendLine("sameDropoffMatched=${it.sameDropoffMatched}")
+                            appendLine("sameDropoff=${it.isSameLocationStack}")
+                            appendLine("priceStatus=${it.priceStatus}")
+                            appendLine("tripStatus=${it.tripStatus}")
+                            appendLine("merchantStatus=${it.merchantStatus}")
+                            appendLine("addressStatus=${it.addressStatus}")
+                            appendLine("addressSource=${it.addressSource}")
+                            appendLine("typeStatus=${it.typeStatus}")
+                        }
                     }
+                    appendLine("===== DISTANCE DEBUG =====")
+                    appendLine(OrderParser.distanceDebugInfo())
+                    appendLine("===== OCR PREPROCESS =====")
+                    appendLine(regionText.ocrPreprocessDebugInfo)
                     appendLine("isPairOffer=${regionText.isPairOffer}")
                     appendLine("hasAnchoredCard=${regionText.hasAnchoredCard}")
-                    appendLine("===== FULL =====")
+                    appendAnchorDebug(regionText.anchorDebugInfo)
+                    appendLine("===== 定位诊断 =====")
                     appendLine(regionText.fullText)
                     appendLine("===== CARD =====")
                     appendLine(regionText.cardText)
@@ -69,18 +88,12 @@ object DebugSampleStore {
                     appendLine(regionText.priceText)
                     appendLine("===== TRIP =====")
                     appendLine(regionText.tripText)
-                    appendLine("===== DETAIL =====")
-                    appendLine(regionText.detailText)
+                    appendLine("===== SAME_DROPOFF =====")
+                    appendLine(regionText.sameDropoffText)
                     appendLine("===== MERCHANT =====")
                     appendLine(regionText.merchantText)
-                    appendLine("===== MERCHANT WIDE =====")
-                    appendLine(regionText.merchantWideText)
                     appendLine("===== ADDRESS =====")
                     appendLine(regionText.addressText)
-                    appendLine("===== ADDRESS WIDE =====")
-                    appendLine(regionText.addressWideText)
-                    appendLine("===== ADDRESS LOWER =====")
-                    appendLine(regionText.addressLowerText)
                 },
                 Charsets.UTF_8
             )
@@ -139,16 +152,19 @@ object DebugSampleStore {
     private fun regionColor(name: String): Int {
         return when (name) {
             "actionButton" -> Color.rgb(255, 45, 85)
-            "deliveryAnchorSearch" -> Color.rgb(0, 180, 255)
+            "closeSearch" -> Color.rgb(175, 82, 222)
+            "closeButton", "closeButtonDetected" -> Color.rgb(255, 45, 85)
+            "deliveryAnchorSearch", "deliveryAnchorSearchActual" -> Color.rgb(0, 180, 255)
             "deliveryAnchor" -> Color.rgb(0, 122, 255)
-            "pickupAnchor" -> Color.rgb(90, 200, 250)
-            "dropoffAnchor" -> Color.rgb(88, 86, 214)
-            "card" -> Color.rgb(0, 122, 255)
-            "type" -> Color.rgb(128, 0, 255)
-            "price" -> Color.rgb(255, 149, 0)
-            "trip" -> Color.rgb(255, 214, 10)
-            "merchant", "merchantWide" -> Color.rgb(52, 199, 89)
-            "address", "addressWide", "addressLower" -> Color.rgb(255, 59, 48)
+            "pickupAnchor", "pickupAnchorShiftedReference" -> Color.rgb(90, 200, 250)
+            "dropoffAnchor", "dropoffAnchorShiftedReference" -> Color.rgb(88, 86, 214)
+            "card", "cardActual" -> Color.rgb(0, 122, 255)
+            "type", "typeActual" -> Color.rgb(128, 0, 255)
+            "price", "priceActual" -> Color.rgb(255, 149, 0)
+            "trip", "tripActual" -> Color.rgb(255, 214, 10)
+            "sameDropoff", "sameDropoffActual" -> Color.rgb(48, 209, 88)
+            "merchant", "merchantWide", "merchantActual" -> Color.rgb(52, 199, 89)
+            "address", "addressWide", "addressLower", "addressActual", "addressWideActual" -> Color.rgb(255, 59, 48)
             else -> Color.rgb(90, 200, 250)
         }
     }
@@ -171,6 +187,7 @@ object DebugSampleStore {
                 priceText = regionText.priceText,
                 tripText = regionText.tripText,
                 detailText = regionText.detailText,
+                sameDropoffText = regionText.sameDropoffText,
                 merchantText = regionText.merchantText,
                 merchantWideText = regionText.merchantWideText,
                 addressText = regionText.addressText,
@@ -178,4 +195,29 @@ object DebugSampleStore {
                 addressLowerText = regionText.addressLowerText
             )
         ) else null
+
+    private fun StringBuilder.appendAnchorDebug(info: OcrHelper.AnchorDebugInfo) {
+        appendLine("anchorSource=${info.anchorSource}")
+        appendLine("pickupDetected=${info.pickupDetected}")
+        appendLine("dropoffDetected=${info.dropoffDetected}")
+        appendLine("cardRect=${formatRect(info.cardRect)}")
+        appendLine("cardTop=${info.cardRect?.top ?: ""}")
+        appendLine("cardBottom=${info.cardRect?.bottom ?: ""}")
+        appendLine("cardHeight=${info.cardRect?.height() ?: ""}")
+        appendLine("closeButtonRect=${formatRect(info.closeButtonRect)}")
+        appendLine("templateCloseY=${info.templateCloseY ?: ""}")
+        appendLine("actualCloseY=${info.actualCloseY ?: ""}")
+        appendLine("closeShiftY=${info.closeShiftY ?: ""}")
+        appendLine("pickupAnchorRect=${formatRect(info.pickupAnchorRect)}")
+        appendLine("dropoffAnchorRect=${formatRect(info.dropoffAnchorRect)}")
+        appendLine("priceRect=${formatRect(info.priceRect)}")
+        appendLine("tripRect=${formatRect(info.tripRect)}")
+        appendLine("merchantRect=${formatRect(info.merchantRect)}")
+        appendLine("addressRect=${formatRect(info.addressRect)}")
+        appendLine("addressWideRect=${formatRect(info.addressWideRect)}")
+    }
+
+    private fun formatRect(rect: android.graphics.Rect?): String {
+        return rect?.let { "${it.left},${it.top},${it.right},${it.bottom}" }.orEmpty()
+    }
 }

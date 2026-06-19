@@ -20,6 +20,12 @@ data class OrderData(
     // 是否取货或配送地点相同的夹单
     val isSameLocationStack: Boolean = false,
 
+    // 同地點配送 OCR 原文
+    val sameDropoffText: String = "",
+
+    // 是否命中同地點配送文字
+    val sameDropoffMatched: Boolean = false,
+
     // 外送数量，普通单为1，夹单通常为2以上
     val deliveryCount: Int = 1,
 
@@ -36,5 +42,14 @@ data class OrderData(
     val storeName: String = "",
 
     // 店家地址
-    val address: String = ""
+    val address: String = "",
+
+    // 地址最终来源：ADDRESS / ADDRESS_WIDE / ADDRESS_LOWER
+    val addressSource: String = "",
+
+    val priceStatus: String = "OK",
+    val tripStatus: String = "OK",
+    val merchantStatus: String = "OK",
+    val addressStatus: String = "OK",
+    val typeStatus: String = "OK"
 )

@@ -14,7 +14,7 @@ class OcrCalibrationView(context: Context) : View(context) {
     private var bitmap: Bitmap? = null
     private val regions = linkedMapOf<String, RectF>()
     private val imageRect = RectF()
-    private var selectedName: String = "actionButton"
+    private var selectedName: String = "card"
     private var lastX = 0f
     private var lastY = 0f
     private var mode = DragMode.None
@@ -42,7 +42,7 @@ class OcrCalibrationView(context: Context) : View(context) {
         OcrCalibrationStore.regionNames.forEach { name ->
             regions[name] = RectF(savedRegions[name] ?: OcrCalibrationStore.defaultRegions().getValue(name))
         }
-        selectedName = regions.keys.firstOrNull { it == "actionButton" } ?: regions.keys.first()
+        selectedName = regions.keys.firstOrNull { it == "card" } ?: regions.keys.first()
         requestLayout()
         invalidate()
     }
@@ -171,8 +171,8 @@ class OcrCalibrationView(context: Context) : View(context) {
     }
 
     private fun clamp(rect: RectF): RectF {
-        val minWidth = 0.03f
-        val minHeight = 0.025f
+        val minWidth = 0.008f
+        val minHeight = 0.008f
         var left = rect.left
         var top = rect.top
         var right = rect.right
@@ -219,12 +219,14 @@ class OcrCalibrationView(context: Context) : View(context) {
         return when (name) {
             "actionButton" -> Color.rgb(255, 45, 85)
             "deliveryAnchor" -> Color.rgb(0, 122, 255)
-            "pickupAnchor" -> Color.rgb(90, 200, 250)
-            "dropoffAnchor" -> Color.rgb(88, 86, 214)
+            "pickupAnchor", "pickupAnchorShiftedReference" -> Color.rgb(90, 200, 250)
+            "dropoffAnchor", "dropoffAnchorShiftedReference" -> Color.rgb(88, 86, 214)
+            "deliveryAnchorSearch" -> Color.rgb(0, 180, 255)
             "card" -> Color.rgb(0, 122, 255)
             "type" -> Color.rgb(128, 0, 255)
             "price" -> Color.rgb(255, 149, 0)
             "trip" -> Color.rgb(255, 214, 10)
+            "sameDropoff" -> Color.rgb(48, 209, 88)
             "merchant", "merchantWide" -> Color.rgb(52, 199, 89)
             "address", "addressWide", "addressLower" -> Color.rgb(255, 59, 48)
             else -> Color.rgb(90, 200, 250)

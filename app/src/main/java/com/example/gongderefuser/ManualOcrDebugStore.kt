@@ -7,10 +7,12 @@ import android.graphics.Color
 import android.graphics.Paint
 import com.example.gongderefuser.analyzer.OrderAnalyzer
 import com.example.gongderefuser.model.OrderData
+import com.example.gongderefuser.parser.OrderParser
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 object ManualOcrDebugStore {
     private val formatter = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US)
@@ -35,10 +37,14 @@ object ManualOcrDebugStore {
                     appendLine("parsed=${order != null}")
                     appendLine("isPairOffer=${regionText.isPairOffer}")
                     appendLine("hasAnchoredCard=${regionText.hasAnchoredCard}")
+                    appendAnchorDebug(regionText.anchorDebugInfo)
                     if (order != null) {
                         val analysis = OrderAnalyzer.analyzeResult(context, order)
                         appendLine("===== SUMMARY =====")
                         appendLine("建议=${analysis.score}分 · ${analysis.recommendation}")
+                        appendLine("接单模式=${acceptModeLabel(analysis.acceptMode)}")
+                        appendLine("趟奖加分=${analysis.rewardModeBonus}")
+                        appendLine("趟奖原因=${analysis.rewardModeReason}")
                         appendLine("商家=${analysis.storeName}")
                         appendLine("地址=${analysis.storeAddress}")
                         appendLine("类型=${analysis.orderType}")
@@ -46,8 +52,34 @@ object ManualOcrDebugStore {
                         appendLine("时间=${analysis.minutes} 分钟")
                         appendLine("距离=${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
                         appendLine("预计时薪=${OrderAnalyzer.formatMoney(analysis.effectiveHourly)} 元/小时")
+                        appendLine("元/公里=${OrderAnalyzer.formatMoney(analysis.yuanPerKm)} 元/公里")
+                        appendLine("配送数量=${analysis.deliveryCount}")
+                        appendLine("===== SCORE DEBUG =====")
+                        appendLine("模式=${acceptModeLabel(analysis.acceptMode)}")
+                        appendLine("金额来源=${analysis.scoreMoneySource}")
+                        appendLine("时薪评分=${analysis.hourlyScore.roundToInt()}")
+                        appendLine("元公里评分=${analysis.yuanPerKmScore.roundToInt()}")
+                        appendLine("平均单价评分=${analysis.averagePriceScore.roundToInt()}")
+                        appendLine("基础评分=${analysis.baseScore.roundToInt()}")
+                        appendLine("趟奖加权=${analysis.rewardModeBonus}")
+                        appendLine("趟奖原因=${analysis.rewardModeReason}")
+                        appendLine("最终评分=${analysis.score}")
+                        appendLine("同地點配送=${analysis.isSameLocationStack}")
+                        appendLine("sameDropoffText=${order.sameDropoffText}")
+                        appendLine("sameDropoffMatched=${order.sameDropoffMatched}")
+                        appendLine("sameDropoff=${order.isSameLocationStack}")
+                        appendLine("priceStatus=${order.priceStatus}")
+                        appendLine("tripStatus=${order.tripStatus}")
+                        appendLine("merchantStatus=${order.merchantStatus}")
+                        appendLine("addressStatus=${order.addressStatus}")
+                        appendLine("addressSource=${order.addressSource}")
+                        appendLine("typeStatus=${order.typeStatus}")
                     }
-                    appendLine("===== FULL =====")
+                    appendLine("===== DISTANCE DEBUG =====")
+                    appendLine(OrderParser.distanceDebugInfo())
+                    appendLine("===== OCR PREPROCESS =====")
+                    appendLine(regionText.ocrPreprocessDebugInfo)
+                    appendLine("===== 定位诊断 =====")
                     appendLine(regionText.fullText)
                     appendLine("===== CARD =====")
                     appendLine(regionText.cardText)
@@ -57,18 +89,12 @@ object ManualOcrDebugStore {
                     appendLine(regionText.priceText)
                     appendLine("===== TRIP =====")
                     appendLine(regionText.tripText)
-                    appendLine("===== DETAIL =====")
-                    appendLine(regionText.detailText)
+                    appendLine("===== SAME_DROPOFF =====")
+                    appendLine(regionText.sameDropoffText)
                     appendLine("===== MERCHANT =====")
                     appendLine(regionText.merchantText)
-                    appendLine("===== MERCHANT WIDE =====")
-                    appendLine(regionText.merchantWideText)
                     appendLine("===== ADDRESS =====")
                     appendLine(regionText.addressText)
-                    appendLine("===== ADDRESS WIDE =====")
-                    appendLine(regionText.addressWideText)
-                    appendLine("===== ADDRESS LOWER =====")
-                    appendLine(regionText.addressLowerText)
                 },
                 Charsets.UTF_8
             )
@@ -123,19 +149,29 @@ object ManualOcrDebugStore {
         }
     }
 
+    private fun acceptModeLabel(mode: com.example.gongderefuser.analyzer.RuleSettings.AcceptMode): String {
+        return when (mode) {
+            com.example.gongderefuser.analyzer.RuleSettings.AcceptMode.REWARD -> "趟奖模式"
+            com.example.gongderefuser.analyzer.RuleSettings.AcceptMode.NORMAL -> "正常模式"
+        }
+    }
+
     private fun regionColor(name: String): Int {
         return when (name) {
             "actionButton" -> Color.rgb(255, 45, 85)
-            "deliveryAnchorSearch" -> Color.rgb(0, 180, 255)
+            "closeSearch" -> Color.rgb(175, 82, 222)
+            "closeButton", "closeButtonDetected" -> Color.rgb(255, 45, 85)
+            "deliveryAnchorSearch", "deliveryAnchorSearchActual" -> Color.rgb(0, 180, 255)
             "deliveryAnchor" -> Color.rgb(0, 122, 255)
-            "pickupAnchor" -> Color.rgb(90, 200, 250)
-            "dropoffAnchor" -> Color.rgb(88, 86, 214)
-            "card" -> Color.rgb(0, 122, 255)
-            "type" -> Color.rgb(128, 0, 255)
-            "price" -> Color.rgb(255, 149, 0)
-            "trip" -> Color.rgb(255, 214, 10)
-            "merchant", "merchantWide" -> Color.rgb(52, 199, 89)
-            "address", "addressWide", "addressLower" -> Color.rgb(255, 59, 48)
+            "pickupAnchor", "pickupAnchorShiftedReference" -> Color.rgb(90, 200, 250)
+            "dropoffAnchor", "dropoffAnchorShiftedReference" -> Color.rgb(88, 86, 214)
+            "card", "cardActual" -> Color.rgb(0, 122, 255)
+            "type", "typeActual" -> Color.rgb(128, 0, 255)
+            "price", "priceActual" -> Color.rgb(255, 149, 0)
+            "trip", "tripActual" -> Color.rgb(255, 214, 10)
+            "sameDropoff", "sameDropoffActual" -> Color.rgb(48, 209, 88)
+            "merchant", "merchantWide", "merchantActual" -> Color.rgb(52, 199, 89)
+            "address", "addressWide", "addressLower", "addressActual", "addressWideActual" -> Color.rgb(255, 59, 48)
             else -> Color.rgb(90, 200, 250)
         }
     }
@@ -147,5 +183,30 @@ object ManualOcrDebugStore {
             Color.green(color),
             Color.blue(color)
         )
+    }
+
+    private fun StringBuilder.appendAnchorDebug(info: OcrHelper.AnchorDebugInfo) {
+        appendLine("anchorSource=${info.anchorSource}")
+        appendLine("pickupDetected=${info.pickupDetected}")
+        appendLine("dropoffDetected=${info.dropoffDetected}")
+        appendLine("cardRect=${formatRect(info.cardRect)}")
+        appendLine("cardTop=${info.cardRect?.top ?: ""}")
+        appendLine("cardBottom=${info.cardRect?.bottom ?: ""}")
+        appendLine("cardHeight=${info.cardRect?.height() ?: ""}")
+        appendLine("closeButtonRect=${formatRect(info.closeButtonRect)}")
+        appendLine("templateCloseY=${info.templateCloseY ?: ""}")
+        appendLine("actualCloseY=${info.actualCloseY ?: ""}")
+        appendLine("closeShiftY=${info.closeShiftY ?: ""}")
+        appendLine("pickupAnchorRect=${formatRect(info.pickupAnchorRect)}")
+        appendLine("dropoffAnchorRect=${formatRect(info.dropoffAnchorRect)}")
+        appendLine("priceRect=${formatRect(info.priceRect)}")
+        appendLine("tripRect=${formatRect(info.tripRect)}")
+        appendLine("merchantRect=${formatRect(info.merchantRect)}")
+        appendLine("addressRect=${formatRect(info.addressRect)}")
+        appendLine("addressWideRect=${formatRect(info.addressWideRect)}")
+    }
+
+    private fun formatRect(rect: android.graphics.Rect?): String {
+        return rect?.let { "${it.left},${it.top},${it.right},${it.bottom}" }.orEmpty()
     }
 }

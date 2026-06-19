@@ -9,7 +9,7 @@ import org.junit.Test
 class OrderAnalyzerTest {
 
     @Test
-    fun goodOrderGetsAcceptRecommendation() {
+    fun goodOrderGetsGoodOrderRecommendation() {
         val analysis = OrderAnalyzer.analyzeResult(
             OrderData(
                 price = 120,
@@ -19,12 +19,12 @@ class OrderAnalyzerTest {
             )
         )
 
-        assertEquals("建议接单", analysis.recommendation)
-        assertEquals(true, analysis.score >= 75)
+        assertEquals("掙他娘的", analysis.recommendation)
+        assertEquals(true, analysis.score >= 90)
     }
 
     @Test
-    fun lowHourlyOrderGetsCautionRecommendation() {
+    fun lowScoreOrderGetsGongdeRecommendation() {
         val analysis = OrderAnalyzer.analyzeResult(
             OrderData(
                 price = 45,
@@ -35,12 +35,12 @@ class OrderAnalyzerTest {
             targetHourly = 300
         )
 
-        assertEquals("慎重考虑", analysis.recommendation)
-        assertEquals(true, analysis.score in 55..74)
+        assertEquals("狗都不接", analysis.recommendation)
+        assertEquals(true, analysis.score < 50)
     }
 
     @Test
-    fun veryWeakOrderGetsRejectRecommendation() {
+    fun veryWeakOrderGetsGongdeRecommendation() {
         val analysis = OrderAnalyzer.analyzeResult(
             order = OrderData(
                 price = 45,
@@ -58,8 +58,8 @@ class OrderAnalyzerTest {
             blacklistEntry = null
         )
 
-        assertEquals("不建议接单", analysis.recommendation)
-        assertEquals(true, analysis.score < 55)
+        assertEquals("狗都不接", analysis.recommendation)
+        assertEquals(true, analysis.score < 50)
     }
 
     @Test
@@ -88,8 +88,8 @@ class OrderAnalyzerTest {
         assertEquals(true, analysis.isBlacklisted)
         assertEquals("麥當勞 林口復興", analysis.matchedWhitelistKeyword)
         assertEquals("長庚街", analysis.matchedBlacklistKeyword)
-        assertEquals("不建议接单", analysis.recommendation)
-        assertEquals(31, analysis.score)
+        assertEquals("站著掙", analysis.recommendation)
+        assertEquals(true, analysis.score in 70..89)
     }
 
     @Test
@@ -131,7 +131,59 @@ class OrderAnalyzerTest {
 
         assertEquals(0, analysis.locationScoreImpact)
         assertEquals("BLACK_STRONG", analysis.strongestLocationLevel)
-        assertEquals("建议接单", analysis.recommendation)
+        assertEquals("狗都不接", analysis.recommendation)
+    }
+
+    @Test
+    fun fatOrderRequiresScoreHourlyAndYuanPerKmThresholds() {
+        val analysis = OrderAnalyzer.analyzeResult(
+            order = OrderData(
+                price = 180,
+                minutes = 20,
+                distance = 5.0,
+                isTargetOffer = true
+            ),
+            rules = RuleSettings.RuleConfig(
+                minPrice = 35,
+                maxDistance = 10.0,
+                maxMinutes = 35,
+                targetHourly = 220,
+                targetYuanPerKm = 12.0
+            ),
+            whitelistEntry = null,
+            blacklistEntry = null
+        )
+
+        assertEquals(95, analysis.score)
+        assertEquals("掙他娘的", analysis.recommendation)
+    }
+
+    @Test
+    fun multiOrderUsesDynamicFactorWithoutHardProtection() {
+        val analysis = OrderAnalyzer.analyzeResult(
+            order = OrderData(
+                price = 46,
+                minutes = 13,
+                distance = 1.8,
+                deliveryCount = 2,
+                isTargetOffer = true
+            ),
+            rules = RuleSettings.RuleConfig(
+                minPrice = 35,
+                maxDistance = 10.0,
+                maxMinutes = 35,
+                targetHourly = 245,
+                targetYuanPerKm = 15.0,
+                targetAveragePrice = 45.0
+            ),
+            whitelistEntry = null,
+            blacklistEntry = null
+        )
+
+        assertEquals(23, analysis.multiOrderAveragePerOrder.toInt())
+        assertEquals(0.829, analysis.multiOrderFactor, 0.001)
+        assertEquals(false, analysis.shouldAccept)
+        assertEquals("跪著送", analysis.recommendation)
     }
 
     @Test
