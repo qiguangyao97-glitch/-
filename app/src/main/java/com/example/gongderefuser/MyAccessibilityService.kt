@@ -67,6 +67,9 @@ class MyAccessibilityService : AccessibilityService() {
     private var orderDetectionSessionNextAttemptIndex: Int = 0
     private var orderDetectionSessionFailureCount: Int = 0
     private var orderDetectionSessionLastHadAnchor: Boolean = false
+    private var pendingOcrRetryRunnable: Runnable? = null
+    private var ocrRetryAttempt: Int = 0
+    private var isOcrRetryScheduled: Boolean = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -142,6 +145,7 @@ class MyAccessibilityService : AccessibilityService() {
         orderDetectionSessionNextAttemptIndex = 0
         orderDetectionSessionFailureCount = 0
         orderDetectionSessionLastHadAnchor = false
+        clearPendingOcrRetry(resetAttempt = true)
         scheduleNextSessionCapture()
     }
 
@@ -166,11 +170,11 @@ class MyAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed(pendingOrderEventRunnable!!, delayMs)
     }
 
-    private fun triggerCapture(sessionAttemptNumber: Int = 0) {
+    private fun triggerCapture(sessionAttemptNumber: Int = 0, forceScreenshotInterval: Boolean = false) {
         if (!MonitoringState.isEnabled(this)) return
         val now = System.currentTimeMillis()
         val waitMs = MIN_SCREENSHOT_INTERVAL_MS - (now - lastScreenshotRequestTime)
-        if (!isOrderDetectionSessionActive && waitMs > 0) {
+        if (!forceScreenshotInterval && !isOrderDetectionSessionActive && waitMs > 0) {
             logObservation("ORDER_DETECTION_WAIT", "reschedule reason=SCREENSHOT_INTERVAL waitMs=$waitMs")
             scheduleNextSessionCapture()
             return
@@ -274,9 +278,12 @@ class MyAccessibilityService : AccessibilityService() {
             runCatching {
                 Log.d("OCR_RESULT", regionText.fullText)
                 val ocrTimeMs = System.currentTimeMillis() - ocrStartMs
+                val cropRect = regionText.anchorDebugInfo.cardRect
                 logObservation(
                     "OCR_FINISH",
-                    "OCR_TIME_MS=$ocrTimeMs hasAnchoredCard=${regionText.hasAnchoredCard} textLength=${regionText.fullText.length}"
+                    "OCR_TIME_MS=$ocrTimeMs hasAnchoredCard=${regionText.hasAnchoredCard} textLength=${regionText.fullText.length} " +
+                            "OCR_TEXT_LENGTH=${regionText.fullText.length} ANCHOR_FOUND=${regionText.hasAnchoredCard} " +
+                            "CROP_WIDTH=${cropRect?.width() ?: 0} CROP_HEIGHT=${cropRect?.height() ?: 0}"
                 )
                 if (!regionText.hasAnchoredCard) {
                     DiagnosticLogStore.append(this, "CAPTURE", "skip_no_anchor source=accessibility")
@@ -303,7 +310,9 @@ class MyAccessibilityService : AccessibilityService() {
                     isSecondCheck = isSecondCheck,
                     tripText = regionText.tripText,
                     hasAnchoredCard = regionText.hasAnchoredCard,
-                    textLength = regionText.fullText.length
+                    textLength = regionText.fullText.length,
+                    cropWidth = cropRect?.width() ?: 0,
+                    cropHeight = cropRect?.height() ?: 0
                 )
                 if (!isSecondCheck) {
                     DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
@@ -335,8 +344,13 @@ class MyAccessibilityService : AccessibilityService() {
             isOrderDetectionSessionActive = false
             orderDetectionSessionFailureCount = 0
             orderDetectionSessionNextAttemptIndex = 0
+            clearPendingOcrRetry(resetAttempt = true)
             pendingDetectionAfterCurrent = false
             logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=ORDER_HANDLED")
+            return
+        }
+        if (isOcrRetryScheduled) {
+            logObservation("ORDER_DETECTION_WAIT", "state=RETRYING reason=OCR_RETRY_SCHEDULED")
             return
         }
         if (isOrderDetectionSessionActive) {
@@ -398,24 +412,37 @@ class MyAccessibilityService : AccessibilityService() {
         isSecondCheck: Boolean = false,
         tripText: String = "",
         hasAnchoredCard: Boolean = true,
-        textLength: Int = 0
+        textLength: Int = 0,
+        cropWidth: Int = 0,
+        cropHeight: Int = 0
     ): Boolean {
         val gate = OrderResultGate.evaluate(order, hasAnchoredCard = hasAnchoredCard, tripText = tripText)
         Log.i("ORDER_POPUP_VALIDATION", gate.debugLog)
         DiagnosticLogStore.append(this, "ORDER_POPUP_VALIDATION", gate.debugLog)
         if (!gate.shouldShow) {
-            Log.d("ORDER_ANALYSIS", "invalid order ignored ${gate.skipResultReason}")
-            DiagnosticLogStore.append(this, "CAPTURE", "skipResultReason=${gate.skipResultReason}")
-            Log.i("ORDER_ANALYSIS_FINISH", "shown=false reason=${gate.skipResultReason}")
-            DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=false reason=${gate.skipResultReason}")
-            if (gate.skipResultReason == "OCR_MONEY_INVALID") {
+            if (scheduleOcrRetryIfNeeded(gate.skipResultReason, hasAnchoredCard, textLength, cropWidth, cropHeight)) {
+                return false
+            }
+            val retryExhausted = isRetryableNoOrderReason(gate.skipResultReason) && ocrRetryAttempt >= MAX_OCR_EMPTY_RETRY_COUNT
+            val finalSkipReason = if (retryExhausted) "NO_ORDER_CARD" else gate.skipResultReason
+            if (retryExhausted) {
+                isOrderDetectionSessionActive = false
+                pendingDetectionAfterCurrent = false
+                consecutiveNoOrderCount = ORDER_END_INVALID_COUNT - 1
+            }
+            Log.d("ORDER_ANALYSIS", "invalid order ignored $finalSkipReason")
+            DiagnosticLogStore.append(this, "CAPTURE", "skipResultReason=$finalSkipReason")
+            Log.i("ORDER_ANALYSIS_FINISH", "shown=false reason=$finalSkipReason")
+            DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=false reason=$finalSkipReason")
+            if (finalSkipReason == "OCR_MONEY_INVALID") {
                 Log.i("OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
                 DiagnosticLogStore.append(this, "OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
             }
-            handleInvalidOrderLifecycle(gate.skipResultReason, hasAnchoredCard, textLength)
+            handleInvalidOrderLifecycle(finalSkipReason, hasAnchoredCard, textLength)
             return false
         }
         val validOrder = order ?: return false
+        clearPendingOcrRetry(resetAttempt = true)
         consecutiveNoOrderCount = 0
 
         val signature = orderSignature(validOrder)
@@ -477,7 +504,8 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun handleInvalidOrderLifecycle(reason: String, hasAnchoredCard: Boolean, textLength: Int) {
         val isAnchoredBlankOrEmptyCore = hasAnchoredCard && (textLength == 0 || reason == "ALL_CORE_FIELDS_EMPTY")
-        if (isAnchoredBlankOrEmptyCore) {
+        val retryExhausted = ocrRetryAttempt >= MAX_OCR_EMPTY_RETRY_COUNT
+        if (isAnchoredBlankOrEmptyCore && !retryExhausted) {
             pendingDetectionAfterCurrent = true
             logObservation("OCR_RETRY", "reason=ANCHORED_CARD_OCR_EMPTY textLength=$textLength validationReason=$reason")
             return
@@ -506,11 +534,63 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun scheduleOcrRetryIfNeeded(
+        reason: String,
+        hasAnchoredCard: Boolean,
+        textLength: Int,
+        cropWidth: Int,
+        cropHeight: Int
+    ): Boolean {
+        if (!isRetryableNoOrderReason(reason)) return false
+
+        val isPopupCandidate = System.currentTimeMillis() <= popupCandidateUntilTime
+        if (!hasAnchoredCard && !isPopupCandidate) return false
+
+        if (ocrRetryAttempt >= MAX_OCR_EMPTY_RETRY_COUNT) return false
+        if (isOcrRetryScheduled) return true
+
+        ocrRetryAttempt += 1
+        isOcrRetryScheduled = true
+        pendingDetectionAfterCurrent = true
+        logObservation(
+            "OCR_RETRY",
+            "attempt=$ocrRetryAttempt reason=$reason delayMs=$OCR_EMPTY_RETRY_DELAY_MS " +
+                    "hasAnchoredCard=$hasAnchoredCard textLength=$textLength " +
+                    "OCR_TEXT_LENGTH=$textLength ANCHOR_FOUND=$hasAnchoredCard " +
+                    "CROP_WIDTH=$cropWidth CROP_HEIGHT=$cropHeight"
+        )
+        pendingOcrRetryRunnable = Runnable {
+            pendingOcrRetryRunnable = null
+            isOcrRetryScheduled = false
+            if (!MonitoringState.isEnabled(this)) return@Runnable
+            triggerCapture(forceScreenshotInterval = true)
+        }.also {
+            mainHandler.postDelayed(it, OCR_EMPTY_RETRY_DELAY_MS)
+        }
+        return true
+    }
+
+    private fun isRetryableNoOrderReason(reason: String): Boolean {
+        return reason == "ALL_CORE_FIELDS_EMPTY" ||
+                reason == "POPUP_CANDIDATE_FIELDS_EMPTY" ||
+                reason == "NO_ORDER_CARD"
+    }
+
+    private fun clearPendingOcrRetry(resetAttempt: Boolean) {
+        pendingOcrRetryRunnable?.let(mainHandler::removeCallbacks)
+        pendingOcrRetryRunnable = null
+        isOcrRetryScheduled = false
+        if (resetAttempt) {
+            ocrRetryAttempt = 0
+        }
+    }
+
     private fun endOrderSessionAsLost(reason: String) {
         isOrderDetectionSessionActive = false
         orderDetectionSessionNextAttemptIndex = 0
         orderDetectionSessionFailureCount = 0
         orderDetectionSessionLastHadAnchor = false
+        clearPendingOcrRetry(resetAttempt = true)
         pendingDetectionAfterCurrent = false
         if (lastShownOrderSignature.isBlank() && overlayView == null) {
             logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=$reason")
@@ -660,6 +740,7 @@ class MyAccessibilityService : AccessibilityService() {
         clearCollapseTimer()
         pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
         pendingOrderEventRunnable = null
+        clearPendingOcrRetry(resetAttempt = true)
         isDetectionScheduled = false
         pendingDetectionAfterCurrent = false
         currentBurstDetectCount = 0
@@ -1447,6 +1528,8 @@ class MyAccessibilityService : AccessibilityService() {
         private const val KEY_OVERLAY_Y = "overlay_y"
         private const val SCREENSHOT_TIMEOUT_MS = 3_500L
         private const val OCR_TIMEOUT_MS = 8_000L
+        private const val OCR_EMPTY_RETRY_DELAY_MS = 500L
+        private const val MAX_OCR_EMPTY_RETRY_COUNT = 3
         private const val ORDER_END_INVALID_COUNT = 5
         private const val DETECTION_BURST_RESET_MS = 1_500L
         private const val MAX_DETECTIONS_PER_BURST = 5
