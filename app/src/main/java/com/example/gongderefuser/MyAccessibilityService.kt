@@ -609,41 +609,26 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldTriggerOrderDetection(event: AccessibilityEvent): Boolean {
-        val className = event.className?.toString().orEmpty()
         val now = System.currentTimeMillis()
         return when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
                 true
             }
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+                true
+            }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (lastShownOrderSignature.isBlank() && overlayView == null) {
-                    if (isHighPriorityOrderTriggerClass(className)) {
-                        popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                        true
-                    } else {
-                        now <= popupCandidateUntilTime && (
-                                className == "android.widget.FrameLayout" ||
-                                        className == "android.view.ViewGroup" ||
-                                        className == "android.widget.TextView"
-                                )
-                    }
+                    popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+                    true
                 } else {
-                    className == "android.widget.ImageView" ||
-                            className == "android.widget.FrameLayout" ||
-                            className == "android.view.ViewGroup" ||
-                            className == "android.widget.TextView" ||
-                            className == "com.ubercab.carbon.core.CarbonActivity"
+                    true
                 }
             }
             else -> false
         }
-    }
-
-    private fun isHighPriorityOrderTriggerClass(className: String): Boolean {
-        return className == "android.widget.ImageView" ||
-                className == "android.view.ViewGroup" ||
-                className == "android.widget.FrameLayout"
     }
 
     private fun maxDetectionsForCurrentWindow(): Int {

@@ -25,6 +25,7 @@ object MonitoringState {
             .edit()
             .putBoolean(KEY_ENABLED, enabled)
             .apply()
+        DiagnosticLogStore.append(appContext, "MONITORING", "setEnabled=$enabled package=${appContext.packageName}")
 
         if (enabled) {
             MonitorNotificationHelper.showRunning(appContext)
