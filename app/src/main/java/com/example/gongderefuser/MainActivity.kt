@@ -1348,11 +1348,7 @@ class MainActivity : AppCompatActivity() {
     private fun showDebugSettings() {
         currentScreen = Screen.SettingsDetail
         if (AppSettings.isAccessibilityLogEnabled(this)) {
-            DiagnosticLogStore.append(
-                this,
-                "DEBUG_SETTINGS_VIEW",
-                "accessibilityLogEnabled=true package=$packageName"
-            )
+            DiagnosticLogStore.writeSelfTest(this, "debug_settings_view")
         }
         val layout = createBaseLayout()
         addSubHeader(layout, "调试信息", "识别问题排查入口。")
@@ -1388,11 +1384,7 @@ class MainActivity : AppCompatActivity() {
                 enabled = AppSettings.isAccessibilityLogEnabled(this),
                 onToggle = { enabled ->
                     AppSettings.setAccessibilityLogEnabled(this, enabled)
-                    val file = DiagnosticLogStore.append(
-                        this,
-                        "ACCESSIBILITY_LOG_TOGGLE",
-                        "enabled=$enabled package=$packageName"
-                    )
+                    val file = DiagnosticLogStore.writeSelfTest(this, "accessibility_log_toggle_enabled_$enabled")
                     Toast.makeText(
                         this,
                         if (file != null) "日志已写入：${file.name}" else "日志写入失败",
@@ -1402,7 +1394,7 @@ class MainActivity : AppCompatActivity() {
                 }
             ))
             card.addView(TextView(this).apply {
-                text = "无障碍事件日志路径：${AppSettings.diagnosticLogPath(this@MainActivity)}\n文件名：monitor-events.txt"
+                text = "无障碍事件日志路径：${AppSettings.diagnosticLogPath(this@MainActivity)}\n文件名：monitor-events.txt\n备用文件：${AppSettings.debugSamplePath(this@MainActivity)}/diagnostic-monitor-events.txt\n最近写入：${DiagnosticLogStore.lastWriteSummary()}"
                 textSize = 12f
                 setTextColor(COLOR_TEXT_SECONDARY)
                 setLineSpacing(0f, 1.12f)
