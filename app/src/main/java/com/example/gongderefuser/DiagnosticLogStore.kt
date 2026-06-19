@@ -21,7 +21,7 @@ object DiagnosticLogStore {
         val failures = mutableListOf<String>()
         targets.forEach { (label, file) ->
             val result = runCatching {
-                file.parentFile?.mkdirs()
+                prepareLogFile(file)
                 file.appendText(line, Charsets.UTF_8)
                 file
             }
@@ -44,6 +44,21 @@ object DiagnosticLogStore {
         return successes.firstOrNull()
     }
 
+    private fun prepareLogFile(file: File) {
+        val parent = file.parentFile
+        if (parent != null && parent.exists() && !parent.isDirectory) {
+            val backup = File(parent.parentFile, "${parent.name}.file-backup-${System.currentTimeMillis()}")
+            parent.renameTo(backup)
+        }
+        file.parentFile?.mkdirs()
+        if (file.exists() && file.isDirectory) {
+            val backup = File(file.parentFile, "${file.name}.folder-backup-${System.currentTimeMillis()}")
+            if (!file.renameTo(backup)) {
+                file.deleteRecursively()
+            }
+        }
+    }
+
     fun lastWriteSummary(): String = lastWriteSummary
 
     fun writeSelfTest(context: Context, reason: String): File? {
@@ -57,6 +72,7 @@ object DiagnosticLogStore {
     fun appendPrimaryOnly(context: Context, tag: String, message: String): File? {
         return runCatching {
             val file = File(DebugFileDirs.resolve(context, "diagnostic_logs"), "monitor-events.txt")
+            prepareLogFile(file)
             file.appendText(
                 "${formatter.format(Date())} [$tag] $message\n",
                 Charsets.UTF_8
