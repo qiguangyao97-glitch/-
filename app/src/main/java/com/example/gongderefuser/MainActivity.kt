@@ -1347,6 +1347,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDebugSettings() {
         currentScreen = Screen.SettingsDetail
+        if (AppSettings.isAccessibilityLogEnabled(this)) {
+            DiagnosticLogStore.append(
+                this,
+                "DEBUG_SETTINGS_VIEW",
+                "accessibilityLogEnabled=true package=$packageName"
+            )
+        }
         val layout = createBaseLayout()
         addSubHeader(layout, "调试信息", "识别问题排查入口。")
         val card = createCard().apply {
