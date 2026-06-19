@@ -1381,9 +1381,26 @@ class MainActivity : AppCompatActivity() {
                 enabled = AppSettings.isAccessibilityLogEnabled(this),
                 onToggle = { enabled ->
                     AppSettings.setAccessibilityLogEnabled(this, enabled)
+                    val file = DiagnosticLogStore.append(
+                        this,
+                        "ACCESSIBILITY_LOG_TOGGLE",
+                        "enabled=$enabled package=$packageName"
+                    )
+                    Toast.makeText(
+                        this,
+                        if (file != null) "日志已写入：${file.name}" else "日志写入失败",
+                        Toast.LENGTH_SHORT
+                    ).show()
                     showDebugSettings()
                 }
             ))
+            card.addView(TextView(this).apply {
+                text = "无障碍事件日志路径：${AppSettings.diagnosticLogPath(this@MainActivity)}\n文件名：monitor-events.txt"
+                textSize = 12f
+                setTextColor(COLOR_TEXT_SECONDARY)
+                setLineSpacing(0f, 1.12f)
+                setPadding(0, dp(8), 0, 0)
+            })
         }
         layout.addView(card)
         setBaseContent(layout)
@@ -1402,7 +1419,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { showClearDiagnosticDataDialog() }
         })
         card.addView(TextView(this).apply {
-            text = "诊断路径：${AppSettings.debugSamplePath(this@MainActivity)}\n手动截图调试路径：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
+            text = "诊断样本路径：${AppSettings.debugSamplePath(this@MainActivity)}\n无障碍日志路径：${AppSettings.diagnosticLogPath(this@MainActivity)}\n手动截图调试路径：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.12f)

@@ -53,6 +53,10 @@ object AppSettings {
         return DebugFileDirs.resolve(context, "manual_ocr_debug").absolutePath
     }
 
+    fun diagnosticLogPath(context: Context): String {
+        return DebugFileDirs.resolve(context, "diagnostic_logs").absolutePath
+    }
+
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 }
