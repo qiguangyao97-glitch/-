@@ -62,6 +62,11 @@ class MyAccessibilityService : AccessibilityService() {
     private var lastDetectionEventTime: Long = 0L
     private var lastScreenshotRequestTime: Long = 0L
     private var popupCandidateUntilTime: Long = 0L
+    private var isOrderDetectionSessionActive: Boolean = false
+    private var orderDetectionSessionStartTime: Long = 0L
+    private var orderDetectionSessionNextAttemptIndex: Int = 0
+    private var orderDetectionSessionFailureCount: Int = 0
+    private var orderDetectionSessionLastHadAnchor: Boolean = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -123,28 +128,51 @@ class MyAccessibilityService : AccessibilityService() {
             )
             return
         }
-        scheduleDetectionAfterDelay(ORDER_EVENT_STABLE_DELAY_MS)
+        startOrderDetectionSession(now)
     }
 
-    private fun scheduleDetectionAfterDelay(delayMs: Long) {
+    private fun startOrderDetectionSession(now: Long) {
+        if (isOrderDetectionSessionActive) {
+            pendingDetectionAfterCurrent = true
+            logObservation("ORDER_DETECTION_WAIT", "pendingAfterCurrent=true reason=SESSION_ACTIVE")
+            return
+        }
+        isOrderDetectionSessionActive = true
+        orderDetectionSessionStartTime = now
+        orderDetectionSessionNextAttemptIndex = 0
+        orderDetectionSessionFailureCount = 0
+        orderDetectionSessionLastHadAnchor = false
+        scheduleNextSessionCapture()
+    }
+
+    private fun scheduleNextSessionCapture() {
+        if (!isOrderDetectionSessionActive) return
+        if (orderDetectionSessionNextAttemptIndex >= ORDER_DETECTION_CAPTURE_OFFSETS_MS.size) return
         if (isDetectionScheduled) return
+        val attemptIndex = orderDetectionSessionNextAttemptIndex
+        val delayMs = (orderDetectionSessionStartTime + ORDER_DETECTION_CAPTURE_OFFSETS_MS[attemptIndex] - System.currentTimeMillis()).coerceAtLeast(0L)
         isDetectionScheduled = true
         pendingOrderEventRunnable = Runnable {
             pendingOrderEventRunnable = null
             isDetectionScheduled = false
-            triggerCapture()
+            val attemptNumber = attemptIndex + 1
+            orderDetectionSessionNextAttemptIndex = maxOf(orderDetectionSessionNextAttemptIndex, attemptNumber)
+            triggerCapture(attemptNumber)
         }
-        logObservation("ORDER_DETECTION_WAIT", "scheduled delayMs=$delayMs count=${currentBurstDetectCount + 1}")
+        logObservation(
+            "ORDER_DETECTION_WAIT",
+            "scheduled delayMs=$delayMs attempt=${attemptIndex + 1}/${ORDER_DETECTION_CAPTURE_OFFSETS_MS.size} count=${currentBurstDetectCount + 1}"
+        )
         mainHandler.postDelayed(pendingOrderEventRunnable!!, delayMs)
     }
 
-    private fun triggerCapture() {
+    private fun triggerCapture(sessionAttemptNumber: Int = 0) {
         if (!MonitoringState.isEnabled(this)) return
         val now = System.currentTimeMillis()
         val waitMs = MIN_SCREENSHOT_INTERVAL_MS - (now - lastScreenshotRequestTime)
-        if (waitMs > 0) {
+        if (!isOrderDetectionSessionActive && waitMs > 0) {
             logObservation("ORDER_DETECTION_WAIT", "reschedule reason=SCREENSHOT_INTERVAL waitMs=$waitMs")
-            scheduleDetectionAfterDelay(waitMs)
+            scheduleNextSessionCapture()
             return
         }
         currentBurstDetectCount += 1
@@ -152,8 +180,8 @@ class MyAccessibilityService : AccessibilityService() {
         lastScreenshotRequestTime = now
 
         Log.d("TARGET_TRIGGER", "set capture flag")
-        Log.i("ORDER_ANALYSIS_START", "source=accessibility_event")
-        DiagnosticLogStore.append(this, "ORDER_ANALYSIS_START", "source=accessibility_event")
+        Log.i("ORDER_ANALYSIS_START", "source=accessibility_event attempt=$sessionAttemptNumber")
+        DiagnosticLogStore.append(this, "ORDER_ANALYSIS_START", "source=accessibility_event attempt=$sessionAttemptNumber")
         tryAccessibilityScreenshot()
     }
 
@@ -197,11 +225,11 @@ class MyAccessibilityService : AccessibilityService() {
                     Log.d("A11Y_SCREENSHOT", "failed code=$errorCode")
                     if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
                         DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "failed_interval_too_short_no_toast code=$errorCode")
-                        finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck)
+                        finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck, hadOrderAnchor = false)
                         return
                     }
                     reportAccessibilityScreenshotFailure("error_$errorCode")
-                    finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck)
+                    finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck, hadOrderAnchor = false)
                 }
             }
         )
@@ -269,7 +297,14 @@ class MyAccessibilityService : AccessibilityService() {
                         addressLowerText = regionText.addressLowerText
                     )
                 ) else null
-                val foundOrder = handleAccessibilityOrder(order, bitmap, isSecondCheck, regionText.tripText)
+                val foundOrder = handleAccessibilityOrder(
+                    order = order,
+                    bitmap = bitmap,
+                    isSecondCheck = isSecondCheck,
+                    tripText = regionText.tripText,
+                    hasAnchoredCard = regionText.hasAnchoredCard,
+                    textLength = regionText.fullText.length
+                )
                 if (!isSecondCheck) {
                     DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
                 }
@@ -280,13 +315,13 @@ class MyAccessibilityService : AccessibilityService() {
                         logObservation("OCR_RETRY", "secondCheckIgnoredReason=no_order")
                     }
                 }
-                finishDetectionCycle(foundOrder, isSecondCheck)
+                finishDetectionCycle(foundOrder, isSecondCheck, regionText.hasAnchoredCard)
             }.onFailure { throwable ->
                 val ocrTimeMs = System.currentTimeMillis() - ocrStartMs
                 logObservation("OCR_FAILED", "OCR_TIME_MS=$ocrTimeMs error=${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}")
                 Log.e("CAPTURE", "accessibility OCR callback failed", throwable)
                 CrashLogStore.save(this, "accessibility_ocr_callback", throwable)
-                finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck)
+                finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck, hadOrderAnchor = false)
             }
             clearOcrTimeout()
             isProcessingOrder = false
@@ -294,17 +329,45 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun finishDetectionCycle(foundOrder: Boolean, isSecondCheck: Boolean) {
+    private fun finishDetectionCycle(foundOrder: Boolean, isSecondCheck: Boolean, hadOrderAnchor: Boolean) {
         if (isSecondCheck) return
         if (foundOrder) {
+            isOrderDetectionSessionActive = false
+            orderDetectionSessionFailureCount = 0
+            orderDetectionSessionNextAttemptIndex = 0
             pendingDetectionAfterCurrent = false
             logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=ORDER_HANDLED")
+            return
+        }
+        if (isOrderDetectionSessionActive) {
+            orderDetectionSessionFailureCount += 1
+            orderDetectionSessionLastHadAnchor = hadOrderAnchor
+            if (orderDetectionSessionNextAttemptIndex < ORDER_DETECTION_CAPTURE_OFFSETS_MS.size) {
+                logObservation(
+                    "OCR_RETRY",
+                    "reason=SESSION_RETRY attemptFailed=$orderDetectionSessionFailureCount hasAnchoredCard=$hadOrderAnchor"
+                )
+                scheduleNextSessionCapture()
+                return
+            }
+            if (orderDetectionSessionFailureCount >= ORDER_END_INVALID_COUNT && !orderDetectionSessionLastHadAnchor) {
+                endOrderSessionAsLost("NO_ORDER_CARD")
+                return
+            }
+            logObservation(
+                "OCR_RETRY",
+                "reason=ANCHOR_STILL_PRESENT_AFTER_BURST failures=$orderDetectionSessionFailureCount"
+            )
+            orderDetectionSessionStartTime = System.currentTimeMillis()
+            orderDetectionSessionNextAttemptIndex = 0
+            orderDetectionSessionFailureCount = 0
+            scheduleNextSessionCapture()
             return
         }
         if (pendingDetectionAfterCurrent && currentBurstDetectCount < maxDetectionsForCurrentWindow()) {
             pendingDetectionAfterCurrent = false
             logObservation("ORDER_DETECTION_WAIT", "reschedule reason=PENDING_EVENT_AFTER_EMPTY")
-            scheduleDetectionAfterDelay(0L)
+            startOrderDetectionSession(System.currentTimeMillis())
             return
         }
         pendingDetectionAfterCurrent = false
@@ -333,9 +396,11 @@ class MyAccessibilityService : AccessibilityService() {
         order: com.example.gongderefuser.model.OrderData?,
         bitmap: Bitmap?,
         isSecondCheck: Boolean = false,
-        tripText: String = ""
+        tripText: String = "",
+        hasAnchoredCard: Boolean = true,
+        textLength: Int = 0
     ): Boolean {
-        val gate = OrderResultGate.evaluate(order, tripText = tripText)
+        val gate = OrderResultGate.evaluate(order, hasAnchoredCard = hasAnchoredCard, tripText = tripText)
         Log.i("ORDER_POPUP_VALIDATION", gate.debugLog)
         DiagnosticLogStore.append(this, "ORDER_POPUP_VALIDATION", gate.debugLog)
         if (!gate.shouldShow) {
@@ -347,7 +412,7 @@ class MyAccessibilityService : AccessibilityService() {
                 Log.i("OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
                 DiagnosticLogStore.append(this, "OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
             }
-            handleInvalidOrderLifecycle(gate.skipResultReason)
+            handleInvalidOrderLifecycle(gate.skipResultReason, hasAnchoredCard, textLength)
             return false
         }
         val validOrder = order ?: return false
@@ -410,12 +475,15 @@ class MyAccessibilityService : AccessibilityService() {
         return true
     }
 
-    private fun handleInvalidOrderLifecycle(reason: String) {
-        if (reason == "ALL_CORE_FIELDS_EMPTY" && System.currentTimeMillis() <= popupCandidateUntilTime) {
+    private fun handleInvalidOrderLifecycle(reason: String, hasAnchoredCard: Boolean, textLength: Int) {
+        val isAnchoredBlankOrEmptyCore = hasAnchoredCard && (textLength == 0 || reason == "ALL_CORE_FIELDS_EMPTY")
+        if (isAnchoredBlankOrEmptyCore) {
             pendingDetectionAfterCurrent = true
-            logObservation("OCR_RETRY", "reason=POPUP_CANDIDATE_FIELDS_EMPTY")
+            logObservation("OCR_RETRY", "reason=ANCHORED_CARD_OCR_EMPTY textLength=$textLength validationReason=$reason")
+            return
         }
         if (reason == "NO_ORDER_CARD" || reason == "ALL_CORE_FIELDS_EMPTY") {
+            if (isOrderDetectionSessionActive) return
             if (lastShownOrderSignature.isBlank() && overlayView == null) {
                 consecutiveNoOrderCount = 0
                 return
@@ -438,6 +506,28 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun endOrderSessionAsLost(reason: String) {
+        isOrderDetectionSessionActive = false
+        orderDetectionSessionNextAttemptIndex = 0
+        orderDetectionSessionFailureCount = 0
+        orderDetectionSessionLastHadAnchor = false
+        pendingDetectionAfterCurrent = false
+        if (lastShownOrderSignature.isBlank() && overlayView == null) {
+            logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=$reason")
+            return
+        }
+        Log.i("ORDER_SESSION_END", "reason=$reason")
+        DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason")
+        logObservation("ORDER_LOST", "reason=$reason")
+        lastShownOrderSignature = ""
+        secondCheckSignature = ""
+        lastPendingOrder = null
+        mainHandler.post {
+            logObservation("POPUP_HIDE", "reason=ORDER_LOST")
+            hideOverlay()
+        }
+    }
+
     private fun shouldTriggerOrderDetection(event: AccessibilityEvent): Boolean {
         val className = event.className?.toString().orEmpty()
         val now = System.currentTimeMillis()
@@ -448,7 +538,7 @@ class MyAccessibilityService : AccessibilityService() {
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (lastShownOrderSignature.isBlank() && overlayView == null) {
-                    if (className == "android.widget.ImageView") {
+                    if (isHighPriorityOrderTriggerClass(className)) {
                         popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
                         true
                     } else {
@@ -468,6 +558,12 @@ class MyAccessibilityService : AccessibilityService() {
             }
             else -> false
         }
+    }
+
+    private fun isHighPriorityOrderTriggerClass(className: String): Boolean {
+        return className == "android.widget.ImageView" ||
+                className == "android.view.ViewGroup" ||
+                className == "android.widget.FrameLayout"
     }
 
     private fun maxDetectionsForCurrentWindow(): Int {
@@ -1351,14 +1447,14 @@ class MyAccessibilityService : AccessibilityService() {
         private const val KEY_OVERLAY_Y = "overlay_y"
         private const val SCREENSHOT_TIMEOUT_MS = 3_500L
         private const val OCR_TIMEOUT_MS = 8_000L
-        private const val ORDER_EVENT_STABLE_DELAY_MS = 300L
-        private const val ORDER_END_INVALID_COUNT = 2
+        private const val ORDER_END_INVALID_COUNT = 5
         private const val DETECTION_BURST_RESET_MS = 1_500L
-        private const val MAX_DETECTIONS_PER_BURST = 2
-        private const val MAX_DETECTIONS_PER_POPUP_CANDIDATE = 4
+        private const val MAX_DETECTIONS_PER_BURST = 5
+        private const val MAX_DETECTIONS_PER_POPUP_CANDIDATE = 5
         private const val POPUP_CANDIDATE_WINDOW_MS = 2_000L
         private const val MIN_SCREENSHOT_INTERVAL_MS = 1_000L
         private const val MAX_CLICK_DEBUG_NODES = 30
+        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(300L, 700L, 1_200L, 1_800L, 2_500L)
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
         private val COLOR_DANGER = Color.rgb(239, 68, 68)
