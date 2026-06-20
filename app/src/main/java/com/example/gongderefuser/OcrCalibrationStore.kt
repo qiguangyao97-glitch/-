@@ -25,7 +25,7 @@ object OcrCalibrationStore {
     fun displayName(name: String): String {
         return when (name) {
             "card" -> "卡片参考框"
-            "closeSearch" -> "關閉搜索框"
+            "closeSearch" -> "關閉搜尋框"
             "closeButton" -> "關閉按鈕模板"
             "price" -> "金額模板"
             "trip" -> "時間距離模板"
@@ -36,7 +36,7 @@ object OcrCalibrationStore {
             "sameDropoff" -> "同地點配送"
             "pickupAnchor" -> "取餐定位"
             "dropoffAnchor" -> "送達定位"
-            "deliveryAnchorSearch" -> "定位搜索框"
+            "deliveryAnchorSearch" -> "定位搜尋框"
             "cardActual" -> "卡片實際檢測框"
             "closeButtonDetected" -> "關閉按鈕實際檢測"
             "typeActual" -> "訂單類型實際框"
@@ -46,7 +46,7 @@ object OcrCalibrationStore {
             "addressActual" -> "地址實際框"
             "addressWideActual" -> "地址備用實際框"
             "sameDropoffActual" -> "同地點配送實際框"
-            "deliveryAnchorSearchActual" -> "定位搜索實際框"
+            "deliveryAnchorSearchActual" -> "定位搜尋實際框"
             "pickupAnchorShiftedReference" -> "取餐偏移参考框"
             "dropoffAnchorShiftedReference" -> "送達偏移参考框"
             "actionButton" -> "按鈕定位"

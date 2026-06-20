@@ -52,7 +52,7 @@ object OrderHistory {
             Record(
                 timestamp = System.currentTimeMillis(),
                 source = source,
-                storeName = analysis.storeName.ifBlank { "未识别商家" },
+                storeName = analysis.storeName.ifBlank { "未識別商家" },
                 storeAddress = analysis.storeAddress,
                 orderType = analysis.orderType,
                 price = analysis.price,
@@ -106,7 +106,7 @@ object OrderHistory {
                         Record(
                             timestamp = item.optLong("timestamp"),
                             source = item.optString("source"),
-                            storeName = item.optString("storeName", "未识别商家"),
+                            storeName = item.optString("storeName", "未識別商家"),
                             storeAddress = item.optString("storeAddress"),
                             orderType = item.optString("orderType"),
                             price = price,
@@ -135,7 +135,12 @@ object OrderHistory {
     }
 
     fun clearSource(context: Context, source: String) {
-        save(context, load(context).filterNot { it.source == source })
+        val aliases = when (source) {
+            "即時", "实时" -> setOf("即時", "实时")
+            "截圖", "截图" -> setOf("截圖", "截图")
+            else -> setOf(source)
+        }
+        save(context, load(context).filterNot { it.source in aliases })
     }
 
     fun delete(context: Context, timestamp: Long) {
@@ -173,7 +178,7 @@ object OrderHistory {
 
     private fun acceptModeLabel(mode: RuleSettings.AcceptMode): String {
         return when (mode) {
-            RuleSettings.AcceptMode.REWARD -> "趟奖模式"
+            RuleSettings.AcceptMode.REWARD -> "趟獎模式"
             RuleSettings.AcceptMode.NORMAL -> "正常模式"
         }
     }

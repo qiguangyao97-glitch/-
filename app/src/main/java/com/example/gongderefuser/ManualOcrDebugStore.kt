@@ -41,29 +41,29 @@ object ManualOcrDebugStore {
                     if (order != null) {
                         val analysis = OrderAnalyzer.analyzeResult(context, order)
                         appendLine("===== SUMMARY =====")
-                        appendLine("建议=${analysis.score}分 · ${analysis.recommendation}")
+                        appendLine("建議=${analysis.score}分 · ${analysis.recommendation}")
                         appendLine("接单模式=${acceptModeLabel(analysis.acceptMode)}")
-                        appendLine("趟奖加分=${analysis.rewardModeBonus}")
-                        appendLine("趟奖原因=${analysis.rewardModeReason}")
+                        appendLine("趟獎加分=${analysis.rewardModeBonus}")
+                        appendLine("趟獎原因=${analysis.rewardModeReason}")
                         appendLine("商家=${analysis.storeName}")
                         appendLine("地址=${analysis.storeAddress}")
-                        appendLine("类型=${analysis.orderType}")
-                        appendLine("金额=${analysis.price} 元")
-                        appendLine("时间=${analysis.minutes} 分钟")
-                        appendLine("距离=${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
+                        appendLine("類型=${analysis.orderType}")
+                        appendLine("金額=${analysis.price} 元")
+                        appendLine("時間=${analysis.minutes} 分鐘")
+                        appendLine("距離=${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
                         appendLine("预计时薪=${OrderAnalyzer.formatMoney(analysis.effectiveHourly)} 元/小时")
                         appendLine("元/公里=${OrderAnalyzer.formatMoney(analysis.yuanPerKm)} 元/公里")
                         appendLine("配送数量=${analysis.deliveryCount}")
                         appendLine("===== SCORE DEBUG =====")
                         appendLine("模式=${acceptModeLabel(analysis.acceptMode)}")
-                        appendLine("金额来源=${analysis.scoreMoneySource}")
-                        appendLine("时薪评分=${analysis.hourlyScore.roundToInt()}")
-                        appendLine("元公里评分=${analysis.yuanPerKmScore.roundToInt()}")
-                        appendLine("平均单价评分=${analysis.averagePriceScore.roundToInt()}")
-                        appendLine("基础评分=${analysis.baseScore.roundToInt()}")
-                        appendLine("趟奖加权=${analysis.rewardModeBonus}")
-                        appendLine("趟奖原因=${analysis.rewardModeReason}")
-                        appendLine("最终评分=${analysis.score}")
+                        appendLine("金額来源=${analysis.scoreMoneySource}")
+                        appendLine("时薪評分=${analysis.hourlyScore.roundToInt()}")
+                        appendLine("元公里評分=${analysis.yuanPerKmScore.roundToInt()}")
+                        appendLine("平均单价評分=${analysis.averagePriceScore.roundToInt()}")
+                        appendLine("基礎評分=${analysis.baseScore.roundToInt()}")
+                        appendLine("趟獎加权=${analysis.rewardModeBonus}")
+                        appendLine("趟獎原因=${analysis.rewardModeReason}")
+                        appendLine("最終評分=${analysis.score}")
                         appendLine("同地點配送=${analysis.isSameLocationStack}")
                         appendLine("sameDropoffText=${order.sameDropoffText}")
                         appendLine("sameDropoffMatched=${order.sameDropoffMatched}")
@@ -151,7 +151,7 @@ object ManualOcrDebugStore {
 
     private fun acceptModeLabel(mode: com.example.gongderefuser.analyzer.RuleSettings.AcceptMode): String {
         return when (mode) {
-            com.example.gongderefuser.analyzer.RuleSettings.AcceptMode.REWARD -> "趟奖模式"
+            com.example.gongderefuser.analyzer.RuleSettings.AcceptMode.REWARD -> "趟獎模式"
             com.example.gongderefuser.analyzer.RuleSettings.AcceptMode.NORMAL -> "正常模式"
         }
     }

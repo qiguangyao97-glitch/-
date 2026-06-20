@@ -40,7 +40,7 @@ class ScreenCaptureService : Service() {
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
             DiagnosticLogStore.append(this@ScreenCaptureService, "PROJECTION", "onStop enabled=${MonitoringState.isEnabled(this@ScreenCaptureService)}")
-            showStoppedNotification("屏幕分享已中断，请重新启用实时监测")
+            showStoppedNotification("螢幕分享已中斷，請重新啟用即時監測")
             MonitoringState.setEnabled(this@ScreenCaptureService, false)
             stopCapture()
         }
@@ -97,7 +97,7 @@ class ScreenCaptureService : Service() {
             Log.e("CAPTURE", "projection token or foreground service permission invalid", e)
             CrashLogStore.save(this, "projection_start", e)
             clearProjectionPermission()
-            showStoppedNotification("屏幕分享授权已失效，请重新启用实时监测")
+            showStoppedNotification("螢幕分享授權已失效，請重新啟用即時監測")
             MonitoringState.setEnabled(this, false)
             stopSelf()
             return START_NOT_STICKY
@@ -148,7 +148,7 @@ class ScreenCaptureService : Service() {
             Log.e("CAPTURE", "create virtual display failed", e)
             CrashLogStore.save(this, "create_virtual_display", e)
             clearProjectionPermission()
-            showStoppedNotification("屏幕截图已中断，请重新启用实时监测")
+            showStoppedNotification("螢幕截圖已中斷，請重新啟用即時監測")
             MonitoringState.setEnabled(this, false)
             stopCapture()
             stopSelf()
@@ -166,7 +166,7 @@ class ScreenCaptureService : Service() {
                 return@setOnImageAvailableListener
             }
 
-            // 防止OCR重复并发（关键）
+            // 防止OCR重複并發（關鍵）
             if (isProcessing) {
                 reader.acquireLatestImage()?.close()
                 return@setOnImageAvailableListener
@@ -275,7 +275,7 @@ class ScreenCaptureService : Service() {
         if (MonitoringState.isEnabled(this)) {
             MonitoringState.setEnabled(this, false)
         }
-        Toast.makeText(this, "激活已过期，请输入新的激活码", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "啟用已過期，請輸入新的啟用碼", Toast.LENGTH_LONG).show()
         return false
     }
 
@@ -329,7 +329,7 @@ class ScreenCaptureService : Service() {
         lastShownOrderTime = now
 
         val analysis = OrderAnalyzer.analyzeResult(this, validOrder)
-        OrderHistory.add(this, analysis, "实时", "")
+        OrderHistory.add(this, analysis, "即時", "")
 
         Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(this, validOrder))
 
@@ -392,7 +392,7 @@ class ScreenCaptureService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = Notification.Builder(this, channelId)
-            .setContentTitle("功德拒絕器已停止监测")
+            .setContentTitle("功德拒絕器已停止監測")
             .setContentText(message)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentIntent(pendingIntent)

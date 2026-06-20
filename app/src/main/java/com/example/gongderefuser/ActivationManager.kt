@@ -34,14 +34,28 @@ object ActivationManager {
 
         if (code.isBlank()) {
             Log.d(TAG, "activation failed: blank code")
-            return ActivationResult(false, "请输入激活码")
+            return ActivationResult(false, "請輸入啟用碼")
         }
         if (!ActivationLocalStore.isActivationRequired(appContext)) {
-            return ActivationResult(true, "测试版不需要激活", null)
+            return ActivationResult(true, "測試版不需要啟用", null)
+        }
+        val currentCode = ActivationLocalStore.getCurrentCode(appContext).trim().uppercase(Locale.US)
+        val currentExpiresAtMillis = ActivationLocalStore.getExpiresAtMillis(appContext)
+        if (
+            ActivationLocalStore.isLocalActive(appContext) &&
+            currentCode.isNotBlank() &&
+            code != currentCode
+        ) {
+            Log.d(TAG, "activation failed: local activation still active currentCode=$currentCode expiresAt=$currentExpiresAtMillis")
+            return ActivationResult(
+                success = false,
+                message = "目前啟用尚未到期，請到期後再輸入新的啟用碼",
+                expiresAtMillis = currentExpiresAtMillis
+            )
         }
         if (!NetworkUtil.isNetworkAvailable(appContext)) {
             Log.d(TAG, "activation failed: network unavailable")
-            return ActivationResult(false, "需要网络才能激活，请连接网络后重试")
+            return ActivationResult(false, "需要網路才能啟用，請連接網路後重試")
         }
 
         val firestore = FirebaseFirestore.getInstance()
@@ -50,12 +64,12 @@ object ActivationManager {
             docRef.get().awaitTask()
         } catch (throwable: Throwable) {
             Log.d(TAG, "firestore get failed: ${throwable.message}", throwable)
-            return ActivationResult(false, "激活失败，请稍后重试")
+            return ActivationResult(false, "啟用失敗，請稍後重試")
         }
 
         Log.d(TAG, "firestore doc exists=${snapshot.exists()}")
         if (!snapshot.exists()) {
-            return ActivationResult(false, "激活码不存在")
+            return ActivationResult(false, "啟用碼不存在")
         }
 
         val used = snapshot.getBoolean("used") ?: false
@@ -65,23 +79,23 @@ object ActivationManager {
 
         if (used && remoteDeviceId != deviceId) {
             Log.d(TAG, "activation failed: used by another device")
-            return ActivationResult(false, "此激活码已被其他设备使用")
+            return ActivationResult(false, "此啟用碼已被其他裝置使用")
         }
         if (used && remoteDeviceId == deviceId) {
             if (expiresAtMillis > System.currentTimeMillis()) {
                 val activatedAtMillis = snapshot.activatedAtMillis().ifZero { System.currentTimeMillis() }
                 ActivationLocalStore.saveActivation(appContext, code, deviceId, activatedAtMillis, expiresAtMillis)
                 Log.d(TAG, "activation restored expiresAt=$expiresAtMillis")
-                return ActivationResult(true, "已恢复激活状态，有效期至 ${formatDateTime(expiresAtMillis)}", expiresAtMillis)
+                return ActivationResult(true, "已恢復啟用狀態，有效期至 ${formatDateTime(expiresAtMillis)}", expiresAtMillis)
             }
             Log.d(TAG, "activation failed: code expired")
-            return ActivationResult(false, "此激活码已过期，请使用新的激活码", expiresAtMillis.takeIf { it > 0L })
+            return ActivationResult(false, "此啟用碼已過期，請使用新的啟用碼", expiresAtMillis.takeIf { it > 0L })
         }
 
         return try {
             val transactionResult = firestore.runTransaction { transaction ->
                 val current = transaction.get(docRef)
-                if (!current.exists()) throw ActivationFailure("激活码不存在")
+                if (!current.exists()) throw ActivationFailure("啟用碼不存在")
 
                 val transactionUsed = current.getBoolean("used") ?: false
                 val transactionDeviceId = current.getString("deviceId").orEmpty()
@@ -98,9 +112,9 @@ object ActivationManager {
                                 restored = true
                             )
                         }
-                        throw ActivationFailure("此激活码已过期，请使用新的激活码")
+                        throw ActivationFailure("此啟用碼已過期，請使用新的啟用碼")
                     }
-                    throw ActivationFailure("此激活码已被其他设备使用")
+                    throw ActivationFailure("此啟用碼已被其他裝置使用")
                 }
 
                 val now = System.currentTimeMillis()
@@ -135,7 +149,7 @@ object ActivationManager {
                 activatedAtMillis = transactionResult.activatedAtMillis,
                 expiresAtMillis = transactionResult.expiresAtMillis
             )
-            val messagePrefix = if (transactionResult.restored) "已恢复激活状态" else "激活成功"
+            val messagePrefix = if (transactionResult.restored) "已恢復啟用狀態" else "啟用成功"
             Log.d(TAG, "$messagePrefix expiresAt=${transactionResult.expiresAtMillis}")
             ActivationResult(
                 success = true,
@@ -147,7 +161,7 @@ object ActivationManager {
             ActivationResult(false, failure.message.orEmpty())
         } catch (throwable: Throwable) {
             Log.d(TAG, "transaction failed: ${throwable.message}", throwable)
-            ActivationResult(false, "激活失败，请稍后重试")
+            ActivationResult(false, "啟用失敗，請稍後重試")
         }
     }
 

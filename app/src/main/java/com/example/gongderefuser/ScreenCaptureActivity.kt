@@ -25,9 +25,9 @@ class ScreenCaptureActivity : Activity() {
                     as MediaProjectionManager
 
         AlertDialog.Builder(this)
-            .setTitle("请选择分享整个画面")
-            .setMessage("实时监测需要读取当前手机画面。接下来的系统提示里，请选择“分享整个画面”，不要选择“分享单一应用程式”。")
-            .setPositiveButton("继续授权") { _, _ ->
+            .setTitle("請選擇分享整個畫面")
+            .setMessage("即時監測需要讀取目前手機畫面。接下來的系統提示裡，請選擇“分享整個畫面”，不要選擇“分享單一應用程式”。")
+            .setPositiveButton("繼續授權") { _, _ ->
                 startProjectionRequest()
             }
             .setNegativeButton("取消") { _, _ ->
@@ -55,12 +55,12 @@ class ScreenCaptureActivity : Activity() {
 
             Log.d("CAPTURE", "permission granted")
 
-            // 保存权限数据
+            // 儲存權限資料
             CaptureHolder.resultCode = resultCode
             CaptureHolder.data = data
             MonitoringState.setEnabled(this, true)
 
-            // 👉 启动截屏Service
+            // 👉 啟動截圖Service
             startService()
 
             finish()

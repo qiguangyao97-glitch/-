@@ -25,9 +25,9 @@ object DiagnosticLogStore {
         "ORDER_SESSION_START"
     )
     @Volatile
-    private var lastWriteSummary: String = "尚未写入"
+    private var lastWriteSummary: String = "尚未寫入"
     @Volatile
-    private var lastAttemptTime: String = "尚未尝试"
+    private var lastAttemptTime: String = "尚未嘗試"
 
     fun append(context: Context, tag: String, message: String): File? {
         if (tag !in persistedTags) return null
@@ -39,11 +39,11 @@ object DiagnosticLogStore {
         val hourKey = hourlyFileNameFormatter.format(now)
         val targets = listOf(
             LogTarget(
-                label = "主日志",
+                label = "主日誌",
                 hourlyFile = File(DebugFileDirs.resolve(context, "diagnostic_logs"), "$hourKey-monitor-events.txt")
             ),
             LogTarget(
-                label = "备用日志",
+                label = "備用日誌",
                 hourlyFile = File(DebugFileDirs.resolve(context, "debug_samples"), "$hourKey-diagnostic-monitor-events.txt")
             )
         )
@@ -53,17 +53,17 @@ object DiagnosticLogStore {
             writeTarget(target, line, successes, failures)
         }
         lastWriteSummary = buildString {
-            append("尝试时间：")
+            append("嘗試時間：")
             append(displayTime)
             append('\n')
             if (successes.isNotEmpty()) {
-                append("写入成功：")
+                append("寫入成功：")
                 append(successes.joinToString("；") { it.absolutePath })
             } else {
-                append("写入失败")
+                append("寫入失敗")
             }
             if (failures.isNotEmpty()) {
-                append("\n失败：")
+                append("\n失敗：")
                 append(failures.joinToString("；"))
             }
         }

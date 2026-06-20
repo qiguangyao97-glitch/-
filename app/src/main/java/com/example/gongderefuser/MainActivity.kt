@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.graphics.Typeface
@@ -204,7 +205,13 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(dp(14), dp(8), dp(14), dp(8))
             background = roundedFill(Color.WHITE, 999f)
-            setOnClickListener { toggleMonitoring() }
+            setOnClickListener {
+                if (!ActivationLocalStore.isLocalActive(this@MainActivity)) {
+                    showActivationSettings()
+                } else {
+                    toggleMonitoring()
+                }
+            }
         }
         progressBar = ProgressBar(this).apply {
             visibility = ProgressBar.GONE
@@ -227,20 +234,17 @@ class MainActivity : AppCompatActivity() {
         statusCard.addView(statusDetailText)
         statusCard.addView(progressBar)
         layout.addView(statusCard)
-        if (ActivationLocalStore.isActivationRequired(this)) {
-            layout.addView(createActivationCard())
-        }
 
         val actionRow = createCardRow()
         val uploadCard = createActionCard(
-            title = "截图分析",
+            title = "截圖分析",
             detail = "",
             accentColor = COLOR_TEXT_PRIMARY,
             showDot = false
         ).apply {
             setOnClickListener {
                 if (!ensureActivationForMonitoring()) return@setOnClickListener
-                setAnalyzing(true, "请选择订单截图", "从相册选择订单截图后，我会立即进行 OCR 分析。")
+                setAnalyzing(true, "請選擇訂單截圖", "從相簿選擇訂單截圖後，我會立即進行 OCR 分析。")
                 pickOrderImage.launch(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                 )
@@ -248,7 +252,7 @@ class MainActivity : AppCompatActivity() {
         }
         actionRow.addView(uploadCard, rowItemParams(rightMargin = dp(7)))
         actionRow.addView(
-            createActionCard("手动计算", "", COLOR_WARNING, showDot = false).apply {
+            createActionCard("手動計算", "", COLOR_WARNING, showDot = false).apply {
                 setOnClickListener { showManualCalculator() }
             },
             rowItemParams(leftMargin = dp(7))
@@ -258,16 +262,16 @@ class MainActivity : AppCompatActivity() {
 
         val recordRow = createCardRow()
         recordRow.addView(
-            createRecordSummaryCard("订单记录", realtimeRecords()) {
-                showRecordDetail(Screen.RealtimeHistory, "订单记录", realtimeRecords(), "实时 OCR 自动识别订单")
+            createRecordSummaryCard("訂單記錄", realtimeRecords()) {
+                showRecordDetail(Screen.RealtimeHistory, "訂單記錄", realtimeRecords(), "即時 OCR 自動識別訂單")
             },
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 rightMargin = dp(7)
             }
         )
         recordRow.addView(
-            createRecordSummaryCard("截图记录", screenshotRecords()) {
-                showRecordDetail(Screen.ScreenshotHistory, "截图记录", screenshotRecords(), "截图分析保存记录")
+            createRecordSummaryCard("截圖記錄", screenshotRecords()) {
+                showRecordDetail(Screen.ScreenshotHistory, "截圖記錄", screenshotRecords(), "截圖分析儲存記錄")
             },
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 leftMargin = dp(7)
@@ -277,7 +281,6 @@ class MainActivity : AppCompatActivity() {
 
         setBaseContent(layout)
         updateMonitoringUi()
-        updateActivationUi()
     }
 
     private fun navigateBackOneLevel(): Boolean {
@@ -313,7 +316,7 @@ class MainActivity : AppCompatActivity() {
         currentScreen = Screen.History
 
         val layout = createBaseLayout()
-        addSubHeader(layout, "识别记录", "实时监测和截图分析的历史结果。")
+        addSubHeader(layout, "識別記錄", "即時監測和截圖分析的歷史結果。")
         layout.addView(createOrderHistoryCard())
         setBaseContent(layout)
     }
@@ -322,14 +325,14 @@ class MainActivity : AppCompatActivity() {
         currentScreen = Screen.RecentOrderDetail
         val latest = realtimeRecords().firstOrNull()
         val layout = createBaseLayout()
-        addSubHeader(layout, "最近订单", "实时 OCR 自动识别的最新一笔。")
+        addSubHeader(layout, "最近訂單", "即時 OCR 自動識別的最新一筆。")
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         if (latest == null) {
             card.addView(TextView(this).apply {
-                text = "还没有实时订单"
+                text = "還沒有即時訂單"
                 textSize = 14f
                 setTextColor(COLOR_TEXT_SECONDARY)
             })
@@ -388,7 +391,7 @@ class MainActivity : AppCompatActivity() {
 
         if (records.isEmpty()) {
             card.addView(TextView(this).apply {
-                text = "还没有记录。"
+                text = "還沒有記錄。"
                 textSize = 14f
                 setTextColor(COLOR_TEXT_SECONDARY)
                 setPadding(0, dp(12), 0, 0)
@@ -417,21 +420,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshRecordDetail(screen: Screen) {
         when (screen) {
-            Screen.RealtimeHistory -> showRecordDetail(Screen.RealtimeHistory, "订单记录", realtimeRecords(), "实时 OCR 自动识别订单")
-            Screen.ScreenshotHistory -> showRecordDetail(Screen.ScreenshotHistory, "截图记录", screenshotRecords(), "截图分析保存记录")
+            Screen.RealtimeHistory -> showRecordDetail(Screen.RealtimeHistory, "訂單記錄", realtimeRecords(), "即時 OCR 自動識別訂單")
+            Screen.ScreenshotHistory -> showRecordDetail(Screen.ScreenshotHistory, "截圖記錄", screenshotRecords(), "截圖分析儲存記錄")
             else -> showHome()
         }
     }
 
     private fun confirmClearRecords(screen: Screen) {
         AlertDialog.Builder(this)
-            .setTitle("确认清空记录？")
-            .setMessage("此操作无法恢复。")
+            .setTitle("確認清空記錄？")
+            .setMessage("此操作無法恢復。")
             .setNegativeButton("取消", null)
-            .setPositiveButton("确认清空") { _, _ ->
+            .setPositiveButton("確認清空") { _, _ ->
                 when (screen) {
-                    Screen.RealtimeHistory -> OrderHistory.clearSource(this, "实时")
-                    Screen.ScreenshotHistory -> OrderHistory.clearSource(this, "截图")
+                    Screen.RealtimeHistory -> OrderHistory.clearSource(this, "即時")
+                    Screen.ScreenshotHistory -> OrderHistory.clearSource(this, "截圖")
                     else -> Unit
                 }
                 refreshRecordDetail(screen)
@@ -451,7 +454,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(TextView(this).apply {
-            text = "识别记录"
+            text = "識別記錄"
             textSize = 17f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TEXT_PRIMARY)
@@ -474,7 +477,7 @@ class MainActivity : AppCompatActivity() {
 
         if (records.isEmpty()) {
             card.addView(TextView(this).apply {
-                text = "还没有识别记录。实时监测或截图分析成功后，会自动保存在这里。"
+                text = "還沒有識別記錄。即時監測或截圖分析成功後，會自動儲存在這裡。"
                 textSize = 14f
                 setTextColor(COLOR_TEXT_SECONDARY)
                 setLineSpacing(0f, 1.12f)
@@ -541,7 +544,7 @@ class MainActivity : AppCompatActivity() {
             leftMargin = dp(6)
         })
         titleRow.addView(TextView(this).apply {
-            text = "删除"
+            text = "刪除"
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -560,9 +563,9 @@ class MainActivity : AppCompatActivity() {
         val markers = buildList {
             add(displayAcceptMode(record.acceptMode))
             add(record.orderType)
-            if (record.isSameLocationStack) add("爽单")
-            if (record.isWhitelisted) add("标签备注")
-            if (record.isBlacklisted) add("避雷标签")
+            if (record.isSameLocationStack) add("爽單")
+            if (record.isWhitelisted) add("標籤備註")
+            if (record.isBlacklisted) add("避雷標籤")
         }.joinToString(" / ")
         row.addView(TextView(this).apply {
             text = "${record.timeLabel()} · ${record.source} · $markers"
@@ -571,9 +574,9 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(4), 0, 0)
         })
         row.addView(TextView(this).apply {
-            text = "${formatRecordPrice(record)} · ${record.minutes} 分钟 · ${
+            text = "${formatRecordPrice(record)} · ${record.minutes} 分鐘 · ${
                 OrderAnalyzer.formatDistance(record.distance)
-            } 公里 · ${OrderAnalyzer.formatMoney(record.effectiveHourly)} 元/小时"
+            } 公里 · ${OrderAnalyzer.formatMoney(record.effectiveHourly)} 元/小時"
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TEXT_PRIMARY)
@@ -590,7 +593,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (record.screenshotPath.isNotBlank()) {
             row.addView(TextView(this).apply {
-                text = "截图：${record.screenshotPath}"
+                text = "截圖：${record.screenshotPath}"
                 textSize = 11f
                 setTextColor(COLOR_TEXT_SECONDARY)
                 setLineSpacing(0f, 1.12f)
@@ -604,7 +607,7 @@ class MainActivity : AppCompatActivity() {
         }
         val keyword = buildHistoryListKeyword(record)
         actionRow.addView(
-            createSmallActionButton("加标签备注", COLOR_SUCCESS) {
+            createSmallActionButton("加標籤備註", COLOR_SUCCESS) {
                 showAddListEntryDialog(keyword, "", isWhitelist = true)
             },
             LinearLayout.LayoutParams(0, dp(40), 1f).apply {
@@ -612,7 +615,7 @@ class MainActivity : AppCompatActivity() {
             }
         )
         actionRow.addView(
-            createSmallActionButton("加避雷标签", COLOR_DANGER) {
+            createSmallActionButton("加避雷標籤", COLOR_DANGER) {
                 showAddListEntryDialog(keyword, "", isWhitelist = false)
             },
             LinearLayout.LayoutParams(0, dp(40), 1f).apply {
@@ -625,7 +628,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createModeBadge(mode: String): TextView {
-        val isReward = mode == "趟奖模式"
+        val isReward = mode == "趟獎模式"
         return TextView(this).apply {
             text = mode
             textSize = 12f
@@ -644,7 +647,7 @@ class MainActivity : AppCompatActivity() {
     private fun buildHistoryListKeyword(record: OrderHistory.Record): String {
         return listOf(record.storeName, record.storeAddress)
             .map { it.trim() }
-            .filter { it.isNotBlank() && it != "未识别商家" }
+            .filter { it.isNotBlank() && it != "未識別商家" }
             .joinToString("\n")
             .ifBlank { record.storeName }
     }
@@ -653,26 +656,26 @@ class MainActivity : AppCompatActivity() {
         currentScreen = Screen.Manual
 
         val layout = createBaseLayout()
-        addSubHeader(layout, "手动计算", "没有截图时，直接输入订单信息。")
+        addSubHeader(layout, "手動計算", "沒有截圖時，直接輸入訂單資訊。")
 
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
-        incomeInput = addLabeledNumberInput(card, "单笔预期收入", "元")
-        distanceInput = addLabeledNumberInput(card, "总跑单里程", "公里")
-        minutesInput = addLabeledNumberInput(card, "预估总时间", "分钟")
+        incomeInput = addLabeledNumberInput(card, "單筆預期收入", "元")
+        distanceInput = addLabeledNumberInput(card, "總跑單里程", "公里")
+        minutesInput = addLabeledNumberInput(card, "預估總時間", "分鐘")
         card.addView(TextView(this).apply {
             val rule = RuleSettings.load(this@MainActivity).normal
-            text = "使用规则页目标：时薪 ${rule.targetHourly}，${OrderAnalyzer.formatDistance(rule.targetYuanPerKm)} 元/km，平均单价 ${OrderAnalyzer.formatMoney(rule.targetAveragePrice)}。"
+            text = "使用規則頁目標：時薪 ${rule.targetHourly}，${OrderAnalyzer.formatDistance(rule.targetYuanPerKm)} 元/km，平均單價 ${OrderAnalyzer.formatMoney(rule.targetAveragePrice)}。"
             textSize = 13f
             setTextColor(COLOR_TEXT_SECONDARY)
             setPadding(0, dp(4), 0, dp(12))
         })
-        manualStoreNameInput = addLabeledTextInput(card, "商家名称", "可选，用于加入标签备注/避雷标签")
-        manualAddressInput = addLabeledTextInput(card, "配送地址", "可选，用于加入标签备注/避雷标签")
+        manualStoreNameInput = addLabeledTextInput(card, "商家名稱", "可選，用於加入標籤備註/避雷標籤")
+        manualAddressInput = addLabeledTextInput(card, "配送地址", "可選，用於加入標籤備註/避雷標籤")
         card.addView(createButton(primary = true).apply {
-            text = "计算划算度"
+            text = "計算是否划算"
             setOnClickListener { calculateManualOrder() }
         })
         layout.addView(card)
@@ -685,11 +688,11 @@ class MainActivity : AppCompatActivity() {
 
         val settings = RuleSettings.load(this)
         val layout = createBaseLayout()
-        addSubHeader(layout, "规则", "点击卡片进入对应项目修改。", showBackButton = false)
+        addSubHeader(layout, "規則", "點擊卡片進入對應項目修改。", showBackButton = false)
 
         layout.addView(
             createActionCard(
-                "接单模式",
+                "接單模式",
                 "目前：${acceptModeTitle(settings.acceptMode)}",
                 COLOR_ACCENT
             ).apply { setOnClickListener { showAcceptModeEditor() } },
@@ -703,7 +706,7 @@ class MainActivity : AppCompatActivity() {
 
         layout.addView(
             createActionCard(
-                "评分规则",
+                "評分規則",
                 ruleSummary(settings.normal),
                 COLOR_SUCCESS
             ).apply { setOnClickListener { showRuleConfigEditor() } },
@@ -718,16 +721,16 @@ class MainActivity : AppCompatActivity() {
         val listRow = createCardRow()
         listRow.addView(
             createActionCard(
-                "标签备注",
-                "已建立 ${settings.whitelistEntries.size} 条\n查看标签库",
+                "標籤備註",
+                "已建立 ${settings.whitelistEntries.size} 條\n查看標籤库",
                 COLOR_SUCCESS
             ).apply { setOnClickListener { showListEditor(isWhitelist = true) } },
             rowItemParams(rightMargin = dp(7))
         )
         listRow.addView(
             createActionCard(
-                "避雷标签",
-                "已建立 ${settings.blacklistEntries.size} 条\n查看避雷库",
+                "避雷標籤",
+                "已建立 ${settings.blacklistEntries.size} 條\n查看避雷库",
                 COLOR_DANGER
             ).apply { setOnClickListener { showListEditor(isWhitelist = false) } },
             rowItemParams(leftMargin = dp(7))
@@ -738,21 +741,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun ruleSummary(rule: RuleSettings.RuleConfig): String {
-        return "时薪 ${rule.targetHourly}；${OrderAnalyzer.formatDistance(rule.targetYuanPerKm)} 元/km；均价 ${OrderAnalyzer.formatMoney(rule.targetAveragePrice)}；肥单 ${rule.fatOrderMinAmount} 元"
+        return "時薪 ${rule.targetHourly}；${OrderAnalyzer.formatDistance(rule.targetYuanPerKm)} 元/km；均價 ${OrderAnalyzer.formatMoney(rule.targetAveragePrice)}；肥單 ${rule.fatOrderMinAmount} 元"
     }
 
     private fun acceptModeTitle(mode: RuleSettings.AcceptMode): String {
         return when (mode) {
-            RuleSettings.AcceptMode.REWARD -> "趟奖模式"
+            RuleSettings.AcceptMode.REWARD -> "趟獎模式"
             RuleSettings.AcceptMode.NORMAL -> "正常模式"
         }
     }
 
     private fun displayAcceptMode(mode: String): String {
         return when (mode) {
-            "躺奖模式", "躺獎模式", "趟獎模式", "趟奖模式" -> "趟奖模式"
+            "躺獎模式", "躺獎模式", "趟獎模式", "趟獎模式" -> "趟獎模式"
             "正常模式" -> "正常模式"
-            else -> mode.ifBlank { "未记录" }
+            else -> mode.ifBlank { "未記錄" }
         }
     }
 
@@ -762,7 +765,7 @@ class MainActivity : AppCompatActivity() {
         val settings = RuleSettings.load(this)
         var selectedMode = settings.acceptMode
         val layout = createBaseLayout()
-        addSubHeader(layout, "接单模式", "选择当前跑单时段的判断方式。")
+        addSubHeader(layout, "接單模式", "選擇目前跑單時段的判斷方式。")
 
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
@@ -774,11 +777,11 @@ class MainActivity : AppCompatActivity() {
             normalOption.background = modeOptionBackground(selectedMode == RuleSettings.AcceptMode.NORMAL, COLOR_SUCCESS)
             rewardOption.background = modeOptionBackground(selectedMode == RuleSettings.AcceptMode.REWARD, COLOR_ACCENT)
             (normalOption.getChildAt(0) as? TextView)?.text = "${if (selectedMode == RuleSettings.AcceptMode.NORMAL) "●" else "○"} 正常模式"
-            (rewardOption.getChildAt(0) as? TextView)?.text = "${if (selectedMode == RuleSettings.AcceptMode.REWARD) "●" else "○"} 趟奖模式"
+            (rewardOption.getChildAt(0) as? TextView)?.text = "${if (selectedMode == RuleSettings.AcceptMode.REWARD) "●" else "○"} 趟獎模式"
         }
         normalOption = createModeOption(
             title = "正常模式",
-            detail = "使用原始动态评分算法",
+            detail = "使用原始動態評分算法",
             selected = selectedMode == RuleSettings.AcceptMode.NORMAL,
             accentColor = COLOR_SUCCESS
         ) {
@@ -786,8 +789,8 @@ class MainActivity : AppCompatActivity() {
             refreshOptions()
         }
         rewardOption = createModeOption(
-            title = "趟奖模式",
-            detail = "提高多单且不拖时间订单的权重",
+            title = "趟獎模式",
+            detail = "提高多單且不拖時間訂單的權重",
             selected = selectedMode == RuleSettings.AcceptMode.REWARD,
             accentColor = COLOR_ACCENT
         ) {
@@ -797,14 +800,14 @@ class MainActivity : AppCompatActivity() {
         card.addView(normalOption)
         card.addView(rewardOption)
 
-        val rewardInput = addLabeledNumberInput(card, "每趟奖励金额", "元").apply {
+        val rewardInput = addLabeledNumberInput(card, "每趟獎勵金額", "元").apply {
             setText(settings.rewardPerTrip.toString())
         }
         card.addView(TextView(this).apply {
             text = buildString {
-                appendLine("趟奖模式不修改订单金额。")
-                appendLine("仅提高多单且高效率订单权重。")
-                append("避雷单与低效率订单不会获得加权。")
+                appendLine("趟獎模式不修改訂單金額。")
+                appendLine("仅提高多單且高效率訂單權重。")
+                append("避雷單與低效率訂單不會獲得加權。")
             }
             textSize = 13f
             setTextColor(COLOR_TEXT_SECONDARY)
@@ -812,15 +815,15 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(6), 0, dp(12))
         })
         card.addView(createButton(primary = true).apply {
-            text = "保存"
+            text = "儲存"
             setOnClickListener {
                 val rewardPerTrip = rewardInput.text.toString().toIntOrNull()
                 if (rewardPerTrip == null || rewardPerTrip < 0) {
-                    Toast.makeText(this@MainActivity, "请输入有效奖励金额", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "請輸入有效獎勵金額", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
                 RuleSettings.saveAcceptMode(this@MainActivity, selectedMode, rewardPerTrip)
-                Toast.makeText(this@MainActivity, "已保存接单模式", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "已儲存接單模式", Toast.LENGTH_SHORT).show()
                 showRuleSettings()
             }
         })
@@ -877,31 +880,31 @@ class MainActivity : AppCompatActivity() {
         val layout = createBaseLayout()
         addSubHeader(
             layout,
-            "评分规则",
-            "目标值代表公平价格，达到目标值为 80 分。"
+            "評分規則",
+            "目標值代表公平價格，達到目標值為 80 分。"
         )
 
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
-        val targetHourlyInput = addLabeledNumberInput(card, "目标时薪", "元/小时").apply {
+        val targetHourlyInput = addLabeledNumberInput(card, "目標時薪", "元/小時").apply {
             setText(rule.targetHourly.toString())
         }
-        val targetYuanPerKmInput = addLabeledNumberInput(card, "目标元/公里", "金额除以公里").apply {
+        val targetYuanPerKmInput = addLabeledNumberInput(card, "目標元/公里", "金額除以公里").apply {
             setText(OrderAnalyzer.formatDistance(rule.targetYuanPerKm))
         }
-        val targetAveragePriceInput = addLabeledNumberInput(card, "目标平均单价", "金额除以配送数量").apply {
+        val targetAveragePriceInput = addLabeledNumberInput(card, "目標平均單價", "金額除以配送數量").apply {
             setText(OrderAnalyzer.formatMoney(rule.targetAveragePrice))
         }
-        val scoreBaseInput = addLabeledNumberInput(card, "评分基准分", "50 到 100").apply {
+        val scoreBaseInput = addLabeledNumberInput(card, "評分基準分", "50 到 100").apply {
             setText(rule.scoreBase.toString())
         }
-        val fatOrderMinAmountInput = addLabeledNumberInput(card, "肥单最低金额", "默认 100 元").apply {
+        val fatOrderMinAmountInput = addLabeledNumberInput(card, "肥單最低金額", "預設 100 元").apply {
             setText(rule.fatOrderMinAmount.toString())
         }
         card.addView(createButton(primary = true).apply {
-            text = "保存"
+            text = "儲存"
             setOnClickListener {
                 val updatedRule = readScoreRuleConfig(
                     targetHourlyInput,
@@ -912,7 +915,7 @@ class MainActivity : AppCompatActivity() {
                     rule
                 )
                 if (updatedRule == null) {
-                    Toast.makeText(this@MainActivity, "请输入有效目标，评分基准分需为 50 到 100", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "請輸入有效目標，評分基準分需為 50 到 100", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
                 RuleSettings.save(
@@ -922,7 +925,7 @@ class MainActivity : AppCompatActivity() {
                     whitelistText = RuleSettings.serializeEntries(settings.whitelistEntries),
                     blacklistText = RuleSettings.serializeEntries(settings.blacklistEntries)
                 )
-                Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "已儲存", Toast.LENGTH_SHORT).show()
                 showRuleSettings()
             }
         })
@@ -938,8 +941,8 @@ class MainActivity : AppCompatActivity() {
         val layout = createBaseLayout()
         addSubHeader(
             layout,
-            if (isWhitelist) "标签备注" else "避雷标签",
-            if (isWhitelist) "命中后只显示备注，不加分不扣分。" else "命中任意避雷标签后扣 10 分。"
+            if (isWhitelist) "標籤備註" else "避雷標籤",
+            if (isWhitelist) "命中後只顯示備註，不加分不扣分。" else "命中任意避雷標籤後扣 10 分。"
         )
 
         val card = createCard().apply {
@@ -961,11 +964,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun createTagLibraryCard(isWhitelist: Boolean): LinearLayout {
         val count = if (isWhitelist) whitelistTags.size else blacklistTags.size
-        val title = if (isWhitelist) "标签列表" else "避雷列表"
-        val detail = if (isWhitelist) "已建立 $count 个标签" else "已建立 $count 个避雷标签"
+        val title = if (isWhitelist) "標籤列表" else "避雷列表"
+        val detail = if (isWhitelist) "已建立 $count 個標籤" else "已建立 $count 個避雷標籤"
         return createActionCard(
             title = title,
-            detail = "$detail\n点击查看和管理",
+            detail = "$detail\n點擊查看和管理",
             accentColor = if (isWhitelist) COLOR_SUCCESS else COLOR_DANGER
         ).apply {
             setOnClickListener { showListManagement(isWhitelist) }
@@ -994,14 +997,14 @@ class MainActivity : AppCompatActivity() {
         val layout = createBaseLayout()
         addSubHeader(
             layout,
-            if (isWhitelist) "标签管理" else "避雷管理",
-            if (isWhitelist) "查询、导入、导出和编辑标签备注。" else "查询、导入、导出和编辑避雷标签。"
+            if (isWhitelist) "標籤管理" else "避雷管理",
+            if (isWhitelist) "查詢、匯入、匯出和编辑標籤備註。" else "查詢、匯入、匯出和编辑避雷標籤。"
         )
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
-        val searchInput = createNumberlessInput("查询名称或备注")
+        val searchInput = createNumberlessInput("查詢名稱或備註")
         card.addView(searchInput)
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1013,13 +1016,13 @@ class MainActivity : AppCompatActivity() {
                 rightMargin = right
             }
         }
-        actionRow.addView(createSmallActionButton("查询", COLOR_ACCENT) {
+        actionRow.addView(createSmallActionButton("查詢", COLOR_ACCENT) {
             renderListTags(isWhitelist, searchInput.text.toString().trim())
         }, actionButtonParams(right = dp(6)))
-        actionRow.addView(createSmallActionButton("导入", COLOR_SUCCESS) {
+        actionRow.addView(createSmallActionButton("匯入", COLOR_SUCCESS) {
             showImportListDialog(isWhitelist)
         }, actionButtonParams(left = dp(3), right = dp(3)))
-        actionRow.addView(createSmallActionButton("导出", COLOR_WARNING) {
+        actionRow.addView(createSmallActionButton("匯出", COLOR_WARNING) {
             exportListEntries(isWhitelist)
         }, actionButtonParams(left = dp(6)))
         card.addView(actionRow)
@@ -1048,10 +1051,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val keywordInput = createNumberlessInput(
-            if (isWhitelist) "商家名称或地址关键词" else "不好送商家/地址关键词"
+            if (isWhitelist) "商家名稱或地址關鍵词" else "不好送商家/地址關鍵词"
         )
         val noteInput = createNumberlessInput(
-            if (isWhitelist) "备注：位置、出餐速度等" else "原因：不好取/不好送/难停车等"
+            if (isWhitelist) "備註：位置、出餐速度等" else "原因：不好取/不好送/難停車等"
         ).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1070,7 +1073,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val addButton = Button(this).apply {
-            text = if (isWhitelist) "添加标签备注" else "添加避雷标签"
+            text = if (isWhitelist) "新增標籤備註" else "新增避雷標籤"
             isAllCaps = false
             textSize = 14f
             setTextColor(Color.WHITE)
@@ -1099,17 +1102,17 @@ class MainActivity : AppCompatActivity() {
         val note = noteInput.text.toString().trim()
 
         if (keyword.length < 2) {
-            Toast.makeText(this, "请输入至少两个字的关键词", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "請輸入至少兩個字的關鍵词", Toast.LENGTH_SHORT).show()
             return
         }
 
         val list = if (isWhitelist) whitelistTags else blacklistTags
         if (RuleSettings.containsMatchingEntry(whitelistTags + blacklistTags, keyword)) {
-            Toast.makeText(this, "名单里已有相同商家或地址", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "名單裡已有相同商家或地址", Toast.LENGTH_SHORT).show()
         } else {
             list.add(RuleSettings.ListEntry(keyword, note))
             persistListTags(isWhitelist)
-            Toast.makeText(this, "标签已保存", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "標籤已儲存", Toast.LENGTH_SHORT).show()
         }
         keywordInput.setText("")
         noteInput.setText("")
@@ -1129,9 +1132,9 @@ class MainActivity : AppCompatActivity() {
         val container = if (isWhitelist) whitelistTagContainer else blacklistTagContainer
         val accentColor = if (isWhitelist) COLOR_SUCCESS else COLOR_DANGER
         val emptyText = if (normalizedQuery.isBlank()) {
-            if (isWhitelist) "还没有标签备注" else "还没有避雷标签"
+            if (isWhitelist) "還沒有標籤備註" else "還沒有避雷標籤"
         } else {
-            "没有找到匹配标签"
+            "沒有找到匹配標籤"
         }
 
         container.removeAllViews()
@@ -1171,11 +1174,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showEditListTagDialog(entry: RuleSettings.ListEntry, isWhitelist: Boolean) {
-        val keywordInput = createNumberlessInput("商家名称或地址关键词").apply {
+        val keywordInput = createNumberlessInput("商家名稱或地址關鍵词").apply {
             setText(entry.keyword)
         }
         val noteInput = createNumberlessInput(
-            if (isWhitelist) "备注：位置、出餐速度等" else "原因：不好取/不好送/难停车等"
+            if (isWhitelist) "備註：位置、出餐速度等" else "原因：不好取/不好送/難停車等"
         ).apply {
             setText(entry.note)
             setSingleLine(false)
@@ -1195,10 +1198,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (isWhitelist) "编辑标签备注" else "编辑避雷标签")
+            .setTitle(if (isWhitelist) "编辑標籤備註" else "编辑避雷標籤")
             .setView(content)
-            .setPositiveButton("保存", null)
-            .setNegativeButton("删除", null)
+            .setPositiveButton("儲存", null)
+            .setNegativeButton("刪除", null)
             .setNeutralButton("取消", null)
             .create()
 
@@ -1207,7 +1210,7 @@ class MainActivity : AppCompatActivity() {
                 val keyword = keywordInput.text.toString().trim()
                 val note = noteInput.text.toString().trim()
                 if (keyword.length < 2) {
-                    keywordInput.error = "至少两个字"
+                    keywordInput.error = "至少兩個字"
                     return@setOnClickListener
                 }
                 val list = if (isWhitelist) whitelistTags else blacklistTags
@@ -1223,14 +1226,14 @@ class MainActivity : AppCompatActivity() {
                     list.addAll(it)
                 }
                 persistListTags(isWhitelist)
-                Toast.makeText(this@MainActivity, "标签已保存", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "標籤已儲存", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
                 val list = if (isWhitelist) whitelistTags else blacklistTags
                 list.remove(entry)
                 persistListTags(isWhitelist)
-                Toast.makeText(this@MainActivity, "标签已删除", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "標籤已刪除", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
         }
@@ -1268,13 +1271,13 @@ class MainActivity : AppCompatActivity() {
         val text = runCatching {
             contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
         }.getOrElse {
-            Toast.makeText(this, "读取文件失败：${it.message.orEmpty()}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "讀取檔案失敗：${it.message.orEmpty()}", Toast.LENGTH_LONG).show()
             return
         }
 
         val imported = RuleSettings.parseEntries(text)
         if (imported.isEmpty()) {
-            Toast.makeText(this, "没有可导入内容，请确认格式为：名称|备注", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "沒有可匯入內容，請確認格式為：名稱|備註", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -1284,7 +1287,7 @@ class MainActivity : AppCompatActivity() {
         target.clear()
         target.addAll(merged)
         persistListTags(isWhitelist)
-        Toast.makeText(this, "已导入 ${target.size - beforeCount} 条，跳过 ${imported.size - (target.size - beforeCount)} 条重复", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "已匯入 ${target.size - beforeCount} 條，跳過 ${imported.size - (target.size - beforeCount)} 條重複", Toast.LENGTH_LONG).show()
     }
 
     private fun exportListEntries(isWhitelist: Boolean) {
@@ -1293,48 +1296,283 @@ class MainActivity : AppCompatActivity() {
         dir.mkdirs()
         val file = File(dir, if (isWhitelist) "tags.txt" else "blacklist.txt")
         file.writeText(RuleSettings.serializeEntries(entries), Charsets.UTF_8)
-        Toast.makeText(this, "已导出：${file.absolutePath}", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "已匯出：${file.absolutePath}", Toast.LENGTH_LONG).show()
     }
 
     private fun showAppSettings() {
         currentScreen = Screen.AppSettings
 
-        val layout = createBaseLayout()
-        addSubHeader(layout, "设置", "应用偏好。", trailingText = "版本 ${appVersionNameOnly()}")
-        layout.addView(createActionCard(
-            "音效设置",
-            if (AppSettings.isSoundEnabled(this)) "当前：已开启" else "当前：已关闭",
-            COLOR_SUCCESS
-        ).apply { setOnClickListener { showSoundSettings() } })
-        layout.addView(createActionCard(
-            "调试信息",
-            if (AppSettings.isDebugSamplesEnabled(this)) "当前：已开启" else "当前：已关闭",
-            COLOR_ACCENT
-        ).apply { setOnClickListener { showDebugSettings() } })
-        layout.addView(createActionCard(
-            "数据管理",
-            "清除诊断数据",
-            COLOR_WARNING
-        ).apply { setOnClickListener { showDataSettings() } })
-        layout.addView(createActionCard(
-            "关于应用",
-            "版本 ${appVersionNameOnly()}",
-            COLOR_TEXT_PRIMARY
-        ).apply { setOnClickListener { showAboutSettings() } })
+        val layout = createSettingsBaseLayout()
+        addSettingsHeader(layout)
+
+        layout.addView(createSettingsGroup(
+            "權限與服務",
+            listOf(
+                SettingsEntry("♿", "無障礙服務", if (isAccessibilityServiceEnabled()) "已啟用" else "未啟用") {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                },
+                SettingsEntry("▣", "螢幕擷取權限", if (MonitoringState.isEnabled(this)) "已啟用" else "未啟用") {
+                    startActivity(Intent(this, ScreenCaptureActivity::class.java))
+                },
+                SettingsEntry("OCR", "OCR 引擎狀態", "正常") {
+                    showDebugSettings()
+                }
+            )
+        ))
+
+        layout.addView(createSettingsGroup(
+            "通知與提醒",
+            listOf(
+                SettingsEntry("♪", "提示音", if (AppSettings.isSoundEnabled(this)) "開啟" else "關閉") {
+                    showSoundSettings()
+                }
+            )
+        ))
+
+        layout.addView(createSettingsGroup(
+            "授權與設備",
+            listOf(
+                SettingsEntry("🔑", "啟用狀態", activationSummaryStatus()) {
+                    if (ActivationLocalStore.isActivationRequired(this)) showActivationSettings()
+                },
+                SettingsEntry("⏱", "到期時間", activationExpirySummary()) {
+                    if (ActivationLocalStore.isActivationRequired(this)) showActivationSettings()
+                },
+                SettingsEntry("◇", "設備綁定資訊", deviceBindingSummary()) {
+                    showDeviceInfoDialog()
+                }
+            )
+        ))
+
+        layout.addView(createSettingsGroup(
+            "系統資訊",
+            listOf(
+                SettingsEntry("ⓘ", "版本號", appVersionLabel()) {
+                    showAboutSettings()
+                },
+                SettingsEntry("↻", "更新日誌", "查看") {
+                    showUpdateLogDialog()
+                },
+                SettingsEntry("⌘", "隱私政策", "查看") {
+                    showPrivacyPolicyDialog()
+                },
+                SettingsEntry("※", "關於功德拒絕器", "查看") {
+                    showAboutSettings()
+                }
+            )
+        ))
 
         setBaseContent(layout)
+    }
+
+    private data class SettingsEntry(
+        val icon: String,
+        val title: String,
+        val status: String,
+        val onClick: () -> Unit
+    )
+
+    private fun createSettingsBaseLayout(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(22), dp(18), dp(28))
+            setBackgroundColor(COLOR_SETTINGS_BACKGROUND)
+        }
+    }
+
+    private fun addSettingsHeader(layout: LinearLayout) {
+        layout.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(14))
+            addView(TextView(this@MainActivity).apply {
+                text = "設定"
+                textSize = 26f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_TEXT_PRIMARY)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@MainActivity).apply {
+                text = "版本 ${appVersionNameOnly()}"
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_TEXT_SECONDARY)
+                gravity = Gravity.CENTER
+                setPadding(dp(10), dp(5), dp(10), dp(5))
+                background = roundedStroke(Color.WHITE, COLOR_BORDER, 999f)
+            })
+        })
+    }
+
+    private fun createSettingsGroup(title: String, entries: List<SettingsEntry>): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(18)
+            }
+
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_TEXT_SECONDARY)
+                setPadding(dp(4), 0, dp(4), dp(8))
+            })
+
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                background = roundedFill(Color.WHITE, 16f)
+                elevation = dp(1).toFloat()
+                entries.forEachIndexed { index, entry ->
+                    addView(createSettingsListRow(entry))
+                    if (index != entries.lastIndex) addView(createSettingsDivider())
+                }
+            })
+        }
+    }
+
+    private fun createSettingsListRow(entry: SettingsEntry): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), 0, dp(12), 0)
+            minimumHeight = dp(58)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { entry.onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(58)
+            )
+
+            addView(TextView(this@MainActivity).apply {
+                text = entry.icon
+                textSize = if (entry.icon.length <= 2) 18f else 12f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setTextColor(COLOR_ACCENT)
+                background = roundedFill(Color.rgb(241, 245, 249), 999f)
+            }, LinearLayout.LayoutParams(dp(34), dp(34)).apply {
+                rightMargin = dp(12)
+            })
+
+            addView(TextView(this@MainActivity).apply {
+                text = entry.title
+                textSize = 15.5f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_TEXT_PRIMARY)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            addView(TextView(this@MainActivity).apply {
+                text = entry.status
+                textSize = 13f
+                setTextColor(settingsStatusColor(entry.status))
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(dp(92), LinearLayout.LayoutParams.WRAP_CONTENT))
+
+            addView(TextView(this@MainActivity).apply {
+                text = "›"
+                textSize = 24f
+                setTextColor(COLOR_TEXT_HINT)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(18), LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+    }
+
+    private fun createSettingsDivider(): View {
+        return View(this).apply {
+            setBackgroundColor(Color.rgb(238, 242, 246))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(1)
+            ).apply {
+                leftMargin = dp(60)
+            }
+        }
+    }
+
+    private fun settingsStatusColor(status: String): Int {
+        return when {
+            status.contains("未") || status == "關閉" || status == "異常" -> COLOR_TEXT_HINT
+            status.contains("已") || status == "開啟" || status == "正常" -> COLOR_SUCCESS
+            else -> COLOR_TEXT_SECONDARY
+        }
+    }
+
+    private fun notificationStatusLabel(): String {
+        return if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            "開啟"
+        } else {
+            "關閉"
+        }
+    }
+
+    private fun activationSummaryStatus(): String {
+        if (!ActivationLocalStore.isActivationRequired(this)) return "測試版"
+        return if (ActivationLocalStore.isLocalActive(this)) "已啟用" else "未啟用"
+    }
+
+    private fun activationExpirySummary(): String {
+        if (!ActivationLocalStore.isActivationRequired(this)) return "不限制"
+        val expiresAtMillis = ActivationLocalStore.getExpiresAtMillis(this)
+        return if (expiresAtMillis > 0L) ActivationManager.formatDateTime(expiresAtMillis) else "--"
+    }
+
+    private fun deviceBindingSummary(): String {
+        return if (DeviceIdManager.getDeviceId(this).isNotBlank()) "設備已綁定" else "未綁定"
+    }
+
+    private fun showDeviceInfoDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("設備綁定資訊")
+            .setMessage("設備 ID：${DeviceIdManager.getDeviceId(this)}")
+            .setPositiveButton("知道了", null)
+            .show()
+    }
+
+    private fun showUpdateLogDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("更新日誌")
+            .setMessage("目前版本：${appVersionLabel()}\n\n已同步測試版功能、繁體中文介面與 OCR 診斷優化。")
+            .setPositiveButton("知道了", null)
+            .show()
+    }
+
+    private fun showPrivacyPolicyDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("隱私政策")
+            .setMessage("功德拒絕器僅在本機分析訂單截圖與必要設定資料。診斷資料用於排查識別問題，不會主動上傳。")
+            .setPositiveButton("知道了", null)
+            .show()
+    }
+
+    private fun showActivationSettings() {
+        currentScreen = Screen.SettingsDetail
+        val layout = createBaseLayout()
+        addSubHeader(layout, "啟用碼", "輸入啟用碼或續期。")
+        layout.addView(createActivationCard())
+        setBaseContent(layout)
+        updateActivationUi()
     }
 
     private fun showSoundSettings() {
         currentScreen = Screen.SettingsDetail
         val layout = createBaseLayout()
-        addSubHeader(layout, "音效设置", "反馈音和测试播放。")
+        addSubHeader(layout, "音效設定", "回饋音和測試播放。")
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         card.addView(createSettingsToggleRow(
-            title = "反馈音效",
+            title = "回饋音效",
             enabled = AppSettings.isSoundEnabled(this),
             onToggle = { enabled ->
                 AppSettings.setSoundEnabled(this, enabled)
@@ -1342,7 +1580,7 @@ class MainActivity : AppCompatActivity() {
             }
         ))
         card.addView(TextView(this).apply {
-            text = "订单结果会按四档播放对应提示音。"
+            text = "訂單結果會按四檔播放對應提示音。"
             textSize = 13f
             setTextColor(COLOR_TEXT_SECONDARY)
             setPadding(0, dp(10), 0, dp(12))
@@ -1369,13 +1607,13 @@ class MainActivity : AppCompatActivity() {
             DiagnosticLogStore.writeSelfTest(this, "debug_settings_view")
         }
         val layout = createBaseLayout()
-        addSubHeader(layout, "调试信息", "识别问题排查入口。")
+        addSubHeader(layout, "調試資訊", "識別問題排查入口。")
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         card.addView(createSettingsToggleRow(
-            title = "问题诊断模式",
+            title = "問題診斷模式",
             enabled = AppSettings.isDebugSamplesEnabled(this),
             onToggle = { enabled ->
                 AppSettings.setDebugSamplesEnabled(this, enabled)
@@ -1383,7 +1621,7 @@ class MainActivity : AppCompatActivity() {
             }
         ))
         card.addView(TextView(this).apply {
-            text = "保存截图、OCR结果和订单分析数据，方便排查识别问题。\n路径：${AppSettings.debugSamplePath(this@MainActivity)}"
+            text = "儲存截圖、OCR結果和訂單分析資料，方便排查識別問題。\n路徑：${AppSettings.debugSamplePath(this@MainActivity)}"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.12f)
@@ -1391,28 +1629,28 @@ class MainActivity : AppCompatActivity() {
         })
         card.addView(createActionCard(
             title = "OCR 校准",
-            detail = "选择截图生成区域框图",
+            detail = "選擇截圖產生區域框圖",
             accentColor = COLOR_ACCENT
         ).apply {
             setOnClickListener { showOcrCalibration() }
         })
         if (isDebugBuild()) {
             card.addView(createSettingsToggleRow(
-                title = "记录无障碍事件日志",
+                title = "記錄無障礙事件日誌",
                 enabled = AppSettings.isAccessibilityLogEnabled(this),
                 onToggle = { enabled ->
                     AppSettings.setAccessibilityLogEnabled(this, enabled)
                     val file = DiagnosticLogStore.writeSelfTest(this, "accessibility_log_toggle_enabled_$enabled")
                     Toast.makeText(
                         this,
-                        if (file != null) "日志已写入：${file.name}" else "日志写入失败",
+                        if (file != null) "日誌已寫入：${file.name}" else "日誌寫入失敗",
                         Toast.LENGTH_SHORT
                     ).show()
                     showDebugSettings()
                 }
             ))
             card.addView(TextView(this).apply {
-                text = "无障碍事件日志路径：${AppSettings.diagnosticLogPath(this@MainActivity)}\n主日志按小时输出：yyyyMMdd-HH-monitor-events.txt\n排查时按问题发生时间传对应小时的 TXT 即可。\n本次尝试时间：${DiagnosticLogStore.lastAttemptTime()}\n最近写入：${DiagnosticLogStore.lastWriteSummary()}"
+                text = "無障礙事件日誌路徑：${AppSettings.diagnosticLogPath(this@MainActivity)}\n主日誌按小時輸出：yyyyMMdd-HH-monitor-events.txt\n排查時按問題發生時間傳對應小時的 TXT 即可。\n本次嘗試時間：${DiagnosticLogStore.lastAttemptTime()}\n最近寫入：${DiagnosticLogStore.lastWriteSummary()}"
                 textSize = 12f
                 setTextColor(COLOR_TEXT_SECONDARY)
                 setLineSpacing(0f, 1.12f)
@@ -1426,17 +1664,17 @@ class MainActivity : AppCompatActivity() {
     private fun showDataSettings() {
         currentScreen = Screen.SettingsDetail
         val layout = createBaseLayout()
-        addSubHeader(layout, "数据管理", "诊断数据与调试文件。")
+        addSubHeader(layout, "資料管理", "診斷資料與調試檔案。")
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         card.addView(createButton(primary = false).apply {
-            text = "清除诊断数据"
+            text = "清除診斷資料"
             setOnClickListener { showClearDiagnosticDataDialog() }
         })
         card.addView(TextView(this).apply {
-            text = "诊断样本路径：${AppSettings.debugSamplePath(this@MainActivity)}\n无障碍日志路径：${AppSettings.diagnosticLogPath(this@MainActivity)}\n手动截图调试路径：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
+            text = "診斷樣本路徑：${AppSettings.debugSamplePath(this@MainActivity)}\n無障礙日誌路徑：${AppSettings.diagnosticLogPath(this@MainActivity)}\n手動截圖調試路徑：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.12f)
@@ -1449,13 +1687,13 @@ class MainActivity : AppCompatActivity() {
     private fun showAboutSettings() {
         currentScreen = Screen.SettingsDetail
         val layout = createBaseLayout()
-        addSubHeader(layout, "关于应用", "版本 ${appVersionNameOnly()}")
+        addSubHeader(layout, "關於應用", "版本 ${appVersionNameOnly()}")
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         card.addView(TextView(this).apply {
-            text = "功德拒绝器\n公平，公平，还是他妈的公平。"
+            text = "功德拒绝器\n公平，公平，還是他妈的公平。"
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TEXT_PRIMARY)
@@ -1467,12 +1705,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun showClearDiagnosticDataDialog() {
         AlertDialog.Builder(this)
-            .setTitle("清除诊断数据")
-            .setMessage("确定删除所有诊断文件吗？")
+            .setTitle("清除診斷資料")
+            .setMessage("確定刪除所有診斷檔案嗎？")
             .setNegativeButton("取消", null)
-            .setPositiveButton("确定") { _, _ ->
+            .setPositiveButton("確定") { _, _ ->
                 DebugFileDirs.clearDiagnostics(this)
-                Toast.makeText(this, "诊断数据已清除", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "診斷資料已清除", Toast.LENGTH_SHORT).show()
                 showAppSettings()
             }
             .show()
@@ -1484,6 +1722,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showOcrCalibration() {
         currentScreen = Screen.OcrCalibration
+        loadLastCalibrationBitmapIfNeeded()
 
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
@@ -1499,7 +1738,7 @@ class MainActivity : AppCompatActivity() {
             ))
             if (calibrationSavedPath.isNotBlank()) {
                 root.addView(TextView(this).apply {
-                    text = "最近生成：manual_ocr_debug"
+                    text = "已載入上次 OCR 校準圖"
                     textSize = 12f
                     setTextColor(Color.WHITE)
                     setPadding(dp(10), dp(6), dp(10), dp(6))
@@ -1516,7 +1755,7 @@ class MainActivity : AppCompatActivity() {
         } ?: run {
             calibrationView = null
             root.addView(TextView(this).apply {
-                text = "先点上方“选择截图”载入订单截图"
+                text = "先點上方“選擇截圖”載入訂單截圖"
                 textSize = 16f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.WHITE)
@@ -1543,21 +1782,21 @@ class MainActivity : AppCompatActivity() {
             rightMargin = dp(4)
         })
         topRow.addView(createButton(primary = false).apply {
-            text = "选择"
+            text = "選擇"
             setOnClickListener { pickCalibrationScreenshot() }
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
             leftMargin = dp(4)
             rightMargin = dp(4)
         })
         topRow.addView(createButton(primary = true).apply {
-            text = "保存"
+            text = "儲存"
             setOnClickListener {
                 val current = calibrationView?.currentRegions().orEmpty()
                 OcrCalibrationStore.save(this@MainActivity, current)
                 showOcrCalibration()
                 AlertDialog.Builder(this@MainActivity)
-                    .setTitle("保存成功")
-                    .setMessage("OCR 模板已保存。以后点“默认”会恢复到这一次保存的模板。")
+                    .setTitle("儲存成功")
+                    .setMessage("OCR 模板已儲存。以後點“預設”會恢復到這一次儲存的模板。")
                     .setPositiveButton("知道了", null)
                     .show()
             }
@@ -1566,12 +1805,12 @@ class MainActivity : AppCompatActivity() {
             rightMargin = dp(4)
         })
         topRow.addView(createButton(primary = false).apply {
-            text = "默认"
+            text = "預設"
             setOnClickListener {
                 calibrationBitmap?.let { bitmap ->
                     calibrationView?.setImageAndRegions(bitmap, OcrCalibrationStore.load(this@MainActivity))
                 }
-                Toast.makeText(this@MainActivity, "已恢复到上一次保存的 OCR 模板", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, "已恢復到上一次儲存的 OCR 模板", Toast.LENGTH_LONG).show()
             }
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
             leftMargin = dp(4)
@@ -1579,7 +1818,7 @@ class MainActivity : AppCompatActivity() {
         toolbar.addView(topRow)
 
         toolbar.addView(TextView(this).apply {
-            text = "图片全屏显示。先调按钮定位、取送定位、取货圆点、送达方块；商家/地址文字框会按圆点和方块动态跟随。"
+            text = "圖片全屏顯示。先調按鈕定位、取送定位、取貨圓點、送達方塊；商家/地址文字框會按圓點和方塊動態跟隨。"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.08f)
@@ -1617,10 +1856,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pickCalibrationScreenshot() {
-        setAnalyzing(true, "请选择校准截图", "生成 OCR 区域框图后会提示保存位置。")
+        setAnalyzing(true, "請選擇校准截圖", "產生 OCR 區域框圖後會提示儲存位置。")
         pickCalibrationImage.launch(
             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
         )
+    }
+
+    private fun lastCalibrationImageFile(): File {
+        return File(DebugFileDirs.resolve(this, "manual_ocr_debug"), "last_calibration.png")
+    }
+
+    private fun loadLastCalibrationBitmapIfNeeded() {
+        if (calibrationBitmap != null) return
+        val file = lastCalibrationImageFile()
+        if (!file.exists()) return
+        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return
+        calibrationBitmap = bitmap
+        calibrationSavedPath = file.absolutePath
+    }
+
+    private fun saveLastCalibrationBitmap(bitmap: Bitmap): String {
+        val file = lastCalibrationImageFile()
+        return runCatching {
+            file.parentFile?.mkdirs()
+            file.outputStream().use { output ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+            }
+            file.absolutePath
+        }.getOrDefault("")
     }
 
     private fun createCalibrationRegionButton(name: String): TextView {
@@ -1645,7 +1908,7 @@ class MainActivity : AppCompatActivity() {
             )
             setOnClickListener {
                 calibrationView?.selectRegion(name)
-                Toast.makeText(this@MainActivity, "当前调整：${OcrCalibrationStore.displayName(name)}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "目前調整：${OcrCalibrationStore.displayName(name)}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1684,7 +1947,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(2), 0, dp(8))
             addView(
-                createSmallActionButton("测试 ${left.first}", leftColor) {
+                createSmallActionButton("測試 ${left.first}", leftColor) {
                     playTestSound(left.second)
                 },
                 LinearLayout.LayoutParams(0, dp(44), 1f).apply {
@@ -1692,7 +1955,7 @@ class MainActivity : AppCompatActivity() {
                 }
             )
             addView(
-                createSmallActionButton("测试 ${right.first}", rightColor) {
+                createSmallActionButton("測試 ${right.first}", rightColor) {
                     playTestSound(right.second)
                 },
                 LinearLayout.LayoutParams(0, dp(44), 1f).apply {
@@ -1723,7 +1986,7 @@ class MainActivity : AppCompatActivity() {
                 start()
             }
         }.onFailure {
-            Toast.makeText(this, "音效播放失败", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "音效播放失敗", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1765,7 +2028,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(2), 0, 0)
             addView(TextView(this@MainActivity).apply {
-                text = "当前版本：四档评分、首页统计、标签备注/避雷标签、折叠式音效测试与更清爽的设置页。"
+                text = "目前版本：四檔評分、首頁統計、標籤備註/避雷標籤、摺疊式音效測試與更清爽的設定頁。"
                 textSize = 13f
                 setTextColor(COLOR_TEXT_SECONDARY)
                 setLineSpacing(0f, 1.16f)
@@ -1782,7 +2045,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         })
         layout.addView(TextView(this).apply {
-            text = "我们只为一件事！公平，公平，还是他妈的公平"
+            text = "我們只為一件事！公平，公平，還是他妈的公平"
             textSize = 14f
             setTextColor(COLOR_TEXT_SECONDARY)
             gravity = Gravity.CENTER
@@ -1858,6 +2121,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun shouldAllowPageScroll(): Boolean {
         return currentScreen == Screen.TagManage ||
+                currentScreen == Screen.AppSettings ||
+                currentScreen == Screen.SettingsDetail ||
                 currentScreen == Screen.History ||
                 currentScreen == Screen.RecentOrderDetail ||
                 currentScreen == Screen.RealtimeHistory ||
@@ -1891,9 +2156,9 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(12), dp(8), dp(12), dp(10))
             background = roundedStroke(Color.WHITE, COLOR_BORDER, 18f)
         }
-        nav.addView(createNavItem("主页", isHomeSection()) { showHome() }, navItemParams())
-        nav.addView(createNavItem("规则", isRuleSection()) { showRuleSettings() }, navItemParams())
-        nav.addView(createNavItem("设置", isSettingsSection()) { showAppSettings() }, navItemParams())
+        nav.addView(createNavItem("首頁", isHomeSection()) { showHome() }, navItemParams())
+        nav.addView(createNavItem("規則", isRuleSection()) { showRuleSettings() }, navItemParams())
+        nav.addView(createNavItem("設定", isSettingsSection()) { showAppSettings() }, navItemParams())
         return nav
     }
 
@@ -1991,7 +2256,7 @@ class MainActivity : AppCompatActivity() {
         val isEnabled = MonitoringState.isEnabled(this)
         if (isEnabled) {
             MonitoringState.setEnabled(this, false)
-            Toast.makeText(this, "实时监测已暂停", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "即時監測已暫停", Toast.LENGTH_SHORT).show()
             MyAccessibilityService.refreshStatusOverlay()
             updateMonitoringUi()
             return
@@ -2000,14 +2265,14 @@ class MainActivity : AppCompatActivity() {
         if (!ensureActivationForMonitoring()) return
 
         if (!isAccessibilityServiceEnabled()) {
-            Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "請先開啟無障礙服務", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
 
         requestNotificationPermissionIfNeeded()
         MonitoringState.setEnabled(this, true)
-        Toast.makeText(this, "实时监测已开启，不需要画面分享授权", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "即時監測已開啟，不需要畫面分享授權", Toast.LENGTH_LONG).show()
         MyAccessibilityService.refreshStatusOverlay()
         updateMonitoringUi()
     }
@@ -2034,24 +2299,24 @@ class MainActivity : AppCompatActivity() {
         val successRate = if (todayCount > 0) "100%" else "--"
         val lastTime = records.firstOrNull()?.let { formatClock(it.timestamp) } ?: "--"
         val currentMode = acceptModeTitle(RuleSettings.load(this).acceptMode)
-        val statusMetrics = "当前模式：$currentMode\n今日识别：${todayCount}单\n成功率：$successRate\n最后识别：$lastTime"
+        val statusMetrics = "目前模式：$currentMode\n今日識別：${todayCount}單\n成功率：$successRate\n最後識別：$lastTime"
 
         if (::statusToggleButton.isInitialized) {
             statusToggleButton.text = when {
-                !ActivationLocalStore.isLocalActive(this) -> "输入激活码"
-                isEnabled && isServiceRunning -> "暂停监测"
-                else -> "启用监测"
+                !ActivationLocalStore.isLocalActive(this) -> "輸入啟用碼"
+                isEnabled && isServiceRunning -> "暫停監測"
+                else -> "啟用監測"
             }
         }
 
         when {
             !ActivationLocalStore.isLocalActive(this) -> setStatus(
-                title = "未激活",
+                title = "未啟用",
                 detail = activationBlockedMessage(),
                 color = COLOR_WARNING
             )
             isEnabled && isServiceRunning -> setStatus(
-                title = "监测中",
+                title = "監測中",
                 detail = statusMetrics,
                 color = COLOR_SUCCESS
             )
@@ -2074,9 +2339,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
         if (latest == null) {
-            card.addView(createNavigationTitle("最近订单"))
+            card.addView(createNavigationTitle("最近訂單"))
             card.addView(TextView(this).apply {
-                text = "还没有实时订单"
+                text = "還沒有即時訂單"
                 textSize = 14f
                 setTextColor(COLOR_TEXT_SECONDARY)
                 setPadding(0, dp(6), 0, 0)
@@ -2085,15 +2350,15 @@ class MainActivity : AppCompatActivity() {
             val recommendation = normalizedRecommendation(latest)
             card.addView(
                 createNavigationTitle(
-                    title = "最近订单",
+                    title = "最近訂單",
                     trailingText = "${latest.score}分 · $recommendation",
                     trailingColor = recommendationColor(recommendation)
                 )
             )
             addCompactStatRow(card, "商家", latest.storeName)
-            addCompactStatRow(card, "金额", formatRecordPrice(latest))
-            addCompactStatRow(card, "时间", "${latest.minutes} 分钟")
-            addCompactStatRow(card, "距离", "${OrderAnalyzer.formatDistance(latest.distance)} 公里")
+            addCompactStatRow(card, "金額", formatRecordPrice(latest))
+            addCompactStatRow(card, "時間", "${latest.minutes} 分鐘")
+            addCompactStatRow(card, "距離", "${OrderAnalyzer.formatDistance(latest.distance)} 公里")
         }
         return card
     }
@@ -2142,18 +2407,18 @@ class MainActivity : AppCompatActivity() {
     private fun addRecordDetailRows(parent: LinearLayout, record: OrderHistory.Record) {
         val recommendation = normalizedRecommendation(record)
         addCompactStatRow(parent, "商家", record.storeName)
-        addCompactStatRow(parent, "地址", record.storeAddress.ifBlank { "未识别" })
-        addCompactStatRow(parent, "接单模式", displayAcceptMode(record.acceptMode))
-        addCompactStatRow(parent, "金额", formatRecordPrice(record))
-        addCompactStatRow(parent, "时间", "${record.minutes} 分钟")
-        addCompactStatRow(parent, "距离", "${OrderAnalyzer.formatDistance(record.distance)} 公里")
-        addCompactStatRow(parent, "评分", "${record.score} 分")
-        addCompactStatRow(parent, "等级", recommendation)
-        addCompactStatRow(parent, "预计时薪", "${OrderAnalyzer.formatMoney(record.effectiveHourly)} 元/小时")
-        addCompactStatRow(parent, "订单类型", record.orderType.ifBlank { "未识别" })
+        addCompactStatRow(parent, "地址", record.storeAddress.ifBlank { "未識別" })
+        addCompactStatRow(parent, "接單模式", displayAcceptMode(record.acceptMode))
+        addCompactStatRow(parent, "金額", formatRecordPrice(record))
+        addCompactStatRow(parent, "時間", "${record.minutes} 分鐘")
+        addCompactStatRow(parent, "距離", "${OrderAnalyzer.formatDistance(record.distance)} 公里")
+        addCompactStatRow(parent, "評分", "${record.score} 分")
+        addCompactStatRow(parent, "等級", recommendation)
+        addCompactStatRow(parent, "預計時薪", "${OrderAnalyzer.formatMoney(record.effectiveHourly)} 元/小時")
+        addCompactStatRow(parent, "訂單類型", record.orderType.ifBlank { "未識別" })
         addCompactStatRow(parent, "同地點配送", if (record.isSameLocationStack) "是" else "否")
-        addCompactStatRow(parent, "标签备注", if (record.isWhitelisted) "命中" else "未命中")
-        addCompactStatRow(parent, "避雷标签", if (record.isBlacklisted) "命中" else "未命中")
+        addCompactStatRow(parent, "標籤備註", if (record.isWhitelisted) "命中" else "未命中")
+        addCompactStatRow(parent, "避雷標籤", if (record.isBlacklisted) "命中" else "未命中")
     }
 
     private fun createMetricChip(textValue: String, textColor: Int): TextView {
@@ -2194,19 +2459,19 @@ class MainActivity : AppCompatActivity() {
     ) {
         val counts = records.groupingBy { normalizedRecommendation(it) }.eachCount()
         val averageScore = if (records.isEmpty()) 0 else records.map { it.score }.average().toInt()
-        addCompactStatRow(parent, "总数", "${records.size} 单")
+        addCompactStatRow(parent, "總數", "${records.size} 單")
         if (includeAverage) {
-            addCompactStatRow(parent, "平均评分", if (records.isEmpty()) "--" else "$averageScore 分")
+            addCompactStatRow(parent, "平均評分", if (records.isEmpty()) "--" else "$averageScore 分")
         }
-        addCompactStatRow(parent, "狗都不接", "${counts["狗都不接"] ?: 0} 单")
-        addCompactStatRow(parent, "跪著送", "${counts["跪著送"] ?: 0} 单")
-        addCompactStatRow(parent, "站著掙", "${counts["站著掙"] ?: 0} 单")
-        addCompactStatRow(parent, "掙他娘的", "${counts["掙他娘的"] ?: 0} 单")
+        addCompactStatRow(parent, "狗都不接", "${counts["狗都不接"] ?: 0} 單")
+        addCompactStatRow(parent, "跪著送", "${counts["跪著送"] ?: 0} 單")
+        addCompactStatRow(parent, "站著掙", "${counts["站著掙"] ?: 0} 單")
+        addCompactStatRow(parent, "掙他娘的", "${counts["掙他娘的"] ?: 0} 單")
     }
 
     private fun addRecordSummaryCompact(parent: LinearLayout, records: List<OrderHistory.Record>) {
         val counts = records.groupingBy { normalizedRecommendation(it) }.eachCount()
-        addCompactStatRow(parent, "总数", "${records.size} 单")
+        addCompactStatRow(parent, "總數", "${records.size} 單")
         addLevelSummaryRow(
             parent,
             "狗都不接", counts["狗都不接"] ?: 0,
@@ -2259,7 +2524,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(COLOR_TEXT_PRIMARY)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(TextView(this@MainActivity).apply {
-                text = if (expanded) "收起" else "展开"
+                text = if (expanded) "收起" else "展開"
                 textSize = 12f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(COLOR_ACCENT)
@@ -2307,11 +2572,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun realtimeRecords(): List<OrderHistory.Record> {
-        return OrderHistory.load(this).filter { it.source == "实时" }
+        return OrderHistory.load(this).filter { it.source == "即時" || it.source == "实时" }
     }
 
     private fun screenshotRecords(): List<OrderHistory.Record> {
-        return OrderHistory.load(this).filter { it.source == "截图" }
+        return OrderHistory.load(this).filter { it.source == "截圖" || it.source == "截图" }
     }
 
     private fun normalizeRecommendation(recommendation: String, score: Int): String {
@@ -2337,14 +2602,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun analyzeImage(uri: Uri) {
-        setAnalyzing(true, "正在识别截图", "OCR 正在读取订单内容，完成后会显示分析结果。")
+        setAnalyzing(true, "正在識別截圖", "OCR 正在讀取訂單內容，完成後會顯示分析結果。")
 
         val bitmap = try {
             loadBitmap(uri)
         } catch (e: Exception) {
             e.printStackTrace()
             setAnalyzing(false)
-            Toast.makeText(this, "图片读取失败", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "圖片讀取失敗", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -2374,11 +2639,11 @@ class MainActivity : AppCompatActivity() {
                     setAnalyzing(false)
                     showFailureResult(
                         buildString {
-                            appendLine("未识别到完整订单")
+                            appendLine("未識別到完整訂單")
                             appendLine("skipResultReason=${gate.skipResultReason}")
-                            appendLine(if (regionText.hasAnchoredCard) "模板定位成功，但订单字段不完整。" else "模板定位失败。")
+                            appendLine(if (regionText.hasAnchoredCard) "模板定位成功，但訂單欄位不完整。" else "模板定位失敗。")
                             appendLine()
-                            appendLine("区域 OCR / 定位诊断：")
+                            appendLine("區域 OCR / 定位診斷：")
                             append(
                                 listOf(
                                     regionText.fullText,
@@ -2396,7 +2661,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     setAnalyzing(false)
                     val analysis = OrderAnalyzer.analyzeResult(this, order!!)
-                    OrderHistory.add(this, analysis, "截图")
+                    OrderHistory.add(this, analysis, "截圖")
                     showFloatingAnalysisResult(analysis)
                 }
             }
@@ -2404,14 +2669,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun analyzeCalibrationImage(uri: Uri) {
-        setAnalyzing(true, "正在生成 OCR 框图", "完成后会保存到手动调试目录。")
+        setAnalyzing(true, "正在產生 OCR 框圖", "完成後會儲存到手動調試目錄。")
 
         val bitmap = try {
             loadBitmap(uri)
         } catch (e: Exception) {
             e.printStackTrace()
             setAnalyzing(false)
-            Toast.makeText(this, "图片读取失败", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "圖片讀取失敗", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -2434,12 +2699,13 @@ class MainActivity : AppCompatActivity() {
                     )
                 ) else null
                 val savedPath = ManualOcrDebugStore.save(this, bitmap, regionText, order, "calibration")
+                val lastImagePath = saveLastCalibrationBitmap(bitmap)
                 calibrationBitmap = bitmap
-                calibrationSavedPath = savedPath
+                calibrationSavedPath = lastImagePath.ifBlank { savedPath }
                 setAnalyzing(false)
                 Toast.makeText(
                     this,
-                    if (savedPath.isBlank()) "OCR 框图保存失败" else "OCR 框图已保存：manual_ocr_debug",
+                    if (calibrationSavedPath.isBlank()) "OCR 校準圖儲存失敗" else "已儲存為預設 OCR 校準圖",
                     Toast.LENGTH_LONG
                 ).show()
                 showOcrCalibration()
@@ -2450,7 +2716,7 @@ class MainActivity : AppCompatActivity() {
     private fun showFloatingAnalysisResult(analysis: AnalysisResult) {
         val shown = MyAccessibilityService.showFeedback(analysis)
         if (!shown) {
-            Toast.makeText(this, "请先开启无障碍服务，用统一悬浮卡片显示结果", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "請先開啟無障礙服務，用統一懸浮卡片顯示結果", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -2486,7 +2752,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(16), dp(14), dp(16), dp(14))
         }
         card.addView(TextView(this).apply {
-            text = "激活码"
+            text = "啟用碼"
             textSize = 17f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TEXT_PRIMARY)
@@ -2499,14 +2765,14 @@ class MainActivity : AppCompatActivity() {
         }
         card.addView(activationStatusText)
 
-        activationCodeInput = createNumberlessInput("请输入激活码").apply {
+        activationCodeInput = createNumberlessInput("請輸入啟用碼").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
             setText(ActivationLocalStore.getCurrentCode(this@MainActivity))
         }
         card.addView(activationCodeInput)
 
         val submitButton = createButton(primary = true).apply {
-            text = "激活 / 续期"
+            text = "啟用 / 續期"
             setOnClickListener { submitActivationCode(this) }
         }
         card.addView(submitButton)
@@ -2523,7 +2789,7 @@ class MainActivity : AppCompatActivity() {
     private fun submitActivationCode(button: Button) {
         val code = activationCodeInput.text.toString()
         button.isEnabled = false
-        activationResultText.text = "正在验证激活码..."
+        activationResultText.text = "正在驗證啟用碼..."
         lifecycleScope.launch {
             val result = ActivationManager.activate(this@MainActivity, code)
             button.isEnabled = true
@@ -2539,19 +2805,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateActivationUi() {
         if (!ActivationLocalStore.isActivationRequired(this) || !::activationStatusText.isInitialized) return
-        ActivationLocalStore.clearActivationIfNeeded(this)
-        val expiresAtMillis = ActivationLocalStore.getExpiresAtMillis(this)
         val currentCode = ActivationLocalStore.getCurrentCode(this)
-        activationStatusText.text = when {
-            ActivationLocalStore.isLocalActive(this) ->
-                "已激活，有效期至 ${ActivationManager.formatDateTime(expiresAtMillis)}"
-            expiresAtMillis > 0L ->
-                "已过期，请输入新的激活码"
-            else ->
-                "未激活"
-        }
+        activationStatusText.text = activationStatusLabel()
         if (::activationCodeInput.isInitialized && activationCodeInput.text.isNullOrBlank() && currentCode.isNotBlank()) {
             activationCodeInput.setText(currentCode)
+        }
+    }
+
+    private fun activationStatusLabel(): String {
+        ActivationLocalStore.clearActivationIfNeeded(this)
+        val expiresAtMillis = ActivationLocalStore.getExpiresAtMillis(this)
+        return when {
+            ActivationLocalStore.isLocalActive(this) ->
+                "已啟用，有效期至 ${ActivationManager.formatDateTime(expiresAtMillis)}"
+            expiresAtMillis > 0L ->
+                "已過期，請輸入新的啟用碼"
+            else ->
+                "未啟用"
         }
     }
 
@@ -2577,9 +2847,9 @@ class MainActivity : AppCompatActivity() {
     private fun activationBlockedMessage(): String {
         val expiresAtMillis = ActivationLocalStore.getExpiresAtMillis(this)
         return if (expiresAtMillis > 0L) {
-            "激活已过期，请输入新的激活码"
+            "啟用已過期，請輸入新的啟用碼"
         } else {
-            "请先输入激活码"
+            "請先輸入啟用碼"
         }
     }
 
@@ -2595,7 +2865,7 @@ class MainActivity : AppCompatActivity() {
             distance <= 0.0 ||
             minutes <= 0
         ) {
-            Toast.makeText(this, "请输入有效的收入、里程和时间", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "請輸入有效的收入、里程和時間", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -2659,7 +2929,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         content.addView(TextView(this).apply {
-            text = "订单分析结果"
+            text = "訂單分析結果"
             textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TEXT_PRIMARY)
@@ -2682,10 +2952,10 @@ class MainActivity : AppCompatActivity() {
         })
         addMerchantStatusCard(content, analysis)
         addListMatchCard(content, analysis)
-        addResultRow(content, "配送数量", "${analysis.deliveryCount} 单")
-        addResultRow(content, "金额", formatPriceWithSubsidy(analysis))
-        addResultRow(content, "时间", "${analysis.minutes} 分钟")
-        addResultRow(content, "距离", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
+        addResultRow(content, "配送數量", "${analysis.deliveryCount} 單")
+        addResultRow(content, "金額", formatPriceWithSubsidy(analysis))
+        addResultRow(content, "時間", "${analysis.minutes} 分鐘")
+        addResultRow(content, "距離", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
         content.addView(createListActionRow(analysis))
 
         val dialog = AlertDialog.Builder(this)
@@ -2711,7 +2981,7 @@ class MainActivity : AppCompatActivity() {
     private fun formatPriceWithSubsidy(analysis: AnalysisResult): String {
         val rewardTotal = rewardTripTotal(analysis)
         return if (rewardTotal > 0) {
-            "${analysis.price} 元（+${rewardTotal} 元趟奖）"
+            "${analysis.price} 元（+${rewardTotal} 元趟獎）"
         } else {
             "${analysis.price} 元"
         }
@@ -2727,14 +2997,14 @@ class MainActivity : AppCompatActivity() {
     private fun formatRecordPrice(record: OrderHistory.Record): String {
         val rewardTotal = recordRewardTripTotal(record)
         return if (rewardTotal > 0) {
-            "${record.price} 元（+${rewardTotal} 元趟奖）"
+            "${record.price} 元（+${rewardTotal} 元趟獎）"
         } else {
             "${record.price} 元"
         }
     }
 
     private fun recordRewardTripTotal(record: OrderHistory.Record): Int {
-        if (displayAcceptMode(record.acceptMode) != "趟奖模式" || record.rewardPerTrip <= 0) {
+        if (displayAcceptMode(record.acceptMode) != "趟獎模式" || record.rewardPerTrip <= 0) {
             return 0
         }
         return record.rewardPerTrip * record.deliveryCount.coerceAtLeast(1)
@@ -2762,15 +3032,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        addClickableResultRow(card, "商家", analysis.storeName.ifBlank { "未识别" })
-        addClickableResultRow(card, "地址", analysis.storeAddress.ifBlank { "未识别" })
+        addClickableResultRow(card, "商家", analysis.storeName.ifBlank { "未識別" })
+        addClickableResultRow(card, "地址", analysis.storeAddress.ifBlank { "未識別" })
         parent.addView(card)
     }
 
     private fun addClickableResultRow(parent: LinearLayout, label: String, value: String) {
         addResultRow(parent, label, value)
         parent.getChildAt(parent.childCount - 1)?.setOnClickListener {
-            if (value.isNotBlank() && value != "未识别") {
+            if (value.isNotBlank() && value != "未識別") {
                 showListActionChoice(value)
             }
         }
@@ -2778,15 +3048,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun showListActionChoice(keyword: String) {
         val cleanKeyword = keyword.trim()
-        if (cleanKeyword.length < 2 || cleanKeyword == "未识别") return
+        if (cleanKeyword.length < 2 || cleanKeyword == "未識別") return
 
         AlertDialog.Builder(this)
-            .setTitle("添加标签")
+            .setTitle("新增標籤")
             .setMessage(cleanKeyword)
-            .setPositiveButton("添加标签备注") { _, _ ->
+            .setPositiveButton("新增標籤備註") { _, _ ->
                 showQuickAddListEntryDialog(cleanKeyword, isWhitelist = true)
             }
-            .setNegativeButton("添加避雷标签") { _, _ ->
+            .setNegativeButton("新增避雷標籤") { _, _ ->
                 showQuickAddListEntryDialog(cleanKeyword, isWhitelist = false)
             }
             .setNeutralButton("取消", null)
@@ -2795,7 +3065,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showQuickAddListEntryDialog(keyword: String, isWhitelist: Boolean) {
         val noteInput = createNumberlessInput(
-            if (isWhitelist) "备注：位置、出餐速度等" else "原因：不好取/不好送/难停车等"
+            if (isWhitelist) "備註：位置、出餐速度等" else "原因：不好取/不好送/難停車等"
         ).apply {
             setSingleLine(false)
             minLines = 2
@@ -2814,9 +3084,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (isWhitelist) "添加标签备注" else "添加避雷标签")
+            .setTitle(if (isWhitelist) "新增標籤備註" else "新增避雷標籤")
             .setView(content)
-            .setPositiveButton("保存", null)
+            .setPositiveButton("儲存", null)
             .setNegativeButton("取消", null)
             .create()
 
@@ -2827,9 +3097,9 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(
                     this,
                     if (saved) {
-                        "已添加到${if (isWhitelist) "标签备注" else "避雷标签"}"
+                        "已新增到${if (isWhitelist) "標籤備註" else "避雷標籤"}"
                     } else {
-                        "名单里已有相同商家或地址"
+                        "名單裡已有相同商家或地址"
                     },
                     Toast.LENGTH_SHORT
                 ).show()
@@ -2852,14 +3122,14 @@ class MainActivity : AppCompatActivity() {
             analysis.isMerchantBlacklisted -> "商家"
             analysis.isAddressWhitelisted -> "地址"
             analysis.isMerchantWhitelisted -> "商家"
-            else -> keyword.ifBlank { "已命中标签规则" }
+            else -> keyword.ifBlank { "已命中標籤規則" }
         }
         if (isBlacklisted) {
-            addColoredResultRow(parent, "命中避雷标签", hitTarget, Color.rgb(254, 226, 226), COLOR_DANGER)
+            addColoredResultRow(parent, "命中避雷標籤", hitTarget, Color.rgb(254, 226, 226), COLOR_DANGER)
         } else {
-            addColoredResultRow(parent, "命中标签备注", hitTarget, Color.rgb(220, 252, 231), COLOR_SUCCESS)
+            addColoredResultRow(parent, "命中標籤備註", hitTarget, Color.rgb(220, 252, 231), COLOR_SUCCESS)
         }
-        if (note.isNotBlank()) addResultRow(parent, "备注", twoLine(note))
+        if (note.isNotBlank()) addResultRow(parent, "備註", twoLine(note))
     }
 
     private fun recommendationColor(recommendation: String): Int {
@@ -2878,7 +3148,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         content.addView(TextView(this).apply {
-            text = "未识别到完整订单"
+            text = "未識別到完整訂單"
             textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TEXT_PRIMARY)
@@ -2989,7 +3259,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(12), 0, 0)
         }
         row.addView(
-            createSmallActionButton("加标签备注", COLOR_SUCCESS) {
+            createSmallActionButton("加標籤備註", COLOR_SUCCESS) {
                 showAddListEntryDialog(analysis, isWhitelist = true)
             },
             LinearLayout.LayoutParams(0, dp(44), 1f).apply {
@@ -2997,7 +3267,7 @@ class MainActivity : AppCompatActivity() {
             }
         )
         row.addView(
-            createSmallActionButton("加避雷标签", COLOR_DANGER) {
+            createSmallActionButton("加避雷標籤", COLOR_DANGER) {
                 showAddListEntryDialog(analysis, isWhitelist = false)
             },
             LinearLayout.LayoutParams(0, dp(44), 1f).apply {
@@ -3030,13 +3300,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAddListEntryDialog(keyword: String, note: String, isWhitelist: Boolean) {
-        val keywordInput = createNumberlessInput("商家名称或地址关键词").apply {
+        val keywordInput = createNumberlessInput("商家名稱或地址關鍵词").apply {
             setText(keyword)
             setSingleLine(false)
             minLines = if (keyword.contains('\n')) 2 else 1
         }
         val noteInput = createNumberlessInput(
-            if (isWhitelist) "备注：位置、出餐速度等" else "原因：不好取/不好送/难停车等"
+            if (isWhitelist) "備註：位置、出餐速度等" else "原因：不好取/不好送/難停車等"
         ).apply {
             setText(note)
             setSingleLine(false)
@@ -3056,9 +3326,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (isWhitelist) "添加标签备注" else "添加避雷标签")
+            .setTitle(if (isWhitelist) "新增標籤備註" else "新增避雷標籤")
             .setView(content)
-            .setPositiveButton("保存", null)
+            .setPositiveButton("儲存", null)
             .setNegativeButton("取消", null)
             .create()
 
@@ -3067,16 +3337,16 @@ class MainActivity : AppCompatActivity() {
                 val keyword = keywordInput.text.toString().trim()
                 val note = noteInput.text.toString().trim()
                 if (keyword.length < 2) {
-                    keywordInput.error = "至少两个字"
+                    keywordInput.error = "至少兩個字"
                     return@setOnClickListener
                 }
                 val saved = saveListEntry(keyword, note, isWhitelist)
                 Toast.makeText(
                     this,
                     if (saved) {
-                        "已添加到${if (isWhitelist) "标签备注" else "避雷标签"}"
+                        "已新增到${if (isWhitelist) "標籤備註" else "避雷標籤"}"
                     } else {
-                        "名单里已有相同商家或地址"
+                        "名單裡已有相同商家或地址"
                     },
                     Toast.LENGTH_SHORT
                 ).show()
@@ -3224,12 +3494,12 @@ class MainActivity : AppCompatActivity() {
 
         hasPromptedAccessibility = true
         AlertDialog.Builder(this)
-            .setTitle("需要开启无障碍服务")
-            .setMessage("功德拒絕器 需要无障碍服务来监听 目標平台 的订单画面变化。开启后，实时监测才会自动触发 OCR。")
-            .setPositiveButton("去开启") { _, _ ->
+            .setTitle("需要開啟無障礙服務")
+            .setMessage("功德拒絕器 需要無障礙服務來監聽 目標平台 的訂單畫面變化。開啟後，即時監測才會自動觸發 OCR。")
+            .setPositiveButton("去開啟") { _, _ ->
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
-            .setNegativeButton("稍后", null)
+            .setNegativeButton("稍後", null)
             .show()
     }
 
@@ -3264,6 +3534,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private val COLOR_BACKGROUND = Color.rgb(246, 248, 250)
+        private val COLOR_SETTINGS_BACKGROUND = Color.rgb(245, 246, 248)
         private val COLOR_TEXT_PRIMARY = Color.rgb(22, 27, 34)
         private val COLOR_TEXT_SECONDARY = Color.rgb(88, 96, 105)
         private val COLOR_RESULT_LABEL = Color.rgb(45, 55, 72)

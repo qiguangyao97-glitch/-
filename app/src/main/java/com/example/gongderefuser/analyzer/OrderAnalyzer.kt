@@ -30,7 +30,7 @@ object OrderAnalyzer {
         val yuanPerKmScore: Double,
         val averagePriceScore: Double,
         val baseScore: Double,
-        val scoreMoneySource: String = "原始订单金额",
+        val scoreMoneySource: String = "原始訂單金額",
         val distancePenalty: Int = 0,
         val distancePenaltyReason: String = "",
         val specialScore: Int,
@@ -389,15 +389,15 @@ object OrderAnalyzer {
             appendLine()
             appendLine("===== SCORE DEBUG =====")
             appendLine("模式=${acceptModeLabel(analysis.acceptMode)}")
-            appendLine("金额来源=${analysis.scoreMoneySource}")
-            appendLine("时薪评分=${analysis.hourlyScore.roundToInt()}")
-            appendLine("元公里评分=${analysis.yuanPerKmScore.roundToInt()}")
-            appendLine("平均单价评分=${analysis.averagePriceScore.roundToInt()}")
-            appendLine("基础评分=${analysis.baseScore.roundToInt()}")
-            appendLine("趟奖加权=${analysis.rewardModeBonus}")
-            appendLine("趟奖原因=${analysis.rewardModeReason}")
-            appendLine("多单动态系数=${formatRatio(analysis.multiOrderFactor)}")
-            appendLine("最终评分=${analysis.score}")
+            appendLine("金額來源=${analysis.scoreMoneySource}")
+            appendLine("時薪評分=${analysis.hourlyScore.roundToInt()}")
+            appendLine("元公里評分=${analysis.yuanPerKmScore.roundToInt()}")
+            appendLine("平均單價評分=${analysis.averagePriceScore.roundToInt()}")
+            appendLine("基礎評分=${analysis.baseScore.roundToInt()}")
+            appendLine("趟獎加權=${analysis.rewardModeBonus}")
+            appendLine("趟獎原因=${analysis.rewardModeReason}")
+            appendLine("多單動態系數=${formatRatio(analysis.multiOrderFactor)}")
+            appendLine("最終評分=${analysis.score}")
             appendLine()
             appendLine("===== BONUS DEBUG =====")
             appendLine("doubleOrderMatched=$doubleOrderMatched")
@@ -465,31 +465,31 @@ object OrderAnalyzer {
     private fun buildAnalysisText(analysis: AnalysisResult): String {
         val result = StringBuilder()
 
-        result.appendLine("订单分析结果")
-        result.appendLine("订单类型：${analysis.orderType}")
-        result.appendLine("金额：${analysis.price} 元")
-        result.appendLine("时间：${analysis.minutes} 分钟")
-        result.appendLine("距离：${formatDistance(analysis.distance)} 公里")
+        result.appendLine("訂單分析結果")
+        result.appendLine("訂單類型：${analysis.orderType}")
+        result.appendLine("金額：${analysis.price} 元")
+        result.appendLine("時間：${analysis.minutes} 分鐘")
+        result.appendLine("距離：${formatDistance(analysis.distance)} 公里")
         result.appendLine("成本：${formatMoney(analysis.cost)} 元")
-        result.appendLine("本单净收益：${formatMoney(analysis.netIncome)} 元")
-        result.appendLine("预计时薪：${formatMoney(analysis.effectiveHourly)} 元 / 小时")
+        result.appendLine("本單淨收益：${formatMoney(analysis.netIncome)} 元")
+        result.appendLine("預計時薪：${formatMoney(analysis.effectiveHourly)} 元 / 小時")
         result.appendLine("元/公里：${formatMoney(analysis.yuanPerKm)} 元 / 公里")
-        result.appendLine("平均单价：${formatMoney(analysis.averagePrice)} 元")
-        result.appendLine("金额来源：${analysis.scoreMoneySource}")
-        result.appendLine("时薪评分：${analysis.hourlyScore.roundToInt()} 分")
-        result.appendLine("元/km评分：${analysis.yuanPerKmScore.roundToInt()} 分")
-        result.appendLine("平均单价评分：${analysis.averagePriceScore.roundToInt()} 分")
-        result.appendLine("基础评分：${analysis.baseScore.roundToInt()} 分")
+        result.appendLine("平均單價：${formatMoney(analysis.averagePrice)} 元")
+        result.appendLine("金額來源：${analysis.scoreMoneySource}")
+        result.appendLine("時薪評分：${analysis.hourlyScore.roundToInt()} 分")
+        result.appendLine("元/km評分：${analysis.yuanPerKmScore.roundToInt()} 分")
+        result.appendLine("平均單價評分：${analysis.averagePriceScore.roundToInt()} 分")
+        result.appendLine("基礎評分：${analysis.baseScore.roundToInt()} 分")
         if (analysis.acceptMode == RuleSettings.AcceptMode.REWARD) {
-            result.appendLine("趟奖加权：+${analysis.rewardModeBonus} 分")
+            result.appendLine("趟獎加權：+${analysis.rewardModeBonus} 分")
         }
-        result.appendLine("最终评分：${analysis.score} 分")
-        result.appendLine("配送数量：${analysis.deliveryCount} 单")
+        result.appendLine("最終評分：${analysis.score} 分")
+        result.appendLine("配送數量：${analysis.deliveryCount} 單")
         if (analysis.locationScoreImpact != 0) {
             result.appendLine("位置分：${analysis.locationScoreImpact}")
         }
-        result.appendLine("评分：${analysis.score} 分")
-        result.appendLine("建议：${analysis.recommendation}")
+        result.appendLine("評分：${analysis.score} 分")
+        result.appendLine("建議：${analysis.recommendation}")
 
         return result.toString()
     }
@@ -529,7 +529,7 @@ object OrderAnalyzer {
 
     private fun acceptModeLabel(mode: RuleSettings.AcceptMode): String {
         return when (mode) {
-            RuleSettings.AcceptMode.REWARD -> "趟奖模式"
+            RuleSettings.AcceptMode.REWARD -> "趟獎模式"
             RuleSettings.AcceptMode.NORMAL -> "正常模式"
         }
     }
@@ -562,12 +562,12 @@ object OrderAnalyzer {
     }
 
     private fun buildOrderType(order: OrderData): String {
-        if (order.isAddOnOrder) return "新增外送订单"
+        if (order.isAddOnOrder) return "新增外送訂單"
         val count = order.deliveryCount.coerceAtLeast(1)
         return if (count == 1) {
-            "一单"
+            "一單"
         } else {
-            "${count}单"
+            "${count}單"
         }
     }
 

@@ -203,7 +203,7 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun reportAccessibilityScreenshotFailure(reason: String) {
         DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "failed_no_fallback reason=$reason")
-        Toast.makeText(this, "无障碍截图失败：$reason", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "無障礙截圖失敗：$reason", Toast.LENGTH_SHORT).show()
     }
 
     private fun tryAccessibilityScreenshot(isSecondCheck: Boolean = false, sessionId: Long = orderDetectionSessionId): Boolean {
@@ -379,7 +379,7 @@ class MyAccessibilityService : AccessibilityService() {
             MonitoringState.setEnabled(this, false)
         }
         mainHandler.post {
-            Toast.makeText(this, "激活已过期，请输入新的激活码", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "啟用已過期，請輸入新的啟用碼", Toast.LENGTH_LONG).show()
         }
         return false
     }
@@ -609,7 +609,7 @@ class MyAccessibilityService : AccessibilityService() {
 
         lastPendingOrder = validOrder
         val analysis = OrderAnalyzer.analyzeResult(this, validOrder)
-        OrderHistory.add(this, analysis, "实时", "")
+        OrderHistory.add(this, analysis, "即時", "")
 
         Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(this, validOrder))
         mainHandler.post {
@@ -813,7 +813,7 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun orderLabel(order: OrderData): String {
-        return "${order.price}元/${order.deliveryCount}单"
+        return "${order.price}元/${order.deliveryCount}單"
     }
 
     private fun coreOrderSignature(order: OrderData): String {
@@ -1062,20 +1062,20 @@ class MyAccessibilityService : AccessibilityService() {
 
         addMerchantStatusBlock(card, analysis)
         addListMatchBlock(card, analysis)
-        addResultLine(card, "配送数量", "${analysis.deliveryCount} 单")
-        addResultLine(card, "金额", formatPriceWithSubsidy(analysis))
-        addResultLine(card, "时间", "${analysis.minutes} 分钟")
-        addResultLine(card, "距离", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
-        addResultLine(card, "预计时薪", "${formatOriginalHourly(analysis)} 元/小时")
+        addResultLine(card, "配送數量", "${analysis.deliveryCount} 單")
+        addResultLine(card, "金額", formatPriceWithSubsidy(analysis))
+        addResultLine(card, "時間", "${analysis.minutes} 分鐘")
+        addResultLine(card, "距離", "${OrderAnalyzer.formatDistance(analysis.distance)} 公里")
+        addResultLine(card, "預計時薪", "${formatOriginalHourly(analysis)} 元/小時")
         addResultLine(card, "元/公里", "${formatOriginalYuanPerKm(analysis)} 元/km")
-        addResultLine(card, "平均单价", "${formatOriginalAveragePrice(analysis)} 元")
+        addResultLine(card, "平均單價", "${formatOriginalAveragePrice(analysis)} 元")
 
         return card
     }
 
     private fun acceptModeLabel(mode: RuleSettings.AcceptMode): String {
         return when (mode) {
-            RuleSettings.AcceptMode.REWARD -> "趟奖模式"
+            RuleSettings.AcceptMode.REWARD -> "趟獎模式"
             RuleSettings.AcceptMode.NORMAL -> "正常模式"
         }
     }
@@ -1083,7 +1083,7 @@ class MyAccessibilityService : AccessibilityService() {
     private fun formatPriceWithSubsidy(analysis: AnalysisResult): String {
         val rewardTotal = rewardTripTotal(analysis)
         return if (rewardTotal > 0) {
-            "${analysis.originalPrice} 元（+趟奖 ${rewardTotal} 元）"
+            "${analysis.originalPrice} 元（+趟獎 ${rewardTotal} 元）"
         } else {
             "${analysis.originalPrice} 元"
         }
@@ -1131,9 +1131,9 @@ class MyAccessibilityService : AccessibilityService() {
     private fun showAddListEntryDialog(keyword: String, isWhitelist: Boolean) {
         val noteInput = EditText(this).apply {
             hint = if (isWhitelist) {
-                "备注：位置、出餐速度等"
+                "備註：位置、出餐速度等"
             } else {
-                "原因：不好取/不好送/难停车等"
+                "原因：不好取/不好送/難停車等"
             }
             setSingleLine(false)
             minLines = 2
@@ -1152,9 +1152,9 @@ class MyAccessibilityService : AccessibilityService() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (isWhitelist) "添加标签备注" else "添加避雷标签")
+            .setTitle(if (isWhitelist) "新增標籤備註" else "新增避雷標籤")
             .setView(content)
-            .setPositiveButton("保存", null)
+            .setPositiveButton("儲存", null)
             .setNegativeButton("取消", null)
             .create()
 
@@ -1163,16 +1163,16 @@ class MyAccessibilityService : AccessibilityService() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val note = noteInput.text.toString().trim()
                 if (keyword.length < 2) {
-                    Toast.makeText(this, "标签名称太短", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "標籤名稱太短", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
                 val saved = saveListEntry(keyword, note, isWhitelist)
                 Toast.makeText(
                     this,
                     if (saved) {
-                        "已添加到${if (isWhitelist) "标签备注" else "避雷标签"}"
+                        "已新增到${if (isWhitelist) "標籤備註" else "避雷標籤"}"
                     } else {
-                        "名单里已有相同商家或地址"
+                        "名單裡已有相同商家或地址"
                     },
                     Toast.LENGTH_SHORT
                 ).show()
@@ -1185,15 +1185,15 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun showListActionChoice(keyword: String) {
         val cleanKeyword = keyword.trim()
-        if (cleanKeyword.length < 2 || cleanKeyword == "未识别") return
+        if (cleanKeyword.length < 2 || cleanKeyword == "未識別") return
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("添加标签")
+            .setTitle("新增標籤")
             .setMessage(cleanKeyword)
-            .setPositiveButton("加标签备注") { _, _ ->
+            .setPositiveButton("加標籤備註") { _, _ ->
                 showAddListEntryDialog(cleanKeyword, isWhitelist = true)
             }
-            .setNegativeButton("加避雷标签") { _, _ ->
+            .setNegativeButton("加避雷標籤") { _, _ ->
                 showAddListEntryDialog(cleanKeyword, isWhitelist = false)
             }
             .setNeutralButton("取消", null)
@@ -1278,8 +1278,8 @@ class MyAccessibilityService : AccessibilityService() {
                 bottomMargin = dp(3)
             }
         }
-        addClickableResultLine(block, "商家", analysis.storeName.ifBlank { "未识别" })
-        addClickableResultLine(block, "地址", analysis.storeAddress.ifBlank { "未识别" })
+        addClickableResultLine(block, "商家", analysis.storeName.ifBlank { "未識別" })
+        addClickableResultLine(block, "地址", analysis.storeAddress.ifBlank { "未識別" })
         parent.addView(block)
     }
 
@@ -1287,7 +1287,7 @@ class MyAccessibilityService : AccessibilityService() {
         addResultLine(parent, label, value)
         val row = parent.getChildAt(parent.childCount - 1)
         row?.setOnClickListener {
-            if (value.isNotBlank() && value != "未识别") {
+            if (value.isNotBlank() && value != "未識別") {
                 showListActionChoice(value)
             }
         }
@@ -1305,16 +1305,16 @@ class MyAccessibilityService : AccessibilityService() {
             analysis.isMerchantBlacklisted -> "商家"
             analysis.isAddressWhitelisted -> "地址"
             analysis.isMerchantWhitelisted -> "商家"
-            else -> keyword.ifBlank { "已命中标签规则" }
+            else -> keyword.ifBlank { "已命中標籤規則" }
         }
         addHighlightedResultLine(
             parent = parent,
-            label = if (isBlacklisted) "命中避雷标签" else "命中标签备注",
+            label = if (isBlacklisted) "命中避雷標籤" else "命中標籤備註",
             value = hitTarget,
             fillColor = if (isBlacklisted) Color.rgb(254, 226, 226) else Color.rgb(220, 252, 231),
             strokeColor = if (isBlacklisted) COLOR_DANGER else COLOR_SUCCESS
         )
-        if (note.isNotBlank()) addResultLine(parent, "备注", twoLine(note))
+        if (note.isNotBlank()) addResultLine(parent, "備註", twoLine(note))
     }
 
     private fun addHighlightedResultLine(
@@ -1400,7 +1400,7 @@ class MyAccessibilityService : AccessibilityService() {
             setSingleLine(false)
             setLineSpacing(0f, 1.08f)
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        if (value != "未识别") {
+        if (value != "未識別") {
             row.isClickable = true
             row.isFocusable = true
             row.setOnClickListener {
