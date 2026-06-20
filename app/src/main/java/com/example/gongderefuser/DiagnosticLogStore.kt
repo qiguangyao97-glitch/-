@@ -13,29 +13,39 @@ object DiagnosticLogStore {
     private var lastWriteSummary: String = "尚未写入"
     @Volatile
     private var lastAttemptTime: String = "尚未尝试"
+    @Volatile
+    private var activePrimaryFile: File? = null
+    @Volatile
+    private var activeMirrorFile: File? = null
 
     fun append(context: Context, tag: String, message: String): File? {
         val now = Date()
         val displayTime = formatter.format(now)
-        val fileTime = fileNameFormatter.format(now)
         lastAttemptTime = displayTime
         val line = "$displayTime [$tag] $message\n"
+        val sessionFileTime = fileNameFormatter.format(now)
         val targets = listOf(
             LogTarget(
                 label = "主日志",
                 fixedFile = File(DebugFileDirs.resolve(context, "diagnostic_logs"), "monitor-events.txt"),
-                fallbackFileName = "monitor-events-$fileTime.txt"
+                activeFile = activePrimaryFile,
+                fallbackFileName = "$sessionFileTime-monitor-events.txt"
             ),
             LogTarget(
                 label = "备用日志",
                 fixedFile = File(DebugFileDirs.resolve(context, "debug_samples"), "diagnostic-monitor-events.txt"),
-                fallbackFileName = "diagnostic-monitor-events-$fileTime.txt"
+                activeFile = activeMirrorFile,
+                fallbackFileName = "$sessionFileTime-diagnostic-monitor-events.txt"
             )
         )
         val successes = mutableListOf<File>()
         val failures = mutableListOf<String>()
         targets.forEach { target ->
-            writeTarget(target, line, successes, failures)
+            val activeFile = writeTarget(target, line, successes, failures)
+            when (target.label) {
+                "主日志" -> activePrimaryFile = activeFile
+                "备用日志" -> activeMirrorFile = activeFile
+            }
         }
         lastWriteSummary = buildString {
             append("尝试时间：")
@@ -58,6 +68,7 @@ object DiagnosticLogStore {
     private data class LogTarget(
         val label: String,
         val fixedFile: File,
+        val activeFile: File?,
         val fallbackFileName: String
     )
 
@@ -66,12 +77,23 @@ object DiagnosticLogStore {
         line: String,
         successes: MutableList<File>,
         failures: MutableList<String>
-    ) {
+    ): File? {
+        target.activeFile?.let { activeFile ->
+            writeFile(activeFile, line)
+                .onSuccess {
+                    successes.add(it)
+                    return it
+                }
+                .onFailure {
+                    failures.add("${target.label} 既有檔 ${activeFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
+                }
+        }
+
         val fixedResult = writeFile(target.fixedFile, line)
         fixedResult
             .onSuccess {
                 successes.add(it)
-                return
+                return it
             }
             .onFailure {
                 failures.add("${target.label} 固定檔 ${target.fixedFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
@@ -79,10 +101,14 @@ object DiagnosticLogStore {
 
         val fallbackFile = File(target.fixedFile.parentFile, target.fallbackFileName)
         writeFile(fallbackFile, line)
-            .onSuccess { successes.add(it) }
+            .onSuccess {
+                successes.add(it)
+                return it
+            }
             .onFailure {
                 failures.add("${target.label} 时间戳檔 ${fallbackFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
             }
+        return null
     }
 
     private fun writeFile(file: File, line: String): Result<File> {
