@@ -50,6 +50,7 @@ class MyAccessibilityService : AccessibilityService() {
     private var lastOcrAttemptTime: Long = 0L
     private var screenshotTimeoutRunnable: Runnable? = null
     private var ocrTimeoutRunnable: Runnable? = null
+    private var sessionTimeoutRunnable: Runnable? = null
     private var secondCheckRunnable: Runnable? = null
     private var secondCheckSignature: String = ""
     private var lastPendingOrder: OrderData? = null
@@ -63,6 +64,7 @@ class MyAccessibilityService : AccessibilityService() {
     private var lastScreenshotRequestTime: Long = 0L
     private var popupCandidateUntilTime: Long = 0L
     private var isOrderDetectionSessionActive: Boolean = false
+    private var orderDetectionSessionId: Long = 0L
     private var orderDetectionSessionStartTime: Long = 0L
     private var orderDetectionSessionNextAttemptIndex: Int = 0
     private var orderDetectionSessionFailureCount: Int = 0
@@ -99,6 +101,7 @@ class MyAccessibilityService : AccessibilityService() {
 
         Log.i("ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
         DiagnosticLogStore.append(this, "ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
+        resetStaleSessionIfNeeded(now)
         scheduleEventDrivenCapture(event, now)
     }
 
@@ -141,11 +144,14 @@ class MyAccessibilityService : AccessibilityService() {
             return
         }
         isOrderDetectionSessionActive = true
+        orderDetectionSessionId += 1
         orderDetectionSessionStartTime = now
         orderDetectionSessionNextAttemptIndex = 0
         orderDetectionSessionFailureCount = 0
         orderDetectionSessionLastHadAnchor = false
         clearPendingOcrRetry(resetAttempt = true)
+        DiagnosticLogStore.append(this, "ORDER_SESSION_START", "sessionId=$orderDetectionSessionId")
+        armSessionTimeout(orderDetectionSessionId)
         scheduleNextSessionCapture()
     }
 
@@ -186,7 +192,7 @@ class MyAccessibilityService : AccessibilityService() {
         Log.d("TARGET_TRIGGER", "set capture flag")
         Log.i("ORDER_ANALYSIS_START", "source=accessibility_event attempt=$sessionAttemptNumber")
         DiagnosticLogStore.append(this, "ORDER_ANALYSIS_START", "source=accessibility_event attempt=$sessionAttemptNumber")
-        tryAccessibilityScreenshot()
+        tryAccessibilityScreenshot(sessionId = orderDetectionSessionId)
     }
 
     private fun reportAccessibilityScreenshotFailure(reason: String) {
@@ -194,9 +200,10 @@ class MyAccessibilityService : AccessibilityService() {
         Toast.makeText(this, "无障碍截图失败：$reason", Toast.LENGTH_SHORT).show()
     }
 
-    private fun tryAccessibilityScreenshot(isSecondCheck: Boolean = false): Boolean {
+    private fun tryAccessibilityScreenshot(isSecondCheck: Boolean = false, sessionId: Long = orderDetectionSessionId): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             reportAccessibilityScreenshotFailure("sdk_${Build.VERSION.SDK_INT}")
+            if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
             return false
         }
         if (isTakingScreenshot) {
@@ -207,36 +214,50 @@ class MyAccessibilityService : AccessibilityService() {
         isTakingScreenshot = true
         DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "request secondCheckRunning=$isSecondCheck lastEvent=$lastTargetEventSummary")
         armScreenshotTimeout()
-        takeScreenshot(
-            Display.DEFAULT_DISPLAY,
-            mainExecutor,
-            object : TakeScreenshotCallback {
-                override fun onSuccess(screenshot: ScreenshotResult) {
-                    clearScreenshotTimeout()
-                    isTakingScreenshot = false
-                    val bitmap = screenshot.toBitmap()
-                    if (bitmap == null) {
-                        reportAccessibilityScreenshotFailure("bitmap_null")
-                        return
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        clearScreenshotTimeout()
+                        if (!isSecondCheck && !isCurrentSession(sessionId)) {
+                            closeStaleScreenshot(screenshot)
+                            return
+                        }
+                        isTakingScreenshot = false
+                        val bitmap = screenshot.toBitmap()
+                        if (bitmap == null) {
+                            reportAccessibilityScreenshotFailure("bitmap_null")
+                            if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
+                            return
+                        }
+                        DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "success ${bitmap.width}x${bitmap.height}")
+                        processAccessibilityOrderBitmap(bitmap, isSecondCheck)
                     }
-                    DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "success ${bitmap.width}x${bitmap.height}")
-                    processAccessibilityOrderBitmap(bitmap, isSecondCheck)
-                }
 
-                override fun onFailure(errorCode: Int) {
-                    clearScreenshotTimeout()
-                    isTakingScreenshot = false
-                    Log.d("A11Y_SCREENSHOT", "failed code=$errorCode")
-                    if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
-                        DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "failed_interval_too_short_no_toast code=$errorCode")
-                        finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck, hadOrderAnchor = false)
-                        return
+                    override fun onFailure(errorCode: Int) {
+                        clearScreenshotTimeout()
+                        if (!isSecondCheck && !isCurrentSession(sessionId)) return
+                        isTakingScreenshot = false
+                        Log.d("A11Y_SCREENSHOT", "failed code=$errorCode")
+                        if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
+                            DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "failed_interval_too_short_no_toast code=$errorCode")
+                            if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
+                            return
+                        }
+                        reportAccessibilityScreenshotFailure("error_$errorCode")
+                        if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
                     }
-                    reportAccessibilityScreenshotFailure("error_$errorCode")
-                    finishDetectionCycle(foundOrder = false, isSecondCheck = isSecondCheck, hadOrderAnchor = false)
                 }
-            }
-        )
+            )
+        } catch (throwable: Throwable) {
+            clearScreenshotTimeout()
+            isTakingScreenshot = false
+            DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "exception=${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}")
+            if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
+            return false
+        }
         return true
     }
 
@@ -247,6 +268,7 @@ class MyAccessibilityService : AccessibilityService() {
                 isTakingScreenshot = false
                 DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "timeout_reset")
                 Log.d("A11Y_SCREENSHOT", "timeout reset")
+                resetAnalysisSession("SCREENSHOT_FAILURE")
             }
         }.also {
             mainHandler.postDelayed(it, SCREENSHOT_TIMEOUT_MS)
@@ -341,11 +363,7 @@ class MyAccessibilityService : AccessibilityService() {
     private fun finishDetectionCycle(foundOrder: Boolean, isSecondCheck: Boolean, hadOrderAnchor: Boolean) {
         if (isSecondCheck) return
         if (foundOrder) {
-            isOrderDetectionSessionActive = false
-            orderDetectionSessionFailureCount = 0
-            orderDetectionSessionNextAttemptIndex = 0
-            clearPendingOcrRetry(resetAttempt = true)
-            pendingDetectionAfterCurrent = false
+            endOrderDetectionSession("SUCCESS")
             logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=ORDER_HANDLED")
             return
         }
@@ -366,6 +384,10 @@ class MyAccessibilityService : AccessibilityService() {
             }
             if (orderDetectionSessionFailureCount >= ORDER_END_INVALID_COUNT && !orderDetectionSessionLastHadAnchor) {
                 endOrderSessionAsLost("NO_ORDER_CARD")
+                return
+            }
+            if (isSessionTimedOut()) {
+                resetAnalysisSession("SESSION_TIMEOUT")
                 return
             }
             logObservation(
@@ -395,6 +417,7 @@ class MyAccessibilityService : AccessibilityService() {
                 isProcessingOrder = false
                 DiagnosticLogStore.append(this, "CAPTURE", "ocr_timeout_reset")
                 Log.d("CAPTURE", "OCR timeout reset")
+                resetAnalysisSession("TIMEOUT")
             }
         }.also {
             mainHandler.postDelayed(it, OCR_TIMEOUT_MS)
@@ -404,6 +427,77 @@ class MyAccessibilityService : AccessibilityService() {
     private fun clearOcrTimeout() {
         ocrTimeoutRunnable?.let(mainHandler::removeCallbacks)
         ocrTimeoutRunnable = null
+    }
+
+    private fun armSessionTimeout(sessionId: Long) {
+        clearSessionTimeout()
+        sessionTimeoutRunnable = Runnable {
+            if (isCurrentSession(sessionId) && isSessionTimedOut()) {
+                resetAnalysisSession("SESSION_TIMEOUT")
+            }
+        }.also {
+            mainHandler.postDelayed(it, MAX_SESSION_DURATION_MS)
+        }
+    }
+
+    private fun clearSessionTimeout() {
+        sessionTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        sessionTimeoutRunnable = null
+    }
+
+    private fun isCurrentSession(sessionId: Long): Boolean {
+        return isOrderDetectionSessionActive && sessionId == orderDetectionSessionId
+    }
+
+    private fun isSessionTimedOut(now: Long = System.currentTimeMillis()): Boolean {
+        return isOrderDetectionSessionActive &&
+                orderDetectionSessionStartTime > 0L &&
+                now - orderDetectionSessionStartTime >= MAX_SESSION_DURATION_MS
+    }
+
+    private fun resetStaleSessionIfNeeded(now: Long): Boolean {
+        if (!isSessionTimedOut(now)) return false
+        resetAnalysisSession("STALE_SESSION")
+        return true
+    }
+
+    private fun endOrderDetectionSession(reason: String) {
+        if (isOrderDetectionSessionActive) {
+            DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason sessionId=$orderDetectionSessionId")
+        }
+        clearSessionTimeout()
+        pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
+        pendingOrderEventRunnable = null
+        isDetectionScheduled = false
+        isOrderDetectionSessionActive = false
+        orderDetectionSessionNextAttemptIndex = 0
+        orderDetectionSessionFailureCount = 0
+        orderDetectionSessionLastHadAnchor = false
+        clearPendingOcrRetry(resetAttempt = true)
+        pendingDetectionAfterCurrent = false
+    }
+
+    private fun resetAnalysisSession(reason: String) {
+        val sessionId = orderDetectionSessionId
+        DiagnosticLogStore.append(this, "ORDER_SESSION_FORCE_RESET", "reason=$reason sessionId=$sessionId")
+        Log.i("ORDER_SESSION_FORCE_RESET", "reason=$reason sessionId=$sessionId")
+        clearSessionTimeout()
+        pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
+        pendingOrderEventRunnable = null
+        clearScreenshotTimeout()
+        clearOcrTimeout()
+        clearPendingOcrRetry(resetAttempt = true)
+        isDetectionScheduled = false
+        isTakingScreenshot = false
+        isProcessingOrder = false
+        isOrderDetectionSessionActive = false
+        orderDetectionSessionStartTime = 0L
+        orderDetectionSessionNextAttemptIndex = 0
+        orderDetectionSessionFailureCount = 0
+        orderDetectionSessionLastHadAnchor = false
+        pendingDetectionAfterCurrent = false
+        orderDetectionSessionId += 1
+        DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason sessionId=$sessionId")
     }
 
     private fun handleAccessibilityOrder(
@@ -426,8 +520,7 @@ class MyAccessibilityService : AccessibilityService() {
             val retryExhausted = isRetryableNoOrderReason(gate.skipResultReason) && ocrRetryAttempt >= MAX_OCR_EMPTY_RETRY_COUNT
             val finalSkipReason = if (retryExhausted) "NO_ORDER_CARD" else gate.skipResultReason
             if (retryExhausted) {
-                isOrderDetectionSessionActive = false
-                pendingDetectionAfterCurrent = false
+                resetAnalysisSession("MAX_RETRY_REACHED")
                 consecutiveNoOrderCount = ORDER_END_INVALID_COUNT - 1
             }
             Log.d("ORDER_ANALYSIS", "invalid order ignored $finalSkipReason")
@@ -546,7 +639,10 @@ class MyAccessibilityService : AccessibilityService() {
         val isPopupCandidate = System.currentTimeMillis() <= popupCandidateUntilTime
         if (!hasAnchoredCard && !isPopupCandidate) return false
 
-        if (ocrRetryAttempt >= MAX_OCR_EMPTY_RETRY_COUNT) return false
+        if (ocrRetryAttempt >= MAX_OCR_EMPTY_RETRY_COUNT) {
+            resetAnalysisSession("MAX_RETRY_REACHED")
+            return false
+        }
         if (isOcrRetryScheduled) return true
 
         ocrRetryAttempt += 1
@@ -586,18 +682,11 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun endOrderSessionAsLost(reason: String) {
-        isOrderDetectionSessionActive = false
-        orderDetectionSessionNextAttemptIndex = 0
-        orderDetectionSessionFailureCount = 0
-        orderDetectionSessionLastHadAnchor = false
-        clearPendingOcrRetry(resetAttempt = true)
-        pendingDetectionAfterCurrent = false
+        endOrderDetectionSession(reason)
         if (lastShownOrderSignature.isBlank() && overlayView == null) {
             logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=$reason")
             return
         }
-        Log.i("ORDER_SESSION_END", "reason=$reason")
-        DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason")
         logObservation("ORDER_LOST", "reason=$reason")
         lastShownOrderSignature = ""
         secondCheckSignature = ""
@@ -705,6 +794,13 @@ class MyAccessibilityService : AccessibilityService() {
         ).joinToString("|")
     }
 
+    private fun closeStaleScreenshot(screenshot: ScreenshotResult) {
+        runCatching {
+            screenshot.hardwareBuffer.close()
+        }
+        DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "stale_callback_ignored")
+    }
+
     private fun ScreenshotResult.toBitmap(): Bitmap? {
         return runCatching {
             val source = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace) ?: return null
@@ -725,6 +821,7 @@ class MyAccessibilityService : AccessibilityService() {
         clearCollapseTimer()
         pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
         pendingOrderEventRunnable = null
+        clearSessionTimeout()
         clearPendingOcrRetry(resetAttempt = true)
         isDetectionScheduled = false
         pendingDetectionAfterCurrent = false
@@ -1513,6 +1610,7 @@ class MyAccessibilityService : AccessibilityService() {
         private const val KEY_OVERLAY_Y = "overlay_y"
         private const val SCREENSHOT_TIMEOUT_MS = 3_500L
         private const val OCR_TIMEOUT_MS = 8_000L
+        private const val MAX_SESSION_DURATION_MS = 10_000L
         private const val OCR_EMPTY_RETRY_DELAY_MS = 500L
         private const val MAX_OCR_EMPTY_RETRY_COUNT = 3
         private const val ORDER_END_INVALID_COUNT = 5

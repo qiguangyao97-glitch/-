@@ -1394,7 +1394,7 @@ class MainActivity : AppCompatActivity() {
                 }
             ))
             card.addView(TextView(this).apply {
-                text = "无障碍事件日志路径：${AppSettings.diagnosticLogPath(this@MainActivity)}\n主日志：monitor-events.txt；若固定檔不可写，会改用 时间戳-monitor-events.txt\n排查时传主日志最新完整 TXT 即可。\n本次尝试时间：${DiagnosticLogStore.lastAttemptTime()}\n最近写入：${DiagnosticLogStore.lastWriteSummary()}"
+                text = "无障碍事件日志路径：${AppSettings.diagnosticLogPath(this@MainActivity)}\n主日志按小时输出：yyyyMMdd-HH-monitor-events.txt\n排查时按问题发生时间传对应小时的 TXT 即可。\n本次尝试时间：${DiagnosticLogStore.lastAttemptTime()}\n最近写入：${DiagnosticLogStore.lastWriteSummary()}"
                 textSize = 12f
                 setTextColor(COLOR_TEXT_SECONDARY)
                 setLineSpacing(0f, 1.12f)

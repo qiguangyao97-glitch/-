@@ -8,44 +8,32 @@ import java.util.Locale
 
 object DiagnosticLogStore {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-    private val fileNameFormatter = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US)
+    private val hourlyFileNameFormatter = SimpleDateFormat("yyyyMMdd-HH", Locale.US)
     @Volatile
     private var lastWriteSummary: String = "尚未写入"
     @Volatile
     private var lastAttemptTime: String = "尚未尝试"
-    @Volatile
-    private var activePrimaryFile: File? = null
-    @Volatile
-    private var activeMirrorFile: File? = null
 
     fun append(context: Context, tag: String, message: String): File? {
         val now = Date()
         val displayTime = formatter.format(now)
         lastAttemptTime = displayTime
         val line = "$displayTime [$tag] $message\n"
-        val sessionFileTime = fileNameFormatter.format(now)
+        val hourKey = hourlyFileNameFormatter.format(now)
         val targets = listOf(
             LogTarget(
                 label = "主日志",
-                fixedFile = File(DebugFileDirs.resolve(context, "diagnostic_logs"), "monitor-events.txt"),
-                activeFile = activePrimaryFile,
-                fallbackFileName = "$sessionFileTime-monitor-events.txt"
+                hourlyFile = File(DebugFileDirs.resolve(context, "diagnostic_logs"), "$hourKey-monitor-events.txt")
             ),
             LogTarget(
                 label = "备用日志",
-                fixedFile = File(DebugFileDirs.resolve(context, "debug_samples"), "diagnostic-monitor-events.txt"),
-                activeFile = activeMirrorFile,
-                fallbackFileName = "$sessionFileTime-diagnostic-monitor-events.txt"
+                hourlyFile = File(DebugFileDirs.resolve(context, "debug_samples"), "$hourKey-diagnostic-monitor-events.txt")
             )
         )
         val successes = mutableListOf<File>()
         val failures = mutableListOf<String>()
         targets.forEach { target ->
-            val activeFile = writeTarget(target, line, successes, failures)
-            when (target.label) {
-                "主日志" -> activePrimaryFile = activeFile
-                "备用日志" -> activeMirrorFile = activeFile
-            }
+            writeTarget(target, line, successes, failures)
         }
         lastWriteSummary = buildString {
             append("尝试时间：")
@@ -67,9 +55,7 @@ object DiagnosticLogStore {
 
     private data class LogTarget(
         val label: String,
-        val fixedFile: File,
-        val activeFile: File?,
-        val fallbackFileName: String
+        val hourlyFile: File
     )
 
     private fun writeTarget(
@@ -77,38 +63,12 @@ object DiagnosticLogStore {
         line: String,
         successes: MutableList<File>,
         failures: MutableList<String>
-    ): File? {
-        target.activeFile?.let { activeFile ->
-            writeFile(activeFile, line)
-                .onSuccess {
-                    successes.add(it)
-                    return it
-                }
-                .onFailure {
-                    failures.add("${target.label} 既有檔 ${activeFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
-                }
-        }
-
-        val fixedResult = writeFile(target.fixedFile, line)
-        fixedResult
-            .onSuccess {
-                successes.add(it)
-                return it
-            }
+    ) {
+        writeFile(target.hourlyFile, line)
+            .onSuccess { successes.add(it) }
             .onFailure {
-                failures.add("${target.label} 固定檔 ${target.fixedFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
+                failures.add("${target.label} 小时檔 ${target.hourlyFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
             }
-
-        val fallbackFile = File(target.fixedFile.parentFile, target.fallbackFileName)
-        writeFile(fallbackFile, line)
-            .onSuccess {
-                successes.add(it)
-                return it
-            }
-            .onFailure {
-                failures.add("${target.label} 时间戳檔 ${fallbackFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
-            }
-        return null
     }
 
     private fun writeFile(file: File, line: String): Result<File> {
