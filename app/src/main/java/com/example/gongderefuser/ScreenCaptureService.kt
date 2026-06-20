@@ -65,6 +65,10 @@ class ScreenCaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 
         startInForeground()
+        if (!isActivationActiveForMonitoring()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         val resultCode = CaptureHolder.resultCode
         val data = CaptureHolder.data
@@ -113,6 +117,7 @@ class ScreenCaptureService : Service() {
     private fun startCapture() {
 
         val projection = mediaProjection ?: return
+        if (!isActivationActiveForMonitoring()) return
         if (virtualDisplay != null || imageReader != null) return
         if (!projectionCallbackRegistered) {
             projection.registerCallback(projectionCallback, mainHandler)
@@ -153,6 +158,10 @@ class ScreenCaptureService : Service() {
         imageReader?.setOnImageAvailableListener({ reader ->
 
             if (!MonitoringState.isEnabled(this) || !CaptureTrigger.shouldCapture) {
+                reader.acquireLatestImage()?.close()
+                return@setOnImageAvailableListener
+            }
+            if (!isActivationActiveForMonitoring()) {
                 reader.acquireLatestImage()?.close()
                 return@setOnImageAvailableListener
             }
@@ -232,6 +241,10 @@ class ScreenCaptureService : Service() {
             bitmap.recycle()
             return
         }
+        if (!isActivationActiveForMonitoring()) {
+            bitmap.recycle()
+            return
+        }
         if (isProcessing) {
             bitmap.recycle()
             return
@@ -252,6 +265,18 @@ class ScreenCaptureService : Service() {
             }
             isProcessing = false
         }
+    }
+
+    private fun isActivationActiveForMonitoring(): Boolean {
+        if (ActivationLocalStore.isLocalActive(this)) return true
+        ActivationLocalStore.clearActivationIfNeeded(this)
+        Log.d("ACTIVATION", "Not active, skip screen capture monitoring")
+        DiagnosticLogStore.append(this, "ACTIVATION", "skip_screen_capture expiresAt=${ActivationLocalStore.getExpiresAtMillis(this)}")
+        if (MonitoringState.isEnabled(this)) {
+            MonitoringState.setEnabled(this, false)
+        }
+        Toast.makeText(this, "激活已过期，请输入新的激活码", Toast.LENGTH_LONG).show()
+        return false
     }
 
     private fun handleOcrText(regionText: OcrHelper.OrderRegionText, bitmap: Bitmap? = null): Boolean {

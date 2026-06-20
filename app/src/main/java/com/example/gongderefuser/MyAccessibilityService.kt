@@ -47,6 +47,8 @@ class MyAccessibilityService : AccessibilityService() {
     private var isProcessingOrder = false
     private var lastShownOrderSignature: String = ""
     private var lastShownOrderTime: Long = 0L
+    private var lastCoreOrderSignature: String = ""
+    private var lastCoreOrderTimestamp: Long = 0L
     private var lastOcrAttemptTime: Long = 0L
     private var screenshotTimeoutRunnable: Runnable? = null
     private var ocrTimeoutRunnable: Runnable? = null
@@ -84,6 +86,7 @@ class MyAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!MonitoringState.isEnabled(this)) return
+        if (!isActivationActiveForMonitoring()) return
 
         val packageName = event?.packageName?.toString() ?: return
         if (packageName != "com.ubercab.driver") return
@@ -178,6 +181,7 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun triggerCapture(sessionAttemptNumber: Int = 0, forceScreenshotInterval: Boolean = false) {
         if (!MonitoringState.isEnabled(this)) return
+        if (!isActivationActiveForMonitoring()) return
         val now = System.currentTimeMillis()
         val waitMs = MIN_SCREENSHOT_INTERVAL_MS - (now - lastScreenshotRequestTime)
         if (!forceScreenshotInterval && !isOrderDetectionSessionActive && waitMs > 0) {
@@ -285,6 +289,10 @@ class MyAccessibilityService : AccessibilityService() {
             bitmap.recycle()
             return
         }
+        if (!isActivationActiveForMonitoring()) {
+            bitmap.recycle()
+            return
+        }
         if (isProcessingOrder) {
             DiagnosticLogStore.append(this, "CAPTURE", "skip_processing_busy")
             bitmap.recycle()
@@ -358,6 +366,20 @@ class MyAccessibilityService : AccessibilityService() {
             isProcessingOrder = false
             bitmap.recycle()
         }
+    }
+
+    private fun isActivationActiveForMonitoring(): Boolean {
+        if (ActivationLocalStore.isLocalActive(this)) return true
+        ActivationLocalStore.clearActivationIfNeeded(this)
+        Log.d("ACTIVATION", "Not active, skip monitoring")
+        DiagnosticLogStore.append(this, "ACTIVATION", "skip_monitoring expiresAt=${ActivationLocalStore.getExpiresAtMillis(this)}")
+        if (MonitoringState.isEnabled(this)) {
+            MonitoringState.setEnabled(this, false)
+        }
+        mainHandler.post {
+            Toast.makeText(this, "激活已过期，请输入新的激活码", Toast.LENGTH_LONG).show()
+        }
+        return false
     }
 
     private fun finishDetectionCycle(foundOrder: Boolean, isSecondCheck: Boolean, hadOrderAnchor: Boolean) {
@@ -539,7 +561,19 @@ class MyAccessibilityService : AccessibilityService() {
         consecutiveNoOrderCount = 0
 
         val signature = orderSignature(validOrder)
+        val coreSignature = coreOrderSignature(validOrder)
         val now = System.currentTimeMillis()
+        val coreSignatureAgeMs = now - lastCoreOrderTimestamp
+        if (
+            lastCoreOrderSignature == coreSignature &&
+            coreSignatureAgeMs in 0..DUPLICATE_CORE_ORDER_WINDOW_MS
+        ) {
+            lastPendingOrder = validOrder
+            val message = "signature=$coreSignature ageMs=$coreSignatureAgeMs reason=SAME_CORE_ORDER"
+            Log.i("DUPLICATE_ORDER_SUPPRESSED", message)
+            DiagnosticLogStore.append(this, "DUPLICATE_ORDER_SUPPRESSED", message)
+            return true
+        }
         if (isSecondCheck) {
             DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckRunning=true")
             if (signature == secondCheckSignature) {
@@ -578,6 +612,8 @@ class MyAccessibilityService : AccessibilityService() {
 
         lastShownOrderSignature = signature
         lastShownOrderTime = now
+        lastCoreOrderSignature = coreSignature
+        lastCoreOrderTimestamp = now
 
         lastPendingOrder = validOrder
         val analysis = OrderAnalyzer.analyzeResult(this, validOrder)
@@ -781,6 +817,22 @@ class MyAccessibilityService : AccessibilityService() {
         return "${order.price}元/${order.deliveryCount}单"
     }
 
+    private fun coreOrderSignature(order: OrderData): String {
+        return listOf(
+            order.price,
+            order.minutes,
+            normalizedDistanceForSignature(order.distance),
+            order.deliveryCount
+        ).joinToString("|")
+    }
+
+    private fun normalizedDistanceForSignature(distance: Double): String {
+        return java.math.BigDecimal.valueOf(distance)
+            .setScale(2, java.math.RoundingMode.HALF_UP)
+            .stripTrailingZeros()
+            .toPlainString()
+    }
+
     private fun orderSignature(order: com.example.gongderefuser.model.OrderData): String {
         return listOf(
             order.price,
@@ -842,7 +894,6 @@ class MyAccessibilityService : AccessibilityService() {
     private fun showAnalysisOverlayInternal(analysis: AnalysisResult, playTone: Boolean = true) {
         clearCollapseTimer()
         hideOverlay()
-        if (playTone) playAnalysisTone(analysis)
 
         val density = resources.displayMetrics.density
         val displayWidth = resources.displayMetrics.widthPixels
@@ -871,6 +922,9 @@ class MyAccessibilityService : AccessibilityService() {
         makeDraggable(scrollContainer, params, windowManager, persistPosition = false)
         windowManager.addView(scrollContainer, params)
         overlayView = scrollContainer
+        if (playTone) {
+            mainHandler.post { playAnalysisTone(analysis) }
+        }
 
         collapseRunnable = Runnable {
             hideOverlay()
@@ -1427,16 +1481,7 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun isMonitoringWorking(): Boolean {
-        if (isBetaPackage()) {
-            return MonitoringState.isEnabled(this) && activeService === this
-        }
-        val hasProjection = CaptureHolder.data != null &&
-                CaptureHolder.resultCode == Activity.RESULT_OK
-        return MonitoringState.isEnabled(this) && hasProjection && ScreenCaptureService.isRunning
-    }
-
-    private fun isBetaPackage(): Boolean {
-        return packageName.endsWith(".beta")
+        return MonitoringState.isEnabled(this) && activeService === this
     }
 
     private fun getPrefs() =
@@ -1619,8 +1664,9 @@ class MyAccessibilityService : AccessibilityService() {
         private const val MAX_DETECTIONS_PER_POPUP_CANDIDATE = 5
         private const val POPUP_CANDIDATE_WINDOW_MS = 2_000L
         private const val MIN_SCREENSHOT_INTERVAL_MS = 1_000L
+        private const val DUPLICATE_CORE_ORDER_WINDOW_MS = 10_000L
         private const val MAX_CLICK_DEBUG_NODES = 30
-        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(300L, 700L, 1_200L, 1_800L, 2_500L)
+        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(150L, 450L, 900L, 1_400L, 2_000L)
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
         private val COLOR_DANGER = Color.rgb(239, 68, 68)

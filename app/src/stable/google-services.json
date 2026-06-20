@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "77508552871",
+    "project_id": "gongdejujueqi",
+    "storage_bucket": "gongdejujueqi.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:77508552871:android:cca8a8631527715aa81382",
+        "android_client_info": {
+          "package_name": "com.example.gongderefuser"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAs-f9mCsM7L05DAAQAG9G9skMn24Olrfc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

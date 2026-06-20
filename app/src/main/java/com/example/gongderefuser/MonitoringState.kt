@@ -19,6 +19,20 @@ object MonitoringState {
 
     fun setEnabled(context: Context, enabled: Boolean) {
         val appContext = context.applicationContext
+        if (enabled && !ActivationLocalStore.isLocalActive(appContext)) {
+            ActivationLocalStore.clearActivationIfNeeded(appContext)
+            DiagnosticLogStore.append(appContext, "ACTIVATION", "refuse_monitoring_enable expiresAt=${ActivationLocalStore.getExpiresAtMillis(appContext)}")
+            cachedEnabled = false
+            appContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_ENABLED, false)
+                .apply()
+            MonitorNotificationHelper.cancel(appContext)
+            MyAccessibilityService.refreshForegroundNotification()
+            MyAccessibilityService.refreshStatusOverlay()
+            return
+        }
         cachedEnabled = enabled
         appContext
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

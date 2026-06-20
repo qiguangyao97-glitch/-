@@ -40,6 +40,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.gongderefuser.analyzer.OrderAnalyzer
 import com.example.gongderefuser.analyzer.OrderAnalyzer.AnalysisResult
 import com.example.gongderefuser.analyzer.RuleSettings
@@ -50,6 +51,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -65,6 +67,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var minutesInput: EditText
     private lateinit var manualStoreNameInput: EditText
     private lateinit var manualAddressInput: EditText
+    private lateinit var activationCodeInput: EditText
+    private lateinit var activationStatusText: TextView
+    private lateinit var activationResultText: TextView
 
     private lateinit var whitelistKeywordInput: EditText
     private lateinit var whitelistNoteInput: EditText
@@ -140,18 +145,26 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        ActivationLocalStore.clearActivationIfNeeded(this)
         showHome()
-        promptAccessibilityIfNeeded()
+        if (ActivationLocalStore.isLocalActive(this)) {
+            promptAccessibilityIfNeeded()
+        }
         restoreMonitoringIfPossible()
         updateMonitoringUi()
     }
 
     override fun onResume() {
         super.onResume()
-        promptAccessibilityIfNeeded()
+        ActivationLocalStore.clearActivationIfNeeded(this)
+        stopMonitoringIfActivationExpired(showToast = false)
+        if (ActivationLocalStore.isLocalActive(this)) {
+            promptAccessibilityIfNeeded()
+        }
         restoreMonitoringIfPossible()
         if (currentScreen == Screen.Home && ::statusTitleText.isInitialized) {
             updateMonitoringUi()
+            updateActivationUi()
         }
     }
 
@@ -214,6 +227,9 @@ class MainActivity : AppCompatActivity() {
         statusCard.addView(statusDetailText)
         statusCard.addView(progressBar)
         layout.addView(statusCard)
+        if (ActivationLocalStore.isActivationRequired(this)) {
+            layout.addView(createActivationCard())
+        }
 
         val actionRow = createCardRow()
         val uploadCard = createActionCard(
@@ -223,6 +239,7 @@ class MainActivity : AppCompatActivity() {
             showDot = false
         ).apply {
             setOnClickListener {
+                if (!ensureActivationForMonitoring()) return@setOnClickListener
                 setAnalyzing(true, "请选择订单截图", "从相册选择订单截图后，我会立即进行 OCR 分析。")
                 pickOrderImage.launch(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -260,6 +277,7 @@ class MainActivity : AppCompatActivity() {
 
         setBaseContent(layout)
         updateMonitoringUi()
+        updateActivationUi()
     }
 
     private fun navigateBackOneLevel(): Boolean {
@@ -1963,10 +1981,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startAppFlow() {
-        startActivity(Intent(this, ScreenCaptureActivity::class.java))
-    }
-
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
@@ -1974,28 +1988,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleMonitoring() {
-        if (isBetaPackage()) {
-            toggleBetaMonitoring()
-            return
-        }
-
-        val isEnabled = MonitoringState.isEnabled(this)
-        val isWorking = isEnabled && ScreenCaptureService.isRunning
-
-        if (isWorking) {
-            MonitoringState.setEnabled(this, false)
-            CaptureHolder.clear()
-            Toast.makeText(this, "实时监测已暂停", Toast.LENGTH_SHORT).show()
-            updateMonitoringUi()
-            return
-        }
-
-        Toast.makeText(this, "請授權螢幕分享，用於識別訂單", Toast.LENGTH_SHORT).show()
-        requestNotificationPermissionIfNeeded()
-        startAppFlow()
-    }
-
-    private fun toggleBetaMonitoring() {
         val isEnabled = MonitoringState.isEnabled(this)
         if (isEnabled) {
             MonitoringState.setEnabled(this, false)
@@ -2005,43 +1997,38 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        if (!ensureActivationForMonitoring()) return
+
         if (!isAccessibilityServiceEnabled()) {
-            Toast.makeText(this, "请先开启测试版无障碍服务", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
 
         requestNotificationPermissionIfNeeded()
         MonitoringState.setEnabled(this, true)
-        Toast.makeText(this, "测试版实时监测已开启，不需要画面分享授权", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "实时监测已开启，不需要画面分享授权", Toast.LENGTH_LONG).show()
         MyAccessibilityService.refreshStatusOverlay()
         updateMonitoringUi()
     }
 
     private fun restoreMonitoringIfPossible() {
-        if (isBetaPackage()) {
-            if (MonitoringState.isEnabled(this)) {
-                MyAccessibilityService.refreshStatusOverlay()
-            }
+        if (!ActivationLocalStore.isLocalActive(this)) {
+            stopMonitoringIfActivationExpired(showToast = false)
             return
         }
-
-        if (
-            MonitoringState.isEnabled(this) &&
-            hasProjectionPermission() &&
-            !ScreenCaptureService.isRunning
-        ) {
-            startForegroundService(Intent(this, ScreenCaptureService::class.java))
+        if (MonitoringState.isEnabled(this)) {
+            MyAccessibilityService.refreshStatusOverlay()
         }
     }
 
     private fun updateMonitoringUi() {
+        ActivationLocalStore.clearActivationIfNeeded(this)
+        stopMonitoringIfActivationExpired(showToast = false)
         val isEnabled = MonitoringState.isEnabled(this)
-        val isServiceRunning = if (isBetaPackage()) {
-            isEnabled && isAccessibilityServiceEnabled() && MyAccessibilityService.isServiceActive()
-        } else {
-            ScreenCaptureService.isRunning
-        }
+        val isServiceRunning = isEnabled &&
+            isAccessibilityServiceEnabled() &&
+            MyAccessibilityService.isServiceActive()
         val records = realtimeRecords()
         val todayCount = todayRecords(records).size
         val successRate = if (todayCount > 0) "100%" else "--"
@@ -2051,12 +2038,18 @@ class MainActivity : AppCompatActivity() {
 
         if (::statusToggleButton.isInitialized) {
             statusToggleButton.text = when {
+                !ActivationLocalStore.isLocalActive(this) -> "输入激活码"
                 isEnabled && isServiceRunning -> "暂停监测"
                 else -> "启用监测"
             }
         }
 
         when {
+            !ActivationLocalStore.isLocalActive(this) -> setStatus(
+                title = "未激活",
+                detail = activationBlockedMessage(),
+                color = COLOR_WARNING
+            )
             isEnabled && isServiceRunning -> setStatus(
                 title = "监测中",
                 detail = statusMetrics,
@@ -2484,6 +2477,109 @@ class MainActivity : AppCompatActivity() {
             } else {
                 updateMonitoringUi()
             }
+        }
+    }
+
+    private fun createActivationCard(): LinearLayout {
+        val card = createCard().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        card.addView(TextView(this).apply {
+            text = "激活码"
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT_PRIMARY)
+        })
+        activationStatusText = TextView(this).apply {
+            textSize = 13f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.12f)
+            setPadding(0, dp(6), 0, dp(10))
+        }
+        card.addView(activationStatusText)
+
+        activationCodeInput = createNumberlessInput("请输入激活码").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            setText(ActivationLocalStore.getCurrentCode(this@MainActivity))
+        }
+        card.addView(activationCodeInput)
+
+        val submitButton = createButton(primary = true).apply {
+            text = "激活 / 续期"
+            setOnClickListener { submitActivationCode(this) }
+        }
+        card.addView(submitButton)
+
+        activationResultText = TextView(this).apply {
+            textSize = 13f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.12f)
+        }
+        card.addView(activationResultText)
+        return card
+    }
+
+    private fun submitActivationCode(button: Button) {
+        val code = activationCodeInput.text.toString()
+        button.isEnabled = false
+        activationResultText.text = "正在验证激活码..."
+        lifecycleScope.launch {
+            val result = ActivationManager.activate(this@MainActivity, code)
+            button.isEnabled = true
+            activationResultText.text = result.message
+            Toast.makeText(this@MainActivity, result.message, Toast.LENGTH_LONG).show()
+            if (result.success) {
+                updateActivationUi()
+                updateMonitoringUi()
+                promptAccessibilityIfNeeded()
+            }
+        }
+    }
+
+    private fun updateActivationUi() {
+        if (!ActivationLocalStore.isActivationRequired(this) || !::activationStatusText.isInitialized) return
+        ActivationLocalStore.clearActivationIfNeeded(this)
+        val expiresAtMillis = ActivationLocalStore.getExpiresAtMillis(this)
+        val currentCode = ActivationLocalStore.getCurrentCode(this)
+        activationStatusText.text = when {
+            ActivationLocalStore.isLocalActive(this) ->
+                "已激活，有效期至 ${ActivationManager.formatDateTime(expiresAtMillis)}"
+            expiresAtMillis > 0L ->
+                "已过期，请输入新的激活码"
+            else ->
+                "未激活"
+        }
+        if (::activationCodeInput.isInitialized && activationCodeInput.text.isNullOrBlank() && currentCode.isNotBlank()) {
+            activationCodeInput.setText(currentCode)
+        }
+    }
+
+    private fun ensureActivationForMonitoring(): Boolean {
+        if (ActivationLocalStore.isLocalActive(this)) return true
+        stopMonitoringIfActivationExpired(showToast = false)
+        Toast.makeText(this, activationBlockedMessage(), Toast.LENGTH_LONG).show()
+        updateActivationUi()
+        updateMonitoringUi()
+        return false
+    }
+
+    private fun stopMonitoringIfActivationExpired(showToast: Boolean) {
+        if (ActivationLocalStore.isLocalActive(this)) return
+        if (MonitoringState.isEnabled(this)) {
+            MonitoringState.setEnabled(this, false)
+            if (showToast) {
+                Toast.makeText(this, activationBlockedMessage(), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun activationBlockedMessage(): String {
+        val expiresAtMillis = ActivationLocalStore.getExpiresAtMillis(this)
+        return if (expiresAtMillis > 0L) {
+            "激活已过期，请输入新的激活码"
+        } else {
+            "请先输入激活码"
         }
     }
 
@@ -3121,14 +3217,6 @@ class MainActivity : AppCompatActivity() {
             shape = GradientDrawable.OVAL
             setColor(Color.WHITE)
         }
-    }
-
-    private fun hasProjectionPermission(): Boolean {
-        return CaptureHolder.resultCode == Activity.RESULT_OK && CaptureHolder.data != null
-    }
-
-    private fun isBetaPackage(): Boolean {
-        return packageName.endsWith(".beta")
     }
 
     private fun promptAccessibilityIfNeeded() {

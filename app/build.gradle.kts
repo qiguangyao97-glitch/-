@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -66,8 +67,15 @@ android {
     }
 }
 
+tasks.matching {
+    it.name.startsWith("processBeta") && it.name.endsWith("GoogleServices")
+}.configureEach {
+    enabled = false
+}
+
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
+    implementation(platform(libs.firebase.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.appcompat)
@@ -86,5 +94,7 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(libs.firebase.analytics)
+    implementation(libs.firebase.firestore)
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 }

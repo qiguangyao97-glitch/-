@@ -14,6 +14,11 @@ class ScreenCaptureActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!ActivationLocalStore.isLocalActive(this)) {
+            Log.d("ACTIVATION", "ScreenCaptureActivity blocked: not active")
+            finish()
+            return
+        }
 
         projectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE)

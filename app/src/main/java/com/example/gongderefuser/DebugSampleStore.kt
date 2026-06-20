@@ -11,9 +11,11 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 object DebugSampleStore {
     private val formatter = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US)
+    private val executor = Executors.newSingleThreadExecutor()
 
     fun saveCapture(
         context: Context,
@@ -24,6 +26,24 @@ object DebugSampleStore {
         if (!AppSettings.isDebugSamplesEnabled(context)) return
         if (!parsed) return
 
+        val appContext = context.applicationContext
+        val snapshot = runCatching {
+            bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        }.getOrNull() ?: return
+        executor.execute {
+            runCatching {
+                saveCaptureNow(appContext, snapshot, regionText, parsed)
+            }
+            snapshot.recycle()
+        }
+    }
+
+    private fun saveCaptureNow(
+        context: Context,
+        bitmap: Bitmap,
+        regionText: OcrHelper.OrderRegionText,
+        parsed: Boolean
+    ) {
         runCatching {
             val dir = DebugFileDirs.resolve(context, "debug_samples")
             val order = parseOrder(regionText)
