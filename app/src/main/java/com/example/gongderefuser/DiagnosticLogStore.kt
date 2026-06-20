@@ -9,12 +9,29 @@ import java.util.Locale
 object DiagnosticLogStore {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
     private val hourlyFileNameFormatter = SimpleDateFormat("yyyyMMdd-HH", Locale.US)
+    private val persistedTags = setOf(
+        "A11Y_CLICK",
+        "A11Y_SCREENSHOT",
+        "DIAGNOSTIC_LOG_SELF_TEST",
+        "DUPLICATE_ORDER_SUPPRESSED",
+        "OCR_ATTEMPT",
+        "OCR_FAIL",
+        "OCR_SUCCESS",
+        "ORDER_ANALYSIS_FINISH",
+        "ORDER_EVENT_RECEIVED",
+        "ORDER_LATENCY",
+        "ORDER_SESSION_END",
+        "ORDER_SESSION_FORCE_RESET",
+        "ORDER_SESSION_START"
+    )
     @Volatile
     private var lastWriteSummary: String = "尚未写入"
     @Volatile
     private var lastAttemptTime: String = "尚未尝试"
 
     fun append(context: Context, tag: String, message: String): File? {
+        if (tag !in persistedTags) return null
+
         val now = Date()
         val displayTime = formatter.format(now)
         lastAttemptTime = displayTime

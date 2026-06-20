@@ -21,7 +21,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -33,10 +32,6 @@ import com.example.gongderefuser.analyzer.OrderAnalyzer.AnalysisResult
 import com.example.gongderefuser.analyzer.RuleSettings
 import com.example.gongderefuser.model.OrderData
 import com.example.gongderefuser.parser.OrderParser
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MyAccessibilityService : AccessibilityService() {
 
@@ -74,6 +69,8 @@ class MyAccessibilityService : AccessibilityService() {
     private var pendingOcrRetryRunnable: Runnable? = null
     private var ocrRetryAttempt: Int = 0
     private var isOcrRetryScheduled: Boolean = false
+    private var currentOcrAttemptNumber: Int = 0
+    private var currentOcrAttemptElapsedMs: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -90,9 +87,11 @@ class MyAccessibilityService : AccessibilityService() {
 
         val packageName = event?.packageName?.toString() ?: return
         if (packageName != "com.ubercab.driver") return
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            logTargetClickEvent(event, packageName)
+            return
+        }
         val now = System.currentTimeMillis()
-        sampleTargetAccessibilityEvent(event)
-        logFullAccessibilityEvent(event, now)
 
         if (AppSettings.isAccessibilityLogEnabled(this)) {
             Log.d(
@@ -192,6 +191,9 @@ class MyAccessibilityService : AccessibilityService() {
         currentBurstDetectCount += 1
         lastOcrAttemptTime = now
         lastScreenshotRequestTime = now
+        currentOcrAttemptNumber = sessionAttemptNumber.coerceAtLeast(1)
+        currentOcrAttemptElapsedMs = eventElapsedMs(now)
+        logOcrAttempt(currentOcrAttemptNumber, currentOcrAttemptElapsedMs)
 
         Log.d("TARGET_TRIGGER", "set capture flag")
         Log.i("ORDER_ANALYSIS_START", "source=accessibility_event attempt=$sessionAttemptNumber")
@@ -404,22 +406,11 @@ class MyAccessibilityService : AccessibilityService() {
                 scheduleNextSessionCapture()
                 return
             }
-            if (orderDetectionSessionFailureCount >= ORDER_END_INVALID_COUNT && !orderDetectionSessionLastHadAnchor) {
-                endOrderSessionAsLost("NO_ORDER_CARD")
-                return
-            }
-            if (isSessionTimedOut()) {
-                resetAnalysisSession("SESSION_TIMEOUT")
-                return
-            }
             logObservation(
-                "OCR_RETRY",
-                "reason=ANCHOR_STILL_PRESENT_AFTER_BURST failures=$orderDetectionSessionFailureCount"
+                "ORDER_DETECTION_WAIT",
+                "state=WAITING reason=MAX_SESSION_ATTEMPTS_REACHED failures=$orderDetectionSessionFailureCount"
             )
-            orderDetectionSessionStartTime = System.currentTimeMillis()
-            orderDetectionSessionNextAttemptIndex = 0
-            orderDetectionSessionFailureCount = 0
-            scheduleNextSessionCapture()
+            resetAnalysisSession("MAX_SESSION_ATTEMPTS_REACHED")
             return
         }
         if (pendingDetectionAfterCurrent && currentBurstDetectCount < maxDetectionsForCurrentWindow()) {
@@ -536,11 +527,9 @@ class MyAccessibilityService : AccessibilityService() {
         Log.i("ORDER_POPUP_VALIDATION", gate.debugLog)
         DiagnosticLogStore.append(this, "ORDER_POPUP_VALIDATION", gate.debugLog)
         if (!gate.shouldShow) {
-            if (scheduleOcrRetryIfNeeded(gate.skipResultReason, hasAnchoredCard, textLength, cropWidth, cropHeight)) {
-                return false
-            }
             val retryExhausted = isRetryableNoOrderReason(gate.skipResultReason) && ocrRetryAttempt >= MAX_OCR_EMPTY_RETRY_COUNT
             val finalSkipReason = if (retryExhausted) "NO_ORDER_CARD" else gate.skipResultReason
+            logOcrFail(currentOcrAttemptNumber, eventElapsedMs(), finalSkipReason)
             if (retryExhausted) {
                 resetAnalysisSession("MAX_RETRY_REACHED")
                 consecutiveNoOrderCount = ORDER_END_INVALID_COUNT - 1
@@ -563,6 +552,8 @@ class MyAccessibilityService : AccessibilityService() {
         val signature = orderSignature(validOrder)
         val coreSignature = coreOrderSignature(validOrder)
         val now = System.currentTimeMillis()
+        val ocrSuccessAttempt = currentOcrAttemptNumber
+        val ocrSuccessElapsedMs = eventElapsedMs(now)
         val coreSignatureAgeMs = now - lastCoreOrderTimestamp
         if (
             lastCoreOrderSignature == coreSignature &&
@@ -601,6 +592,7 @@ class MyAccessibilityService : AccessibilityService() {
             DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=false reason=DUPLICATE_RESULT")
             return false
         }
+        logOcrSuccess(ocrSuccessAttempt, ocrSuccessElapsedMs)
         if (lastShownOrderSignature.isNotBlank() && signature != lastShownOrderSignature) {
             logObservation(
                 "ORDER_REPLACED",
@@ -624,6 +616,7 @@ class MyAccessibilityService : AccessibilityService() {
             val newOrderLabel = orderLabel(validOrder)
             logPopupShowOrReplace(analysis, newOrderLabel)
             showAnalysisOverlayInternal(analysis)
+            logOrderLatency(eventElapsedMs(), ocrSuccessElapsedMs, ocrSuccessAttempt)
             currentOverlayOrderLabel = newOrderLabel
         }
         Log.i("ORDER_ANALYSIS_FINISH", "shown=true signature=$signature")
@@ -661,45 +654,6 @@ class MyAccessibilityService : AccessibilityService() {
         } else {
             consecutiveNoOrderCount = 0
         }
-    }
-
-    private fun scheduleOcrRetryIfNeeded(
-        reason: String,
-        hasAnchoredCard: Boolean,
-        textLength: Int,
-        cropWidth: Int,
-        cropHeight: Int
-    ): Boolean {
-        if (!isRetryableNoOrderReason(reason)) return false
-
-        val isPopupCandidate = System.currentTimeMillis() <= popupCandidateUntilTime
-        if (!hasAnchoredCard && !isPopupCandidate) return false
-
-        if (ocrRetryAttempt >= MAX_OCR_EMPTY_RETRY_COUNT) {
-            resetAnalysisSession("MAX_RETRY_REACHED")
-            return false
-        }
-        if (isOcrRetryScheduled) return true
-
-        ocrRetryAttempt += 1
-        isOcrRetryScheduled = true
-        pendingDetectionAfterCurrent = true
-        logObservation(
-            "OCR_RETRY",
-            "attempt=$ocrRetryAttempt reason=$reason delayMs=$OCR_EMPTY_RETRY_DELAY_MS " +
-                    "hasAnchoredCard=$hasAnchoredCard textLength=$textLength " +
-                    "OCR_TEXT_LENGTH=$textLength ANCHOR_FOUND=$hasAnchoredCard " +
-                    "CROP_WIDTH=$cropWidth CROP_HEIGHT=$cropHeight"
-        )
-        pendingOcrRetryRunnable = Runnable {
-            pendingOcrRetryRunnable = null
-            isOcrRetryScheduled = false
-            if (!MonitoringState.isEnabled(this)) return@Runnable
-            triggerCapture(forceScreenshotInterval = true)
-        }.also {
-            mainHandler.postDelayed(it, OCR_EMPTY_RETRY_DELAY_MS)
-        }
-        return true
     }
 
     private fun isRetryableNoOrderReason(reason: String): Boolean {
@@ -782,22 +736,67 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun logFullAccessibilityEvent(event: AccessibilityEvent, timestampMs: Long) {
-        val message = buildString {
-            appendLine("===== A11Y EVENT =====")
-            appendLine("type=${eventTypeName(event.eventType)}")
-            appendLine("package=${event.packageName?.toString().orEmpty()}")
-            appendLine("class=${event.className?.toString().orEmpty()}")
-            appendLine("text=${event.text}")
-            append("time=${humanSecondFormatter.format(Date(timestampMs))}")
-        }
-        Log.i("A11Y_EVENT", message)
-        DiagnosticLogStore.append(this, "A11Y_EVENT", message)
-    }
-
     private fun logObservation(tag: String, message: String) {
         Log.i(tag, message)
         DiagnosticLogStore.append(this, tag, message)
+    }
+
+    private fun logTargetClickEvent(event: AccessibilityEvent, packageName: String) {
+        val viewId = runCatching {
+            event.source?.viewIdResourceName.orEmpty()
+        }.getOrDefault("")
+        val message = buildString {
+            append("eventType=")
+            append(eventTypeName(event.eventType))
+            append(" package=")
+            append(packageName)
+            append(" class=")
+            append(event.className?.toString().orEmpty())
+            append(" viewId=")
+            append(viewId)
+            append(" text=")
+            append(formatEventText(event))
+            append(" contentDescription=")
+            append(formatBracketed(event.contentDescription?.toString().orEmpty()))
+        }
+        Log.i("A11Y_CLICK", message)
+        DiagnosticLogStore.append(this, "A11Y_CLICK", message)
+    }
+
+    private fun formatEventText(event: AccessibilityEvent): String {
+        return formatBracketed(event.text.joinToString(",") { it?.toString().orEmpty() })
+    }
+
+    private fun formatBracketed(value: String): String {
+        return "[$value]"
+    }
+
+    private fun logOcrAttempt(attempt: Int, elapsedMs: Long) {
+        logObservation("OCR_ATTEMPT", "attempt=$attempt elapsedMs=$elapsedMs")
+    }
+
+    private fun logOcrSuccess(attempt: Int, elapsedMs: Long) {
+        logObservation("OCR_SUCCESS", "attempt=$attempt elapsedMs=$elapsedMs")
+    }
+
+    private fun logOcrFail(attempt: Int, elapsedMs: Long, reason: String) {
+        logObservation("OCR_FAIL", "attempt=$attempt elapsedMs=$elapsedMs reason=$reason")
+    }
+
+    private fun logOrderLatency(eventToPopupMs: Long, eventToOcrSuccessMs: Long, ocrAttempt: Int) {
+        logObservation(
+            "ORDER_LATENCY",
+            "eventToPopupMs=$eventToPopupMs eventToOcrSuccessMs=$eventToOcrSuccessMs ocrAttempt=$ocrAttempt"
+        )
+    }
+
+    private fun eventElapsedMs(now: Long = System.currentTimeMillis()): Long {
+        val start = orderDetectionSessionStartTime
+        return if (start > 0L) {
+            (now - start).coerceAtLeast(0L)
+        } else {
+            0L
+        }
     }
 
     private fun logPopupShowOrReplace(analysis: AnalysisResult, newOrderLabel: String) {
@@ -1503,138 +1502,6 @@ class MyAccessibilityService : AccessibilityService() {
             .apply()
     }
 
-    private fun sampleTargetAccessibilityEvent(event: AccessibilityEvent) {
-        if (!shouldSampleAccessibilityEvent(event.eventType)) return
-        if (event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) {
-            DiagnosticLogStore.append(
-                this,
-                "A11Y_EVENT",
-                "eventType=${eventTypeName(event.eventType)} eventClassName=${event.className} eventText=${event.text} eventContentDescription=${event.contentDescription}"
-            )
-            return
-        }
-
-        runCatching {
-            val dir = DebugFileDirs.resolve(this, "accessibility-click-debug")
-            val timestamp = clickDebugFormatter.format(Date())
-            val file = File(dir, "accessibility-click-debug-$timestamp.txt")
-            file.writeText(buildClickDebugText(event), Charsets.UTF_8)
-            DiagnosticLogStore.append(this, "A11Y_CLICK", "saved=${file.absolutePath}")
-        }.onFailure {
-            DiagnosticLogStore.append(this, "A11Y_CLICK", "save_failed=${it.javaClass.simpleName}:${it.message}")
-        }
-    }
-
-    private fun buildClickDebugText(event: AccessibilityEvent): String {
-        val source = event.source
-        val nodes = collectLikelyButtonNodes(rootInActiveWindow)
-        return buildString {
-            appendLine("time=${humanDebugFormatter.format(Date())}")
-            appendLine("eventType=${eventTypeName(event.eventType)}")
-            appendLine("eventClassName=${event.className?.toString().orEmpty()}")
-            appendLine("eventText=${event.text.joinToString("|")}")
-            appendLine("eventContentDescription=${event.contentDescription?.toString().orEmpty()}")
-            appendLine()
-            appendLine("[SOURCE]")
-            appendNodeInfo("source", source)
-            appendLine()
-            appendLine("[LIKELY_BUTTON_NODES]")
-            if (nodes.isEmpty()) {
-                appendLine("empty")
-            } else {
-                nodes.forEachIndexed { index, node ->
-                    appendNodeInfo("node#$index", node)
-                }
-            }
-            appendLine()
-            appendLine("[PENDING_ORDER]")
-            appendPendingOrder(lastPendingOrder)
-        }
-    }
-
-    private fun StringBuilder.appendNodeInfo(prefix: String, node: AccessibilityNodeInfo?) {
-        if (node == null) {
-            appendLine("$prefix=null")
-            return
-        }
-        val bounds = Rect()
-        node.getBoundsInScreen(bounds)
-        appendLine("$prefix:")
-        if (prefix == "source") {
-            appendLine("sourceClassName=${node.className?.toString().orEmpty()}")
-            appendLine("sourceText=${node.text?.toString().orEmpty()}")
-            appendLine("sourceContentDescription=${node.contentDescription?.toString().orEmpty()}")
-            appendLine("sourceViewId=${node.viewIdResourceName.orEmpty()}")
-            appendLine("sourceClickable=${node.isClickable}")
-            appendLine("sourceEnabled=${node.isEnabled}")
-            appendLine("sourceBounds=$bounds")
-        } else {
-            appendLine("nodeClass=${node.className?.toString().orEmpty()}")
-            appendLine("nodeText=${node.text?.toString().orEmpty()}")
-            appendLine("nodeDesc=${node.contentDescription?.toString().orEmpty()}")
-            appendLine("nodeViewId=${node.viewIdResourceName.orEmpty()}")
-            appendLine("nodeClickable=${node.isClickable}")
-            appendLine("nodeEnabled=${node.isEnabled}")
-            appendLine("nodeBounds=$bounds")
-        }
-    }
-
-    private fun StringBuilder.appendPendingOrder(order: OrderData?) {
-        if (order == null) {
-            appendLine("pendingOrder=null")
-            return
-        }
-        appendLine("price=${order.price}")
-        appendLine("minutes=${order.minutes}")
-        appendLine("distance=${order.distance}")
-        appendLine("merchant=${order.storeName}")
-        appendLine("address=${order.address}")
-        appendLine("sameDropoff=${order.isSameLocationStack}")
-    }
-
-    private fun collectLikelyButtonNodes(root: AccessibilityNodeInfo?): List<AccessibilityNodeInfo> {
-        if (root == null) return emptyList()
-        val result = mutableListOf<AccessibilityNodeInfo>()
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        val screenWidth = resources.displayMetrics.widthPixels
-        val screenHeight = resources.displayMetrics.heightPixels
-        while (queue.isNotEmpty() && result.size < MAX_CLICK_DEBUG_NODES) {
-            val node = queue.removeFirst()
-            if (isLikelyButtonNode(node, screenWidth, screenHeight)) {
-                result.add(node)
-            }
-            for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
-            }
-        }
-        return result
-    }
-
-    private fun isLikelyButtonNode(node: AccessibilityNodeInfo, screenWidth: Int, screenHeight: Int): Boolean {
-        val bounds = Rect()
-        node.getBoundsInScreen(bounds)
-        val className = node.className?.toString().orEmpty()
-        val hasText = !node.text.isNullOrBlank()
-        val hasDesc = !node.contentDescription.isNullOrBlank()
-        val inLowerHalf = bounds.centerY() >= screenHeight / 2
-        val nearTopRightClose = bounds.centerX() >= (screenWidth * 0.68f).toInt() &&
-                bounds.centerY() <= (screenHeight * 0.62f).toInt()
-        return node.isClickable ||
-                className.contains("Button", ignoreCase = true) ||
-                hasText ||
-                hasDesc ||
-                inLowerHalf ||
-                nearTopRightClose
-    }
-
-    private fun shouldSampleAccessibilityEvent(eventType: Int): Boolean {
-        return eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
-                eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
-                eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
-                eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-    }
-
     private fun eventTypeName(eventType: Int): String {
         return when (eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> "TYPE_VIEW_CLICKED"
@@ -1665,8 +1532,7 @@ class MyAccessibilityService : AccessibilityService() {
         private const val POPUP_CANDIDATE_WINDOW_MS = 2_000L
         private const val MIN_SCREENSHOT_INTERVAL_MS = 1_000L
         private const val DUPLICATE_CORE_ORDER_WINDOW_MS = 10_000L
-        private const val MAX_CLICK_DEBUG_NODES = 30
-        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(150L, 450L, 900L, 1_400L, 2_000L)
+        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(1_100L, 1_600L, 2_300L)
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
         private val COLOR_DANGER = Color.rgb(239, 68, 68)
@@ -1675,10 +1541,6 @@ class MyAccessibilityService : AccessibilityService() {
         private val COLOR_TEXT_PRIMARY = Color.rgb(22, 27, 34)
         private val COLOR_TEXT_SECONDARY = Color.rgb(88, 96, 105)
         private val COLOR_RESULT_LABEL = Color.rgb(45, 55, 72)
-        private val clickDebugFormatter = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US)
-        private val humanDebugFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-        private val humanSecondFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-
         @Volatile
         private var activeService: MyAccessibilityService? = null
         @Volatile
