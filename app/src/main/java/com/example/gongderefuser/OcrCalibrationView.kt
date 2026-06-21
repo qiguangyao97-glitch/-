@@ -42,7 +42,7 @@ class OcrCalibrationView(context: Context) : View(context) {
         OcrCalibrationStore.regionNames.forEach { name ->
             regions[name] = RectF(savedRegions[name] ?: OcrCalibrationStore.defaultRegions().getValue(name))
         }
-        selectedName = regions.keys.firstOrNull { it == "card" } ?: regions.keys.first()
+        selectedName = OcrCalibrationStore.editableRegionNames.first()
         requestLayout()
         invalidate()
     }
@@ -82,16 +82,22 @@ class OcrCalibrationView(context: Context) : View(context) {
         updateImageRect(source)
         canvas.drawBitmap(source, null, imageRect, imagePaint)
 
-        val normalized = regions[selectedName] ?: return
-        val rect = toViewRect(normalized)
-        val color = regionColor(selectedName)
-        fillPaint.color = withAlpha(color, 48)
-        strokePaint.color = color
-        strokePaint.strokeWidth = 7f
-        canvas.drawRect(rect, fillPaint)
-        canvas.drawRect(rect, strokePaint)
-        drawLabel(canvas, selectedName, rect, color)
-        canvas.drawCircle(rect.right, rect.bottom, 18f, strokePaint)
+        visibleRegionNames().forEach { name ->
+            val normalized = regions[name] ?: return@forEach
+            val rect = toViewRect(normalized)
+            val color = regionColor(name)
+            fillPaint.color = withAlpha(color, if (name == selectedName) 56 else 26)
+            strokePaint.color = color
+            strokePaint.strokeWidth = if (name == selectedName) 7f else 4f
+            canvas.drawRect(rect, fillPaint)
+            canvas.drawRect(rect, strokePaint)
+            drawCenterPoint(canvas, rect, color)
+            drawSpecialHint(canvas, name, rect, color)
+            if (name == selectedName) {
+                drawLabel(canvas, name, rect, color)
+                canvas.drawCircle(rect.right, rect.bottom, 18f, strokePaint)
+            }
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -116,7 +122,8 @@ class OcrCalibrationView(context: Context) : View(context) {
             MotionEvent.ACTION_MOVE -> {
                 val dx = (event.x - lastX) / imageRect.width().coerceAtLeast(1f)
                 val dy = (event.y - lastY) / imageRect.height().coerceAtLeast(1f)
-                val rect = RectF(regions.getValue(selectedName))
+                val before = RectF(regions.getValue(selectedName))
+                val rect = RectF(before)
                 if (mode == DragMode.Resize) {
                     rect.right += dx
                     rect.bottom += dy
@@ -124,6 +131,7 @@ class OcrCalibrationView(context: Context) : View(context) {
                     rect.offset(dx, dy)
                 }
                 regions[selectedName] = clamp(rect)
+                applyLinkedMove(selectedName, regions.getValue(selectedName).centerX() - before.centerX(), regions.getValue(selectedName).centerY() - before.centerY())
                 lastX = event.x
                 lastY = event.y
                 invalidate()
@@ -140,8 +148,8 @@ class OcrCalibrationView(context: Context) : View(context) {
     }
 
     private fun hitRegion(x: Float, y: Float): String? {
-        return selectedName.takeIf {
-            regions[it]?.let { rect -> toViewRect(rect).contains(x, y) } == true
+        return visibleRegionNames().lastOrNull {
+            isSelectableProxy(it) && regions[it]?.let { rect -> toViewRect(rect).contains(x, y) } == true
         }
     }
 
@@ -215,9 +223,100 @@ class OcrCalibrationView(context: Context) : View(context) {
         canvas.drawText(label, rect.left + padding, top + labelPaint.textSize + padding / 2, labelPaint)
     }
 
+    private fun drawCenterPoint(canvas: Canvas, rect: RectF, color: Int) {
+        strokePaint.color = color
+        strokePaint.strokeWidth = 3f
+        val cx = rect.centerX()
+        val cy = rect.centerY()
+        canvas.drawLine(cx - 14f, cy, cx + 14f, cy, strokePaint)
+        canvas.drawLine(cx, cy - 14f, cx, cy + 14f, strokePaint)
+        fillPaint.color = color
+        canvas.drawCircle(cx, cy, 5f, fillPaint)
+    }
+
+    private fun drawSpecialHint(canvas: Canvas, name: String, rect: RectF, color: Int) {
+        when (name) {
+            "closeSearch" -> drawCloseSearchStack(canvas, rect, color)
+            "closeButton" -> drawCenteredText(canvas, "X", rect, color, 32f)
+            "pickupAnchor" -> {
+                fillPaint.color = withAlpha(color, 220)
+                canvas.drawCircle(rect.centerX(), rect.centerY(), (rect.height() * 0.32f).coerceAtLeast(7f), fillPaint)
+            }
+            "dropoffAnchor" -> {
+                fillPaint.color = withAlpha(color, 220)
+                val size = (rect.height() * 0.56f).coerceAtLeast(12f)
+                canvas.drawRect(rect.centerX() - size / 2f, rect.centerY() - size / 2f, rect.centerX() + size / 2f, rect.centerY() + size / 2f, fillPaint)
+            }
+        }
+    }
+
+    private fun drawCloseSearchStack(canvas: Canvas, rect: RectF, color: Int) {
+        strokePaint.color = color
+        strokePaint.strokeWidth = 3f
+        val squareHeight = rect.height() / 3f
+        for (index in 0 until 3) {
+            val top = rect.top + squareHeight * index
+            val square = RectF(rect.left, top, rect.right, top + squareHeight)
+            canvas.drawRect(square, strokePaint)
+            drawCenteredText(canvas, "X", square, color, 22f)
+        }
+    }
+
+    private fun drawCenteredText(canvas: Canvas, text: String, rect: RectF, color: Int, size: Float) {
+        labelPaint.color = color
+        labelPaint.textSize = size
+        labelPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        labelPaint.textAlign = Paint.Align.CENTER
+        val y = rect.centerY() - (labelPaint.descent() + labelPaint.ascent()) / 2f
+        canvas.drawText(text, rect.centerX(), y, labelPaint)
+        labelPaint.textAlign = Paint.Align.LEFT
+        labelPaint.typeface = android.graphics.Typeface.DEFAULT
+        labelPaint.color = Color.WHITE
+        labelPaint.textSize = 28f
+    }
+
+    private fun visibleRegionNames(): List<String> {
+        return when (selectedName) {
+            "closeSearch" -> listOf("closeSearch", "closeButton")
+            "closeButton" -> listOf("closeSearch", "closeButton")
+            "price" -> listOf("type", "price")
+            "type" -> listOf("type", "price")
+            "merchant" -> listOf("pickupAnchor", "merchant")
+            "pickupAnchor" -> listOf("pickupAnchor", "merchant")
+            "address" -> listOf("dropoffAnchor", "address", "addressWide")
+            "addressWide" -> listOf("dropoffAnchor", "address", "addressWide")
+            "dropoffAnchor" -> listOf("dropoffAnchor", "address", "addressWide")
+            "deliveryAnchorSearch" -> listOf("pickupAnchor", "dropoffAnchor", "deliveryAnchorSearch")
+            else -> listOf(selectedName)
+        }.distinct().filter { regions.containsKey(it) }
+    }
+
+    private fun isSelectableProxy(name: String): Boolean {
+        return name in OcrCalibrationStore.editableRegionNames
+    }
+
+    private fun applyLinkedMove(name: String, dx: Float, dy: Float) {
+        if (dx == 0f && dy == 0f) return
+        val linked = when (name) {
+            "closeButton" -> listOf("closeSearch")
+            "price" -> listOf("type")
+            "merchant" -> listOf("pickupAnchor")
+            "address" -> listOf("dropoffAnchor", "addressWide")
+            else -> emptyList()
+        }
+        linked.forEach { linkedName ->
+            regions[linkedName]?.let {
+                val moved = RectF(it)
+                moved.offset(dx, dy)
+                regions[linkedName] = clamp(moved)
+            }
+        }
+    }
+
     private fun regionColor(name: String): Int {
         return when (name) {
             "actionButton" -> Color.rgb(255, 45, 85)
+            "closeButton" -> Color.rgb(7, 56, 135)
             "deliveryAnchor" -> Color.rgb(0, 122, 255)
             "pickupAnchor", "pickupAnchorShiftedReference" -> Color.rgb(90, 200, 250)
             "dropoffAnchor", "dropoffAnchorShiftedReference" -> Color.rgb(88, 86, 214)

@@ -21,6 +21,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -32,6 +33,7 @@ import com.example.gongderefuser.analyzer.OrderAnalyzer.AnalysisResult
 import com.example.gongderefuser.analyzer.RuleSettings
 import com.example.gongderefuser.model.OrderData
 import com.example.gongderefuser.parser.OrderParser
+import java.util.ArrayDeque
 
 class MyAccessibilityService : AccessibilityService() {
 
@@ -71,6 +73,8 @@ class MyAccessibilityService : AccessibilityService() {
     private var isOcrRetryScheduled: Boolean = false
     private var currentOcrAttemptNumber: Int = 0
     private var currentOcrAttemptElapsedMs: Long = 0L
+    private var lastPopupStructureScanTime: Long = 0L
+    private var lastPopupCandidateLogTime: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -103,15 +107,17 @@ class MyAccessibilityService : AccessibilityService() {
 
         Log.i("ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
         DiagnosticLogStore.append(this, "ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
+        val popupScan = logPopupStructureScan(event, packageName, now)
         resetStaleSessionIfNeeded(now)
-        scheduleEventDrivenCapture(event, now)
+        scheduleEventDrivenCapture(event, now, popupScan)
     }
 
-    private fun scheduleEventDrivenCapture(event: AccessibilityEvent, now: Long) {
-        if (!shouldTriggerOrderDetection(event)) {
+    private fun scheduleEventDrivenCapture(event: AccessibilityEvent, now: Long, popupScan: PopupStructureScan?) {
+        val triggerDecision = shouldTriggerOrderDetection(event, now, popupScan)
+        if (!triggerDecision.shouldTrigger) {
             logObservation(
                 "ORDER_DETECTION_WAIT",
-                "ignoredEvent type=${eventTypeName(event.eventType)} class=${event.className}"
+                "ignoredEvent reason=${triggerDecision.reason} type=${eventTypeName(event.eventType)} class=${event.className}"
             )
             return
         }
@@ -125,7 +131,7 @@ class MyAccessibilityService : AccessibilityService() {
             pendingDetectionAfterCurrent = true
             logObservation(
                 "ORDER_DETECTION_WAIT",
-                "pendingAfterCurrent=true count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
+                "pendingAfterCurrent=true reason=${triggerDecision.reason} count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
             )
             return
         }
@@ -687,27 +693,80 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun shouldTriggerOrderDetection(event: AccessibilityEvent): Boolean {
-        val now = System.currentTimeMillis()
+    private fun shouldTriggerOrderDetection(
+        event: AccessibilityEvent,
+        now: Long,
+        popupScan: PopupStructureScan?
+    ): TriggerDecision {
+        if (!isBetaPackage()) {
+            return legacyTriggerDecision(event, now)
+        }
         return when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                true
+                TriggerDecision(true, "BETA_WINDOW_STATE_CHANGED")
             }
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
                 popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                true
+                TriggerDecision(true, "BETA_WINDOWS_CHANGED")
+            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                val scan = popupScan ?: inspectRootForPopupStructure(rootInActiveWindow ?: return TriggerDecision(false, "BETA_CONTENT_NO_ROOT"))
+                betaContentChangedDecision(event, now, scan)
+            }
+            else -> TriggerDecision(false, "UNSUPPORTED_EVENT")
+        }
+    }
+
+    private fun legacyTriggerDecision(event: AccessibilityEvent, now: Long): TriggerDecision {
+        return when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+                TriggerDecision(true, "LEGACY_WINDOW_STATE_CHANGED")
+            }
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+                TriggerDecision(true, "LEGACY_WINDOWS_CHANGED")
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (lastShownOrderSignature.isBlank() && overlayView == null) {
                     popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                    true
+                    TriggerDecision(true, "LEGACY_CONTENT_NO_OVERLAY")
                 } else {
-                    true
+                    TriggerDecision(true, "LEGACY_CONTENT_WITH_OVERLAY")
                 }
             }
-            else -> false
+            else -> TriggerDecision(false, "UNSUPPORTED_EVENT")
         }
+    }
+
+    private fun betaContentChangedDecision(
+        event: AccessibilityEvent,
+        now: Long,
+        scan: PopupStructureScan
+    ): TriggerDecision {
+        if (overlayView != null || lastShownOrderSignature.isNotBlank()) {
+            return TriggerDecision(true, "BETA_CONTENT_EXISTING_OVERLAY")
+        }
+        if (scan.isLikelyBlockingPopup) {
+            popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+            return TriggerDecision(true, "BETA_BLOCKING_POPUP_SCAN")
+        }
+        if (scan.hasOrderTextSignal) {
+            popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+            return TriggerDecision(true, "BETA_ORDER_TEXT_SIGNAL")
+        }
+        if (scan.isRenderedPopupShell) {
+            popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+            return TriggerDecision(true, "BETA_RENDERED_POPUP_SHELL")
+        }
+        if (now <= popupCandidateUntilTime && scan.isSparsePopupShell) {
+            return TriggerDecision(true, "BETA_POPUP_WINDOW_SPARSE_SHELL")
+        }
+        return TriggerDecision(
+            false,
+            "BETA_FILTERED_CONTENT textNodes=${scan.textNodeCount} nodes=${scan.nodeCount} class=${event.className}"
+        )
     }
 
     private fun maxDetectionsForCurrentWindow(): Int {
@@ -761,6 +820,266 @@ class MyAccessibilityService : AccessibilityService() {
         }
         Log.i("A11Y_CLICK", message)
         DiagnosticLogStore.append(this, "A11Y_CLICK", message)
+    }
+
+    private fun logPopupStructureScan(event: AccessibilityEvent, targetPackageName: String, now: Long): PopupStructureScan? {
+        if (!isBetaPackage()) return null
+        if (now - lastPopupStructureScanTime < POPUP_STRUCTURE_SCAN_MIN_INTERVAL_MS) return null
+        lastPopupStructureScanTime = now
+
+        val root = rootInActiveWindow
+        if (root == null) {
+            DiagnosticLogStore.append(
+                this,
+                "POPUP_STRUCTURE_SCAN",
+                "eventType=${eventTypeName(event.eventType)} package=$targetPackageName class=${event.className} root=null"
+            )
+            return null
+        }
+
+        val eventSourceInfo = inspectEventSource(event)
+        val scan = inspectRootForPopupStructure(root)
+        val summary = buildString {
+            append("eventType=")
+            append(eventTypeName(event.eventType))
+            append(" package=")
+            append(targetPackageName)
+            append(" class=")
+            append(event.className?.toString().orEmpty())
+            append(" source=")
+            append(eventSourceInfo)
+            append(" nodes=")
+            append(scan.nodeCount)
+            append(" clickable=")
+            append(scan.clickableCount)
+            append(" textNodes=")
+            append(scan.textNodeCount)
+            append(" features=")
+            append(scan.featureSummary())
+            append(" score=")
+            append(scan.score)
+            append(" likelyBlockingPopup=")
+            append(scan.isLikelyBlockingPopup)
+            append(" samples=")
+            append(scan.samples.joinToString(" | "))
+            append(" ids=")
+            append(scan.viewIds.joinToString("|"))
+        }
+        DiagnosticLogStore.append(this, "POPUP_STRUCTURE_SCAN", summary)
+
+        if (scan.score >= ORDER_TRIGGER_CANDIDATE_MIN_SCORE &&
+            now - lastPopupCandidateLogTime >= POPUP_CANDIDATE_LOG_MIN_INTERVAL_MS
+        ) {
+            lastPopupCandidateLogTime = now
+            DiagnosticLogStore.append(
+                this,
+                "ORDER_TRIGGER_CANDIDATE",
+                "score=${scan.score} likelyBlockingPopup=${scan.isLikelyBlockingPopup} features=${scan.featureSummary()} samples=${scan.samples.joinToString(" | ")}"
+            )
+        }
+        if (scan.isLikelyBlockingPopup) {
+            DiagnosticLogStore.append(
+                this,
+                "ORDER_BLOCKING_POPUP_CANDIDATE",
+                "score=${scan.score} features=${scan.featureSummary()} source=$eventSourceInfo samples=${scan.samples.joinToString(" | ")}"
+            )
+        }
+        return scan
+    }
+
+    private fun inspectEventSource(event: AccessibilityEvent): String {
+        val source = runCatching { event.source }.getOrNull() ?: return "null"
+        val rect = Rect()
+        runCatching { source.getBoundsInScreen(rect) }
+        return buildString {
+            append(source.className?.toString().orEmpty())
+            append("#")
+            append(source.viewIdResourceName.orEmpty())
+            append("@")
+            append(rect.toShortString())
+        }
+    }
+
+    private fun inspectRootForPopupStructure(root: AccessibilityNodeInfo): PopupStructureScan {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        val classCounts = mutableMapOf<String, Int>()
+        val samples = mutableListOf<String>()
+        val viewIds = mutableListOf<String>()
+        var nodeCount = 0
+        var clickableCount = 0
+        var textNodeCount = 0
+        var hasAcceptAction = false
+        var hasMatchAction = false
+        var hasCloseAction = false
+        var hasMoney = false
+        var hasMinute = false
+        var hasDistance = false
+        var hasTotal = false
+        var hasDelivery = false
+        var hasFoodDelivery = false
+
+        queue.add(root)
+        while (queue.isNotEmpty() && nodeCount < POPUP_STRUCTURE_SCAN_NODE_LIMIT) {
+            val node = queue.removeFirst()
+            nodeCount += 1
+            val className = node.className?.toString().orEmpty()
+            if (className.isNotBlank()) {
+                classCounts[className] = (classCounts[className] ?: 0) + 1
+            }
+            if (node.isClickable) clickableCount += 1
+
+            val id = node.viewIdResourceName.orEmpty()
+            if (id.isNotBlank() && viewIds.size < POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT && id !in viewIds) {
+                viewIds.add(sanitizeForLog(id, 80))
+            }
+
+            val text = node.text?.toString().orEmpty()
+            val desc = node.contentDescription?.toString().orEmpty()
+            val combined = "$text $desc".trim()
+            if (combined.isNotBlank()) {
+                textNodeCount += 1
+                updatePopupTextFeatures(
+                    combined,
+                    onAccept = { hasAcceptAction = true },
+                    onMatch = { hasMatchAction = true },
+                    onClose = { hasCloseAction = true },
+                    onMoney = { hasMoney = true },
+                    onMinute = { hasMinute = true },
+                    onDistance = { hasDistance = true },
+                    onTotal = { hasTotal = true },
+                    onDelivery = { hasDelivery = true },
+                    onFoodDelivery = { hasFoodDelivery = true }
+                )
+                if (samples.size < POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT) {
+                    val rect = Rect()
+                    runCatching { node.getBoundsInScreen(rect) }
+                    samples.add("${sanitizeForLog(combined, 60)}@${rect.toShortString()}")
+                }
+            }
+
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
+            }
+        }
+
+        val score = listOf(
+            hasMoney,
+            hasMinute,
+            hasDistance,
+            hasTotal,
+            hasDelivery,
+            hasFoodDelivery,
+            hasAcceptAction || hasMatchAction,
+            hasCloseAction,
+            clickableCount >= 2,
+            textNodeCount >= 4
+        ).count { it }
+        val isLikelyBlockingPopup =
+            (hasMoney && hasMinute && hasDistance && (hasAcceptAction || hasMatchAction || hasCloseAction)) ||
+                    (score >= 5 && (hasAcceptAction || hasMatchAction))
+
+        return PopupStructureScan(
+            nodeCount = nodeCount,
+            clickableCount = clickableCount,
+            textNodeCount = textNodeCount,
+            classCounts = classCounts,
+            samples = samples,
+            viewIds = viewIds,
+            hasAcceptAction = hasAcceptAction,
+            hasMatchAction = hasMatchAction,
+            hasCloseAction = hasCloseAction,
+            hasMoney = hasMoney,
+            hasMinute = hasMinute,
+            hasDistance = hasDistance,
+            hasTotal = hasTotal,
+            hasDelivery = hasDelivery,
+            hasFoodDelivery = hasFoodDelivery,
+            score = score,
+            isLikelyBlockingPopup = isLikelyBlockingPopup
+        )
+    }
+
+    private fun updatePopupTextFeatures(
+        value: String,
+        onAccept: () -> Unit,
+        onMatch: () -> Unit,
+        onClose: () -> Unit,
+        onMoney: () -> Unit,
+        onMinute: () -> Unit,
+        onDistance: () -> Unit,
+        onTotal: () -> Unit,
+        onDelivery: () -> Unit,
+        onFoodDelivery: () -> Unit
+    ) {
+        val normalized = value.replace(" ", "")
+        if (normalized.contains("接受") || normalized.contains("接單") || normalized.contains("Accept", ignoreCase = true)) onAccept()
+        if (normalized.contains("匹配") || normalized.contains("配對") || normalized.contains("Match", ignoreCase = true)) onMatch()
+        if (normalized == "×" || normalized.equals("x", ignoreCase = true) || normalized.contains("關閉")) onClose()
+        if (Regex("""[$＄]\s*\d+""").containsMatchIn(value) || Regex("""\bNT\s*\$?\s*\d+""", RegexOption.IGNORE_CASE).containsMatchIn(value)) onMoney()
+        if (normalized.contains("分鐘") || Regex("""\b\d+\s*min\b""", RegexOption.IGNORE_CASE).containsMatchIn(value)) onMinute()
+        if (normalized.contains("公里") || Regex("""\b\d+(?:\.\d+)?\s*km\b""", RegexOption.IGNORE_CASE).containsMatchIn(value)) onDistance()
+        if (normalized.contains("總計") || normalized.contains("總共") || normalized.contains("total", ignoreCase = true)) onTotal()
+        if (normalized.contains("單") || normalized.contains("趟")) onDelivery()
+        if (normalized.contains("外送") || normalized.contains("獨享")) onFoodDelivery()
+    }
+
+    private fun sanitizeForLog(value: String, maxLength: Int): String {
+        val compact = value.replace(Regex("""\s+"""), " ").trim()
+        return if (compact.length <= maxLength) compact else compact.take(maxLength) + "..."
+    }
+
+    private fun isBetaPackage(): Boolean {
+        return packageName.endsWith(".beta")
+    }
+
+    private data class TriggerDecision(
+        val shouldTrigger: Boolean,
+        val reason: String
+    )
+
+    private data class PopupStructureScan(
+        val nodeCount: Int,
+        val clickableCount: Int,
+        val textNodeCount: Int,
+        val classCounts: Map<String, Int>,
+        val samples: List<String>,
+        val viewIds: List<String>,
+        val hasAcceptAction: Boolean,
+        val hasMatchAction: Boolean,
+        val hasCloseAction: Boolean,
+        val hasMoney: Boolean,
+        val hasMinute: Boolean,
+        val hasDistance: Boolean,
+        val hasTotal: Boolean,
+        val hasDelivery: Boolean,
+        val hasFoodDelivery: Boolean,
+        val score: Int,
+        val isLikelyBlockingPopup: Boolean
+    ) {
+        val hasOrderTextSignal: Boolean
+            get() = hasMoney || hasMinute || hasDistance || hasAcceptAction || hasMatchAction
+
+        val isSparsePopupShell: Boolean
+            get() {
+                val frameCount = classCounts["android.widget.FrameLayout"] ?: 0
+                val viewGroupCount = classCounts["android.view.ViewGroup"] ?: 0
+                return textNodeCount <= 1 &&
+                        nodeCount in 24..80 &&
+                        clickableCount in 1..12 &&
+                        frameCount >= 5 &&
+                        viewGroupCount >= 5
+            }
+
+        val isRenderedPopupShell: Boolean
+            get() = isSparsePopupShell && textNodeCount == 0
+
+        fun featureSummary(): String {
+            val topClasses = classCounts.entries
+                .sortedByDescending { it.value }
+                .take(4)
+                .joinToString("|") { "${it.key.substringAfterLast('.')}:${it.value}" }
+            return "money=$hasMoney minute=$hasMinute distance=$hasDistance total=$hasTotal delivery=$hasDelivery food=$hasFoodDelivery accept=$hasAcceptAction match=$hasMatchAction close=$hasCloseAction classes=$topClasses"
+        }
     }
 
     private fun formatEventText(event: AccessibilityEvent): String {
@@ -1532,7 +1851,12 @@ class MyAccessibilityService : AccessibilityService() {
         private const val POPUP_CANDIDATE_WINDOW_MS = 2_000L
         private const val MIN_SCREENSHOT_INTERVAL_MS = 1_000L
         private const val DUPLICATE_CORE_ORDER_WINDOW_MS = 10_000L
-        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(1_100L, 1_600L, 2_300L)
+        private const val POPUP_STRUCTURE_SCAN_MIN_INTERVAL_MS = 800L
+        private const val POPUP_CANDIDATE_LOG_MIN_INTERVAL_MS = 3_000L
+        private const val POPUP_STRUCTURE_SCAN_NODE_LIMIT = 140
+        private const val POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT = 10
+        private const val ORDER_TRIGGER_CANDIDATE_MIN_SCORE = 3
+        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(1_500L, 1_800L)
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
         private val COLOR_DANGER = Color.rgb(239, 68, 68)

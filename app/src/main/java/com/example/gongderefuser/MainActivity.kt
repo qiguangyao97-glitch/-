@@ -82,6 +82,7 @@ class MainActivity : AppCompatActivity() {
     private val blacklistTags = mutableListOf<RuleSettings.ListEntry>()
 
     private enum class Screen {
+        InitialSetup,
         Home,
         Manual,
         Rules,
@@ -105,6 +106,10 @@ class MainActivity : AppCompatActivity() {
     private var calibrationBitmap: Bitmap? = null
     private var calibrationSavedPath: String = ""
     private var calibrationView: OcrCalibrationView? = null
+    private lateinit var calibrationHintText: TextView
+    private var calibrationGuidedMode = false
+    private var calibrationGuideIndex = 0
+    private var pendingDiagnosticZip: File? = null
 
     private val pickOrderImage =
         registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -132,6 +137,28 @@ class MainActivity : AppCompatActivity() {
             importListEntriesFromFile(uri, pendingImportIsWhitelist)
         }
 
+    private val createDiagnosticZipFile =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+            val zipFile = pendingDiagnosticZip
+            pendingDiagnosticZip = null
+            if (uri == null) {
+                zipFile?.delete()
+                return@registerForActivityResult
+            }
+            if (zipFile == null || !zipFile.exists()) {
+                Toast.makeText(this, "日誌壓縮檔不存在，請重新匯出", Toast.LENGTH_LONG).show()
+                return@registerForActivityResult
+            }
+            val message = runCatching {
+                DiagnosticLogExporter.writeZipToUri(this, zipFile, uri)
+                "日誌 ZIP 已匯出到你選擇的位置"
+            }.getOrElse { throwable ->
+                "日誌匯出失敗：${throwable.javaClass.simpleName} ${throwable.message.orEmpty()}"
+            }
+            zipFile.delete()
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -147,18 +174,28 @@ class MainActivity : AppCompatActivity() {
         })
 
         ActivationLocalStore.clearActivationIfNeeded(this)
-        showHome()
-        if (ActivationLocalStore.isLocalActive(this)) {
+        if (shouldShowInitialSetup()) {
+            showInitialSetup()
+        } else {
+            showHome()
+        }
+        if (currentScreen != Screen.InitialSetup && ActivationLocalStore.isLocalActive(this)) {
             promptAccessibilityIfNeeded()
         }
         restoreMonitoringIfPossible()
-        updateMonitoringUi()
+        if (currentScreen == Screen.Home && ::statusTitleText.isInitialized) {
+            updateMonitoringUi()
+        }
     }
 
     override fun onResume() {
         super.onResume()
         ActivationLocalStore.clearActivationIfNeeded(this)
         stopMonitoringIfActivationExpired(showToast = false)
+        if (currentScreen == Screen.InitialSetup) {
+            showInitialSetup()
+            return
+        }
         if (ActivationLocalStore.isLocalActive(this)) {
             promptAccessibilityIfNeeded()
         }
@@ -260,12 +297,18 @@ class MainActivity : AppCompatActivity() {
         layout.addView(actionRow)
         layout.addView(createRecentOrderCard())
 
-        val recordRow = createCardRow()
+        val recordRow = createCardRow().apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
         recordRow.addView(
             createRecordSummaryCard("訂單記錄", realtimeRecords()) {
                 showRecordDetail(Screen.RealtimeHistory, "訂單記錄", realtimeRecords(), "即時 OCR 自動識別訂單")
             },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
                 rightMargin = dp(7)
             }
         )
@@ -273,7 +316,7 @@ class MainActivity : AppCompatActivity() {
             createRecordSummaryCard("截圖記錄", screenshotRecords()) {
                 showRecordDetail(Screen.ScreenshotHistory, "截圖記錄", screenshotRecords(), "截圖分析儲存記錄")
             },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
                 leftMargin = dp(7)
             }
         )
@@ -286,6 +329,10 @@ class MainActivity : AppCompatActivity() {
     private fun navigateBackOneLevel(): Boolean {
         return when (currentScreen) {
             Screen.Home -> false
+            Screen.InitialSetup -> {
+                showHome()
+                true
+            }
             Screen.RuleDetail -> {
                 showRuleSettings()
                 true
@@ -306,10 +353,124 @@ class MainActivity : AppCompatActivity() {
             Screen.RecentOrderDetail,
             Screen.RealtimeHistory,
             Screen.ScreenshotHistory -> {
-                showHome()
+                if (currentScreen == Screen.OcrCalibration && calibrationGuidedMode) {
+                    showInitialSetup()
+                } else {
+                    showHome()
+                }
                 true
             }
         }
+    }
+
+    private fun showInitialSetup() {
+        currentScreen = Screen.InitialSetup
+        val layout = createSettingsBaseLayout()
+
+        layout.addView(TextView(this).apply {
+            text = "初始設定"
+            textSize = 26f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT_PRIMARY)
+        })
+        layout.addView(TextView(this).apply {
+            text = "首次使用前，按順序完成必要服務與 OCR 校準。"
+            textSize = 14f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setPadding(0, dp(6), 0, dp(16))
+        })
+
+        layout.addView(createSettingsGroup(
+            "啟動檢查",
+            listOf(
+                SettingsEntry("1", "無障礙服務", if (isAccessibilityServiceEnabled()) "已啟用" else "未啟用") {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                },
+                SettingsEntry("2", "OCR 引擎狀態", "正常") {
+                    showOcrCalibration(guided = true)
+                },
+                SettingsEntry("3", "OCR 校準流程", if (OcrCalibrationStore.hasSaved(this)) "已保存" else "未保存") {
+                    showOcrCalibration(guided = true)
+                },
+                SettingsEntry("4", "即時監測", if (MonitoringState.isEnabled(this)) "開啟" else "關閉") {
+                    enableMonitoringFromInitialSetup()
+                }
+            )
+        ))
+
+        val card = createCard().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        card.addView(TextView(this).apply {
+            text = initialSetupSummary()
+            textSize = 14f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.16f)
+            setPadding(0, 0, 0, dp(12))
+        })
+        card.addView(createButton(primary = true).apply {
+            text = if (initialSetupMissingCount() == 0) "完成並進入首頁" else "先進入首頁"
+            setOnClickListener {
+                markInitialSetupDismissed()
+                showHome()
+            }
+        })
+        card.addView(createButton(primary = false).apply {
+            text = "重新檢查"
+            setOnClickListener { showInitialSetup() }
+        })
+        layout.addView(card)
+
+        setBaseContent(layout)
+    }
+
+    private fun enableMonitoringFromInitialSetup() {
+        if (!ensureActivationForMonitoring()) return
+        if (!isAccessibilityServiceEnabled()) {
+            Toast.makeText(this, "請先開啟無障礙服務", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
+        }
+        requestNotificationPermissionIfNeeded()
+        MonitoringState.setEnabled(this, true)
+        Toast.makeText(this, "即時監測已開啟", Toast.LENGTH_SHORT).show()
+        MyAccessibilityService.refreshStatusOverlay()
+        showInitialSetup()
+    }
+
+    private fun shouldShowInitialSetup(): Boolean {
+        if (isInitialSetupDismissed()) return false
+        return initialSetupMissingCount() > 0
+    }
+
+    private fun initialSetupMissingCount(): Int {
+        var count = 0
+        if (!isAccessibilityServiceEnabled()) count++
+        if (!OcrCalibrationStore.hasSaved(this)) count++
+        if (!MonitoringState.isEnabled(this)) count++
+        return count
+    }
+
+    private fun initialSetupSummary(): String {
+        val missing = initialSetupMissingCount()
+        return if (missing == 0) {
+            "必要流程已完成：無障礙服務已啟用、OCR 模板已保存、即時監測已開啟。"
+        } else {
+            "仍有 ${missing} 項未完成。建議依序處理：無障礙服務 → OCR 校準流程 → 即時監測。"
+        }
+    }
+
+    private fun isInitialSetupDismissed(): Boolean {
+        return getSharedPreferences(INITIAL_SETUP_PREFS, MODE_PRIVATE)
+            .getBoolean(KEY_INITIAL_SETUP_DISMISSED, false)
+    }
+
+    private fun markInitialSetupDismissed() {
+        getSharedPreferences(INITIAL_SETUP_PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_INITIAL_SETUP_DISMISSED, true)
+            .apply()
     }
 
     private fun showHistory() {
@@ -409,10 +570,17 @@ class MainActivity : AppCompatActivity() {
                 topMargin = if (index == 0) dp(14) else dp(10)
                 bottomMargin = dp(10)
             })
-            addHistoryRow(card, record) {
-                OrderHistory.delete(this@MainActivity, record.timestamp)
-                refreshRecordDetail(screen)
-            }
+            addHistoryRow(
+                parent = card,
+                record = record,
+                onDelete = {
+                    OrderHistory.delete(this@MainActivity, record.timestamp)
+                    refreshRecordDetail(screen)
+                },
+                onChanged = {
+                    refreshRecordDetail(screen)
+                }
+            )
         }
 
         return card
@@ -503,16 +671,28 @@ class MainActivity : AppCompatActivity() {
                     dp(10)
                 ))
             }
-            addHistoryRow(card, record) {
-                OrderHistory.delete(this@MainActivity, record.timestamp)
-                showHistory()
-            }
+            addHistoryRow(
+                parent = card,
+                record = record,
+                onDelete = {
+                    OrderHistory.delete(this@MainActivity, record.timestamp)
+                    showHistory()
+                },
+                onChanged = {
+                    showHistory()
+                }
+            )
         }
 
         return card
     }
 
-    private fun addHistoryRow(parent: LinearLayout, record: OrderHistory.Record, onDelete: () -> Unit) {
+    private fun addHistoryRow(
+        parent: LinearLayout,
+        record: OrderHistory.Record,
+        onDelete: () -> Unit,
+        onChanged: () -> Unit
+    ) {
         val recommendation = normalizedRecommendation(record)
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -600,6 +780,15 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, dp(4), 0, 0)
             })
         }
+        if (record.acceptedAt > 0L || record.completedAt > 0L) {
+            row.addView(TextView(this).apply {
+                text = buildOrderManualStatusText(record)
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_ACCENT)
+                setPadding(0, dp(6), 0, 0)
+            })
+        }
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -607,24 +796,51 @@ class MainActivity : AppCompatActivity() {
         }
         val keyword = buildHistoryListKeyword(record)
         actionRow.addView(
-            createSmallActionButton("加標籤備註", COLOR_SUCCESS) {
-                showAddListEntryDialog(keyword, "", isWhitelist = true)
+            createSmallActionButton(if (record.acceptedAt > 0L) "已接" else "接受", COLOR_ACCENT) {
+                OrderHistory.markAccepted(this@MainActivity, record.timestamp)
+                onChanged()
             },
             LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-                rightMargin = dp(6)
+                rightMargin = dp(4)
             }
         )
         actionRow.addView(
-            createSmallActionButton("加避雷標籤", COLOR_DANGER) {
+            createSmallActionButton(if (record.completedAt > 0L) "已完成" else "完成", COLOR_SUCCESS) {
+                OrderHistory.markCompleted(this@MainActivity, record.timestamp)
+                onChanged()
+            },
+            LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                leftMargin = dp(4)
+                rightMargin = dp(4)
+            }
+        )
+        actionRow.addView(
+            createSmallActionButton("加備註", COLOR_SUCCESS) {
+                showAddListEntryDialog(keyword, "", isWhitelist = true)
+            },
+            LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                leftMargin = dp(4)
+                rightMargin = dp(4)
+            }
+        )
+        actionRow.addView(
+            createSmallActionButton("加避雷", COLOR_DANGER) {
                 showAddListEntryDialog(keyword, "", isWhitelist = false)
             },
             LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-                leftMargin = dp(6)
+                leftMargin = dp(4)
             }
         )
         row.addView(actionRow)
 
         parent.addView(row)
+    }
+
+    private fun buildOrderManualStatusText(record: OrderHistory.Record): String {
+        return buildList {
+            if (record.acceptedAt > 0L) add("已接：${record.acceptedTimeLabel()}")
+            if (record.completedAt > 0L) add("已完成：${record.completedTimeLabel()}")
+        }.joinToString("　")
     }
 
     private fun createModeBadge(mode: String): TextView {
@@ -1292,9 +1508,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun exportListEntries(isWhitelist: Boolean) {
         val entries = if (isWhitelist) whitelistTags else blacklistTags
-        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "UberHelper")
+        val dir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "功德拒絕器/名單匯出"
+        )
         dir.mkdirs()
-        val file = File(dir, if (isWhitelist) "tags.txt" else "blacklist.txt")
+        val file = File(dir, if (isWhitelist) "標籤備註.txt" else "避雷標籤.txt")
         file.writeText(RuleSettings.serializeEntries(entries), Charsets.UTF_8)
         Toast.makeText(this, "已匯出：${file.absolutePath}", Toast.LENGTH_LONG).show()
     }
@@ -1310,9 +1529,6 @@ class MainActivity : AppCompatActivity() {
             listOf(
                 SettingsEntry("♿", "無障礙服務", if (isAccessibilityServiceEnabled()) "已啟用" else "未啟用") {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                },
-                SettingsEntry("▣", "螢幕擷取權限", if (MonitoringState.isEnabled(this)) "已啟用" else "未啟用") {
-                    startActivity(Intent(this, ScreenCaptureActivity::class.java))
                 },
                 SettingsEntry("OCR", "OCR 引擎狀態", "正常") {
                     showDebugSettings()
@@ -1347,16 +1563,16 @@ class MainActivity : AppCompatActivity() {
         layout.addView(createSettingsGroup(
             "系統資訊",
             listOf(
-                SettingsEntry("ⓘ", "版本號", appVersionLabel()) {
-                    showAboutSettings()
-                },
                 SettingsEntry("↻", "更新日誌", "查看") {
                     showUpdateLogDialog()
                 },
                 SettingsEntry("⌘", "隱私政策", "查看") {
                     showPrivacyPolicyDialog()
                 },
-                SettingsEntry("※", "關於功德拒絕器", "查看") {
+                SettingsEntry("⇩", "資料管理", "日誌匯出") {
+                    showDataSettings()
+                },
+                SettingsEntry("ⓘ", "關於與版本", appVersionLabel()) {
                     showAboutSettings()
                 }
             )
@@ -1541,7 +1757,18 @@ class MainActivity : AppCompatActivity() {
     private fun showUpdateLogDialog() {
         AlertDialog.Builder(this)
             .setTitle("更新日誌")
-            .setMessage("目前版本：${appVersionLabel()}\n\n已同步測試版功能、繁體中文介面與 OCR 診斷優化。")
+            .setMessage(
+                """
+                目前版本：${appVersionLabel()}
+
+                本次更新：
+                1. 新增首次啟動設定流程，依序檢查無障礙服務、OCR 狀態、OCR 校準與即時監測。
+                2. OCR 校準新增逐步引導：關閉按鈕、金額、時間距離、商家、地址、定位搜尋框、同地點配送。
+                3. 設定頁整理系統資訊，合併版本號與關於頁，減少重複入口。
+                4. 更新隱私政策與免責聲明。
+                5. 保留現有 OCR、Parser、評分、Overlay 與訂單記錄邏輯。
+                """.trimIndent()
+            )
             .setPositiveButton("知道了", null)
             .show()
     }
@@ -1549,7 +1776,32 @@ class MainActivity : AppCompatActivity() {
     private fun showPrivacyPolicyDialog() {
         AlertDialog.Builder(this)
             .setTitle("隱私政策")
-            .setMessage("功德拒絕器僅在本機分析訂單截圖與必要設定資料。診斷資料用於排查識別問題，不會主動上傳。")
+            .setMessage(
+                """
+                功德拒絕器重視你的資料安全與使用自主權。
+
+                一、資料處理範圍
+                本 APP 主要在本機處理訂單畫面截圖、OCR 識別結果、規則設定、黑白名單、訂單記錄、校準模板與診斷日誌。
+
+                二、本機分析
+                OCR、訂單解析、評分與提醒邏輯均在裝置本機執行。除非你主動匯出、分享或提交診斷資料，APP 不會主動上傳訂單截圖、OCR 原文、訂單記錄或個人設定。
+
+                三、診斷日誌
+                診斷日誌僅用於排查識別、觸發、匯出或權限問題。日誌可能包含事件時間、識別狀態、OCR 統計、訂單核心數值與部分診斷文字。你可以在資料管理中打包匯出，也可以清除診斷資料。
+
+                四、權限用途
+                無障礙服務用於偵測目標平台訂單彈窗與取得系統截圖能力，以便觸發本機 OCR 分析。通知、音效或震動僅用於提醒識別結果。APP 不會替你自動接單、拒單或操作第三方平台。
+
+                五、使用者控制
+                你可以隨時關閉無障礙服務、停止即時監測、關閉提示音、清除診斷資料，或卸載 APP。
+
+                六、免責聲明
+                本 APP 僅作為訂單資訊輔助分析工具，分析結果、分數、提示音與建議僅供參考，不構成收入保證、接單建議承諾或任何法律、財務、營運決策保證。實際是否接受訂單、完成配送、遵守平台規範與當地法律，均由使用者自行判斷並承擔責任。
+
+                七、第三方平台
+                本 APP 與任何第三方平台沒有官方合作、授權或背書關係。第三方平台介面、規則或政策變更可能影響識別效果，使用者應自行確認其使用方式符合相關平台條款。
+                """.trimIndent()
+            )
             .setPositiveButton("知道了", null)
             .show()
     }
@@ -1669,12 +1921,16 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
+        card.addView(createButton(primary = true).apply {
+            text = "打包匯出日誌"
+            setOnClickListener { exportDiagnosticLogs() }
+        })
         card.addView(createButton(primary = false).apply {
             text = "清除診斷資料"
             setOnClickListener { showClearDiagnosticDataDialog() }
         })
         card.addView(TextView(this).apply {
-            text = "診斷樣本路徑：${AppSettings.debugSamplePath(this@MainActivity)}\n無障礙日誌路徑：${AppSettings.diagnosticLogPath(this@MainActivity)}\n手動截圖調試路徑：${AppSettings.manualOcrDebugPath(this@MainActivity)}"
+            text = "日誌會先保存在 APP 內部可寫位置。\n需要查看時，點「打包匯出日誌」，選擇任意可訪問位置保存 ZIP。"
             textSize = 12f
             setTextColor(COLOR_TEXT_SECONDARY)
             setLineSpacing(0f, 1.12f)
@@ -1682,6 +1938,22 @@ class MainActivity : AppCompatActivity() {
         })
         layout.addView(card)
         setBaseContent(layout)
+    }
+
+    private fun exportDiagnosticLogs() {
+        val zipFile = runCatching {
+            DiagnosticLogExporter.createTempZip(this)
+        }.getOrElse { throwable ->
+            Toast.makeText(
+                this,
+                "日誌打包失敗：${throwable.javaClass.simpleName} ${throwable.message.orEmpty()}",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        pendingDiagnosticZip?.delete()
+        pendingDiagnosticZip = zipFile
+        createDiagnosticZipFile.launch(zipFile.name)
     }
 
     private fun showAboutSettings() {
@@ -1693,7 +1965,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         card.addView(TextView(this).apply {
-            text = "功德拒绝器\n公平，公平，還是他妈的公平。"
+            text = "功德拒絕器\n版本：${appVersionLabel()}\n\n公平，公平，還是他媽的公平。"
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TEXT_PRIMARY)
@@ -1720,16 +1992,27 @@ class MainActivity : AppCompatActivity() {
         return (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     }
 
-    private fun showOcrCalibration() {
+    private fun showOcrCalibration(guided: Boolean = false) {
         currentScreen = Screen.OcrCalibration
+        calibrationGuidedMode = guided
+        if (calibrationGuideIndex !in OCR_CALIBRATION_GUIDE_ORDER.indices) {
+            calibrationGuideIndex = 0
+        }
         loadLastCalibrationBitmapIfNeeded()
+        val selectedRegion = if (calibrationGuidedMode) {
+            OCR_CALIBRATION_GUIDE_ORDER[calibrationGuideIndex]
+        } else {
+            OcrCalibrationStore.editableRegionNames.first()
+        }
 
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
         }
         calibrationBitmap?.let { bitmap ->
+            val initialRegions = OcrCalibrationStore.load(this)
             val view = OcrCalibrationView(this).apply {
-                setImageAndRegions(bitmap, OcrCalibrationStore.load(this@MainActivity))
+                setImageAndRegions(bitmap, initialRegions)
+                selectRegion(selectedRegion)
             }
             calibrationView = view
             root.addView(view, FrameLayout.LayoutParams(
@@ -1738,7 +2021,11 @@ class MainActivity : AppCompatActivity() {
             ))
             if (calibrationSavedPath.isNotBlank()) {
                 root.addView(TextView(this).apply {
-                    text = "已載入上次 OCR 校準圖"
+                    text = if (calibrationSavedPath.startsWith("內建")) {
+                        "已載入內建 OCR 校準圖與保存模板"
+                    } else {
+                        "已載入上次 OCR 校準圖"
+                    }
                     textSize = 12f
                     setTextColor(Color.WHITE)
                     setPadding(dp(10), dp(6), dp(10), dp(6))
@@ -1789,16 +2076,11 @@ class MainActivity : AppCompatActivity() {
             rightMargin = dp(4)
         })
         topRow.addView(createButton(primary = true).apply {
-            text = "儲存"
+            text = "保存"
             setOnClickListener {
                 val current = calibrationView?.currentRegions().orEmpty()
                 OcrCalibrationStore.save(this@MainActivity, current)
-                showOcrCalibration()
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("儲存成功")
-                    .setMessage("OCR 模板已儲存。以後點“預設”會恢復到這一次儲存的模板。")
-                    .setPositiveButton("知道了", null)
-                    .show()
+                Toast.makeText(this@MainActivity, "OCR 模板已保存", Toast.LENGTH_SHORT).show()
             }
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
             leftMargin = dp(4)
@@ -1807,23 +2089,20 @@ class MainActivity : AppCompatActivity() {
         topRow.addView(createButton(primary = false).apply {
             text = "預設"
             setOnClickListener {
+                OcrCalibrationStore.reset(this@MainActivity)
+                calibrationBitmap = BitmapFactory.decodeResource(resources, R.drawable.default_ocr_calibration)
+                calibrationSavedPath = "內建預設 OCR 校準圖"
                 calibrationBitmap?.let { bitmap ->
-                    calibrationView?.setImageAndRegions(bitmap, OcrCalibrationStore.load(this@MainActivity))
+                    calibrationView?.setImageAndRegions(bitmap, OcrCalibrationStore.defaultRegions())
+                    calibrationView?.selectRegion(selectedRegion)
                 }
-                Toast.makeText(this@MainActivity, "已恢復到上一次儲存的 OCR 模板", Toast.LENGTH_LONG).show()
+                updateCalibrationHint(selectedRegion)
+                Toast.makeText(this@MainActivity, "已恢復內建預設圖與模板", Toast.LENGTH_LONG).show()
             }
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
             leftMargin = dp(4)
         })
         toolbar.addView(topRow)
-
-        toolbar.addView(TextView(this).apply {
-            text = "圖片全屏顯示。先調按鈕定位、取送定位、取貨圓點、送達方塊；商家/地址文字框會按圓點和方塊動態跟隨。"
-            textSize = 12f
-            setTextColor(COLOR_TEXT_SECONDARY)
-            setLineSpacing(0f, 1.08f)
-            setPadding(0, dp(6), 0, dp(6))
-        })
 
         val regionPicker = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -1831,16 +2110,45 @@ class MainActivity : AppCompatActivity() {
         val regionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        OcrCalibrationStore.regionNames.forEachIndexed { index, name ->
+        OcrCalibrationStore.editableRegionNames.forEachIndexed { index, name ->
             regionRow.addView(createCalibrationRegionButton(name), LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                rightMargin = if (index == OcrCalibrationStore.regionNames.lastIndex) 0 else dp(8)
+                rightMargin = if (index == OcrCalibrationStore.editableRegionNames.lastIndex) 0 else dp(8)
             })
         }
         regionPicker.addView(regionRow)
-        toolbar.addView(regionPicker)
+        toolbar.addView(regionPicker, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = dp(8)
+            bottomMargin = dp(8)
+        })
+
+        if (calibrationGuidedMode) {
+            toolbar.addView(createCalibrationGuideRow(), LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(8)
+            })
+        }
+
+        calibrationHintText = TextView(this).apply {
+            text = "請選擇上方任一模板。提示會顯示在這裡。"
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT_PRIMARY)
+            setLineSpacing(0f, 1.16f)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = roundedFill(Color.WHITE, 12f)
+        }
+        toolbar.addView(calibrationHintText, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
         root.addView(toolbar, FrameLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1852,6 +2160,7 @@ class MainActivity : AppCompatActivity() {
             rightMargin = dp(8)
         })
 
+        updateCalibrationHint(selectedRegion)
         setContentView(root)
     }
 
@@ -1863,16 +2172,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun lastCalibrationImageFile(): File {
-        return File(DebugFileDirs.resolve(this, "manual_ocr_debug"), "last_calibration.png")
+        return File(DebugFileDirs.resolveAppScoped(this, "manual_ocr_debug"), "last_calibration.png")
     }
 
     private fun loadLastCalibrationBitmapIfNeeded() {
         if (calibrationBitmap != null) return
-        val file = lastCalibrationImageFile()
-        if (!file.exists()) return
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return
+        val bitmap = BitmapFactory.decodeResource(resources, R.drawable.default_ocr_calibration) ?: return
         calibrationBitmap = bitmap
-        calibrationSavedPath = file.absolutePath
+        calibrationSavedPath = "內建預設 OCR 校準圖"
     }
 
     private fun saveLastCalibrationBitmap(bitmap: Bitmap): String {
@@ -1907,9 +2214,76 @@ class MainActivity : AppCompatActivity() {
                 999f
             )
             setOnClickListener {
+                val guideIndex = OCR_CALIBRATION_GUIDE_ORDER.indexOf(name)
+                if (guideIndex >= 0) calibrationGuideIndex = guideIndex
                 calibrationView?.selectRegion(name)
-                Toast.makeText(this@MainActivity, "目前調整：${OcrCalibrationStore.displayName(name)}", Toast.LENGTH_SHORT).show()
+                updateCalibrationHint(name)
             }
+        }
+    }
+
+    private fun createCalibrationGuideRow(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(createSmallActionButton("上一步", COLOR_MUTED) {
+                moveCalibrationGuide(-1)
+            }, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+                rightMargin = dp(5)
+            })
+            addView(createSmallActionButton("下一步", COLOR_ACCENT) {
+                moveCalibrationGuide(1)
+            }, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+                leftMargin = dp(5)
+                rightMargin = dp(5)
+            })
+            addView(createSmallActionButton("保存完成", COLOR_SUCCESS) {
+                val current = calibrationView?.currentRegions().orEmpty()
+                OcrCalibrationStore.save(this@MainActivity, current)
+                Toast.makeText(this@MainActivity, "OCR 校準已保存", Toast.LENGTH_SHORT).show()
+                showInitialSetup()
+            }, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+                leftMargin = dp(5)
+            })
+        }
+    }
+
+    private fun moveCalibrationGuide(delta: Int) {
+        val lastIndex = OCR_CALIBRATION_GUIDE_ORDER.lastIndex
+        calibrationGuideIndex = (calibrationGuideIndex + delta).coerceIn(0, lastIndex)
+        val name = OCR_CALIBRATION_GUIDE_ORDER[calibrationGuideIndex]
+        calibrationView?.selectRegion(name)
+        updateCalibrationHint(name)
+    }
+
+    private fun updateCalibrationHint(name: String) {
+        if (!::calibrationHintText.isInitialized) return
+        val prefix = if (calibrationGuidedMode) {
+            val step = OCR_CALIBRATION_GUIDE_ORDER.indexOf(name).takeIf { it >= 0 }?.plus(1)
+                ?: (calibrationGuideIndex + 1)
+            "第 $step/${OCR_CALIBRATION_GUIDE_ORDER.size} 步\n"
+        } else {
+            ""
+        }
+        calibrationHintText.text = "${prefix}目前調整：${OcrCalibrationStore.displayName(name)}\n${calibrationRegionHint(name)}"
+    }
+
+    private fun calibrationRegionHint(name: String): String {
+        return when (name) {
+            "card" -> "固定參考框：固定屏幕下半部大小，只作背景參考。"
+            "closeSearch" -> "跟隨關閉按鈕模板：上下加大搜尋範圍，不單獨調整。"
+            "closeButton" -> "關閉 X 放在小方塊正中心。"
+            "price" -> "中心線放在金額和訂單數中心線。"
+            "trip" -> "框住分鐘與公里區域，例如 12 分鐘、2.2 公里。"
+            "type" -> "跟隨金額模板：與金額模板上下排並連動移動。"
+            "merchant" -> "商家左側圓放在小方塊正中心。"
+            "address" -> "地址左側方形放在小方塊正中心。"
+            "addressWide" -> "跟隨地址模板：放在地址模板下半部作備用。"
+            "sameDropoff" -> "框住同地點配送、相同送達點等提示文字。"
+            "pickupAnchor" -> "跟隨商家模板：取餐圓點放在商家左側小方塊正中心。"
+            "dropoffAnchor" -> "跟隨地址模板：送達方形放在地址左側小方塊正中心。"
+            "deliveryAnchorSearch" -> "框住商家和地址左側的圓、豎線、方塊，中心放在豎線中心點。"
+            else -> "拖曳框線調整位置，調好後記得點「儲存」。"
         }
     }
 
@@ -2121,6 +2495,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun shouldAllowPageScroll(): Boolean {
         return currentScreen == Screen.TagManage ||
+                currentScreen == Screen.InitialSetup ||
                 currentScreen == Screen.AppSettings ||
                 currentScreen == Screen.SettingsDetail ||
                 currentScreen == Screen.History ||
@@ -2171,7 +2546,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isSettingsSection(): Boolean {
-        return currentScreen == Screen.AppSettings || currentScreen == Screen.SettingsDetail
+        return currentScreen == Screen.InitialSetup ||
+                currentScreen == Screen.AppSettings ||
+                currentScreen == Screen.SettingsDetail
     }
 
     private fun navItemParams(): LinearLayout.LayoutParams {
@@ -2371,6 +2748,7 @@ class MainActivity : AppCompatActivity() {
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(14), dp(14), dp(14))
+            minimumHeight = dp(174)
             isClickable = true
             setOnClickListener { onClick() }
         }
@@ -2458,29 +2836,35 @@ class MainActivity : AppCompatActivity() {
         includeAverage: Boolean
     ) {
         val counts = records.groupingBy { normalizedRecommendation(it) }.eachCount()
+        val acceptedCounts = records.filter { it.acceptedAt > 0L }
+            .groupingBy { normalizedRecommendation(it) }
+            .eachCount()
         val averageScore = if (records.isEmpty()) 0 else records.map { it.score }.average().toInt()
-        addCompactStatRow(parent, "總數", "${records.size} 單")
+        addCompactStatRow(parent, "總數", formatCountWithAccepted(records.size, records.count { it.acceptedAt > 0L }))
         if (includeAverage) {
             addCompactStatRow(parent, "平均評分", if (records.isEmpty()) "--" else "$averageScore 分")
         }
-        addCompactStatRow(parent, "狗都不接", "${counts["狗都不接"] ?: 0} 單")
-        addCompactStatRow(parent, "跪著送", "${counts["跪著送"] ?: 0} 單")
-        addCompactStatRow(parent, "站著掙", "${counts["站著掙"] ?: 0} 單")
-        addCompactStatRow(parent, "掙他娘的", "${counts["掙他娘的"] ?: 0} 單")
+        addCompactStatRow(parent, "狗都不接", formatCountWithAccepted(counts["狗都不接"] ?: 0, acceptedCounts["狗都不接"] ?: 0))
+        addCompactStatRow(parent, "跪著送", formatCountWithAccepted(counts["跪著送"] ?: 0, acceptedCounts["跪著送"] ?: 0))
+        addCompactStatRow(parent, "站著掙", formatCountWithAccepted(counts["站著掙"] ?: 0, acceptedCounts["站著掙"] ?: 0))
+        addCompactStatRow(parent, "掙他娘的", formatCountWithAccepted(counts["掙他娘的"] ?: 0, acceptedCounts["掙他娘的"] ?: 0))
     }
 
     private fun addRecordSummaryCompact(parent: LinearLayout, records: List<OrderHistory.Record>) {
         val counts = records.groupingBy { normalizedRecommendation(it) }.eachCount()
-        addCompactStatRow(parent, "總數", "${records.size} 單")
+        val acceptedCounts = records.filter { it.acceptedAt > 0L }
+            .groupingBy { normalizedRecommendation(it) }
+            .eachCount()
+        addCompactStatRow(parent, "總數", formatCountWithAccepted(records.size, records.count { it.acceptedAt > 0L }))
         addLevelSummaryRow(
             parent,
-            "狗都不接", counts["狗都不接"] ?: 0,
-            "跪著送", counts["跪著送"] ?: 0
+            "狗都不接", counts["狗都不接"] ?: 0, acceptedCounts["狗都不接"] ?: 0,
+            "跪著送", counts["跪著送"] ?: 0, acceptedCounts["跪著送"] ?: 0
         )
         addLevelSummaryRow(
             parent,
-            "站著掙", counts["站著掙"] ?: 0,
-            "掙他娘的", counts["掙他娘的"] ?: 0
+            "站著掙", counts["站著掙"] ?: 0, acceptedCounts["站著掙"] ?: 0,
+            "掙他娘的", counts["掙他娘的"] ?: 0, acceptedCounts["掙他娘的"] ?: 0
         )
     }
 
@@ -2488,18 +2872,36 @@ class MainActivity : AppCompatActivity() {
         parent: LinearLayout,
         leftLabel: String,
         leftCount: Int,
+        leftAcceptedCount: Int,
         rightLabel: String,
-        rightCount: Int
+        rightCount: Int,
+        rightAcceptedCount: Int
     ) {
         parent.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(4), 0, 0)
-            addView(createLevelSummaryText("$leftLabel $leftCount"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(createLevelSummaryText("$rightLabel $rightCount"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            addView(createLevelSummaryText(formatLevelSummary(leftLabel, leftCount, leftAcceptedCount)), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(createLevelSummaryText(formatLevelSummary(rightLabel, rightCount, rightAcceptedCount)), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 leftMargin = dp(6)
             })
         })
+    }
+
+    private fun formatCountWithAccepted(count: Int, acceptedCount: Int): String {
+        return if (acceptedCount > 0) {
+            "$count 單（接受 $acceptedCount 單）"
+        } else {
+            "$count 單"
+        }
+    }
+
+    private fun formatLevelSummary(label: String, count: Int, acceptedCount: Int): String {
+        return if (acceptedCount > 0) {
+            "$label $count（接受$acceptedCount）"
+        } else {
+            "$label $count"
+        }
     }
 
     private fun createLevelSummaryText(value: String): TextView {
@@ -2699,16 +3101,15 @@ class MainActivity : AppCompatActivity() {
                     )
                 ) else null
                 val savedPath = ManualOcrDebugStore.save(this, bitmap, regionText, order, "calibration")
-                val lastImagePath = saveLastCalibrationBitmap(bitmap)
-                calibrationBitmap = bitmap
-                calibrationSavedPath = lastImagePath.ifBlank { savedPath }
+                calibrationBitmap = null
+                calibrationSavedPath = ""
                 setAnalyzing(false)
                 Toast.makeText(
                     this,
-                    if (calibrationSavedPath.isBlank()) "OCR 校準圖儲存失敗" else "已儲存為預設 OCR 校準圖",
+                    if (savedPath.isBlank()) "OCR 校準圖儲存失敗" else "已儲存 OCR 調試輸出",
                     Toast.LENGTH_LONG
                 ).show()
-                showOcrCalibration()
+                showOcrCalibration(guided = calibrationGuidedMode)
             }
         }
     }
@@ -2830,7 +3231,9 @@ class MainActivity : AppCompatActivity() {
         stopMonitoringIfActivationExpired(showToast = false)
         Toast.makeText(this, activationBlockedMessage(), Toast.LENGTH_LONG).show()
         updateActivationUi()
-        updateMonitoringUi()
+        if (::statusTitleText.isInitialized) {
+            updateMonitoringUi()
+        }
         return false
     }
 
@@ -3533,6 +3936,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val INITIAL_SETUP_PREFS = "gongde_refuser_initial_setup"
+        private const val KEY_INITIAL_SETUP_DISMISSED = "initial_setup_dismissed"
+        private val OCR_CALIBRATION_GUIDE_ORDER = listOf(
+            "closeButton",
+            "price",
+            "trip",
+            "merchant",
+            "address",
+            "deliveryAnchorSearch",
+            "sameDropoff"
+        )
         private val COLOR_BACKGROUND = Color.rgb(246, 248, 250)
         private val COLOR_SETTINGS_BACKGROUND = Color.rgb(245, 246, 248)
         private val COLOR_TEXT_PRIMARY = Color.rgb(22, 27, 34)

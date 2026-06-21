@@ -22,10 +22,20 @@ object OcrCalibrationStore {
         "deliveryAnchorSearch"
     )
 
+    val editableRegionNames = listOf(
+        "closeButton",
+        "price",
+        "trip",
+        "merchant",
+        "address",
+        "deliveryAnchorSearch",
+        "sameDropoff"
+    )
+
     fun displayName(name: String): String {
         return when (name) {
-            "card" -> "卡片参考框"
-            "closeSearch" -> "關閉搜尋框"
+            "card" -> "卡片參考框"
+            "closeSearch" -> "關閉按鈕搜尋框"
             "closeButton" -> "關閉按鈕模板"
             "price" -> "金額模板"
             "trip" -> "時間距離模板"
@@ -68,6 +78,11 @@ object OcrCalibrationStore {
         }
     }
 
+    fun hasSaved(context: Context): Boolean {
+        val prefs = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        return prefs.contains("${regionNames.first()}_left")
+    }
+
     fun save(context: Context, regions: Map<String, RectF>) {
         val editor = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
         regionNames.forEach { name ->
@@ -81,6 +96,10 @@ object OcrCalibrationStore {
         editor.apply()
     }
 
+    fun saveAsDefault(context: Context, regions: Map<String, RectF>) {
+        save(context, regions)
+    }
+
     fun reset(context: Context) {
         context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
@@ -90,23 +109,23 @@ object OcrCalibrationStore {
 
     fun defaultRegions(): Map<String, RectF> {
         return mapOf(
-            "card" to RectF(0.04f, 0.53f, 0.96f, 0.965f),
+            "card" to RectF(0.0f, 0.48f, 1.0f, 0.995f),
             "actionButton" to RectF(0.08f, 0.86f, 0.94f, 0.95f),
-            "closeSearch" to RectF(0.72f, 0.28f, 0.96f, 0.88f),
-            "closeButton" to RectF(0.80f, 0.56f, 0.92f, 0.64f),
+            "closeSearch" to RectF(0.7904557f, 0.48825273f, 0.9148396f, 0.6531786f),
+            "closeButton" to RectF(0.7958729f, 0.5429691f, 0.91045594f, 0.5984604f),
             "deliveryAnchor" to RectF(0.06f, 0.72f, 0.22f, 0.91f),
-            "pickupAnchor" to RectF(0.09f, 0.755f, 0.15f, 0.805f),
-            "dropoffAnchor" to RectF(0.09f, 0.835f, 0.15f, 0.885f),
-            "pickupAnchorShifted" to RectF(0.09f, 0.755f, 0.15f, 0.805f),
-            "dropoffAnchorShifted" to RectF(0.09f, 0.835f, 0.15f, 0.885f),
-            "deliveryAnchorSearch" to RectF(0.06f, 0.72f, 0.22f, 0.91f),
-            "type" to RectF(0.06f, 0.56f, 0.56f, 0.64f),
-            "price" to RectF(0.05f, 0.61f, 0.45f, 0.71f),
-            "trip" to RectF(0.05f, 0.70f, 0.92f, 0.79f),
-            "sameDropoff" to RectF(0.20f, 0.50f, 0.92f, 0.56f),
-            "merchant" to RectF(0.145f, 0.745f, 0.96f, 0.805f),
-            "address" to RectF(0.145f, 0.795f, 0.96f, 0.905f),
-            "addressWide" to RectF(0.145f, 0.815f, 0.96f, 0.875f)
+            "pickupAnchor" to RectF(0.075714394f, 0.7437098f, 0.15067454f, 0.7822932f),
+            "dropoffAnchor" to RectF(0.074682645f, 0.80274576f, 0.14990067f, 0.83591f),
+            "pickupAnchorShifted" to RectF(0.075714394f, 0.7437098f, 0.15067454f, 0.7822932f),
+            "dropoffAnchorShifted" to RectF(0.074682645f, 0.80274576f, 0.14990067f, 0.83591f),
+            "deliveryAnchorSearch" to RectF(0.0646428f, 0.7261927f, 0.16402844f, 0.8666499f),
+            "type" to RectF(0.07238079f, 0.5279358f, 0.47908738f, 0.58780926f),
+            "price" to RectF(0.07315461f, 0.58884084f, 0.4808926f, 0.6492296f),
+            "trip" to RectF(0.15987991f, 0.6723901f, 0.92619014f, 0.7329739f),
+            "sameDropoff" to RectF(0.16105202f, 0.8277047f, 0.7990283f, 0.87454516f),
+            "merchant" to RectF(0.15409087f, 0.74396807f, 0.9051245f, 0.7828776f),
+            "address" to RectF(0.1522221f, 0.78003883f, 0.9236317f, 0.8633302f),
+            "addressWide" to RectF(0.15454362f, 0.8185876f, 0.9218264f, 0.86436164f)
         )
     }
 

@@ -33,10 +33,20 @@ object OrderHistory {
         val acceptMode: String = "",
         val deliveryCount: Int = 1,
         val rewardPerTrip: Int = 0,
-        val screenshotPath: String = ""
+        val screenshotPath: String = "",
+        val acceptedAt: Long = 0L,
+        val completedAt: Long = 0L
     ) {
         fun timeLabel(): String {
             return SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(timestamp))
+        }
+
+        fun acceptedTimeLabel(): String {
+            return formatOptionalTime(acceptedAt)
+        }
+
+        fun completedTimeLabel(): String {
+            return formatOptionalTime(completedAt)
         }
     }
 
@@ -122,7 +132,9 @@ object OrderHistory {
                             acceptMode = item.optString("acceptMode"),
                             deliveryCount = item.optInt("deliveryCount", deliveryCountFromOrderType(item.optString("orderType"))),
                             rewardPerTrip = item.optInt("rewardPerTrip"),
-                            screenshotPath = item.optString("screenshotPath")
+                            screenshotPath = item.optString("screenshotPath"),
+                            acceptedAt = item.optLong("acceptedAt"),
+                            completedAt = item.optLong("completedAt")
                         )
                     )
                 }
@@ -145,6 +157,35 @@ object OrderHistory {
 
     fun delete(context: Context, timestamp: Long) {
         save(context, load(context).filterNot { it.timestamp == timestamp })
+    }
+
+    fun markAccepted(context: Context, timestamp: Long, acceptedAt: Long = System.currentTimeMillis()) {
+        save(
+            context,
+            load(context).map { record ->
+                if (record.timestamp == timestamp) {
+                    record.copy(acceptedAt = if (record.acceptedAt > 0L) record.acceptedAt else acceptedAt)
+                } else {
+                    record
+                }
+            }
+        )
+    }
+
+    fun markCompleted(context: Context, timestamp: Long, completedAt: Long = System.currentTimeMillis()) {
+        save(
+            context,
+            load(context).map { record ->
+                if (record.timestamp == timestamp) {
+                    record.copy(
+                        acceptedAt = if (record.acceptedAt > 0L) record.acceptedAt else completedAt,
+                        completedAt = if (record.completedAt > 0L) record.completedAt else completedAt
+                    )
+                } else {
+                    record
+                }
+            }
+        )
     }
 
     private fun save(context: Context, records: List<Record>) {
@@ -171,9 +212,16 @@ object OrderHistory {
                     .put("deliveryCount", record.deliveryCount)
                     .put("rewardPerTrip", record.rewardPerTrip)
                     .put("screenshotPath", record.screenshotPath)
+                    .put("acceptedAt", record.acceptedAt)
+                    .put("completedAt", record.completedAt)
             )
         }
         prefs(context).edit().putString(KEY_RECORDS, array.toString()).apply()
+    }
+
+    private fun formatOptionalTime(time: Long): String {
+        if (time <= 0L) return ""
+        return SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(time))
     }
 
     private fun acceptModeLabel(mode: RuleSettings.AcceptMode): String {

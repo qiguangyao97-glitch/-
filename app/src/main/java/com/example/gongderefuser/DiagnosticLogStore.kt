@@ -10,19 +10,39 @@ object DiagnosticLogStore {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
     private val hourlyFileNameFormatter = SimpleDateFormat("yyyyMMdd-HH", Locale.US)
     private val persistedTags = setOf(
+        "ACCESSIBILITY",
+        "ACTIVATION",
         "A11Y_CLICK",
         "A11Y_SCREENSHOT",
+        "CAPTURE",
         "DIAGNOSTIC_LOG_SELF_TEST",
         "DUPLICATE_ORDER_SUPPRESSED",
+        "MONITORING",
         "OCR_ATTEMPT",
         "OCR_FAIL",
+        "OCR_MONEY_INVALID",
         "OCR_SUCCESS",
         "ORDER_ANALYSIS_FINISH",
+        "ORDER_ANALYSIS_START",
+        "ORDER_DETECTED",
+        "ORDER_DETECTION_WAIT",
         "ORDER_EVENT_RECEIVED",
         "ORDER_LATENCY",
+        "ORDER_POPUP_VALIDATION",
+        "ORDER_REPLACED",
         "ORDER_SESSION_END",
         "ORDER_SESSION_FORCE_RESET",
-        "ORDER_SESSION_START"
+        "ORDER_SESSION_START",
+        "ORDER_UPDATED",
+        "ORDER_BLOCKING_POPUP_CANDIDATE",
+        "ORDER_TRIGGER_CANDIDATE",
+        "POPUP_REPLACE",
+        "POPUP_SHOW",
+        "POPUP_STRUCTURE_SCAN",
+        "PROJECTION",
+        "SCREEN",
+        "SECOND_CHECK",
+        "SERVICE"
     )
     @Volatile
     private var lastWriteSummary: String = "尚未寫入"
@@ -40,11 +60,11 @@ object DiagnosticLogStore {
         val targets = listOf(
             LogTarget(
                 label = "主日誌",
-                hourlyFile = File(DebugFileDirs.resolve(context, "diagnostic_logs"), "$hourKey-monitor-events.txt")
+                hourlyFile = File(DebugFileDirs.resolveAppScoped(context, "diagnostic_logs"), "$hourKey-monitor-events.txt")
             ),
             LogTarget(
                 label = "備用日誌",
-                hourlyFile = File(DebugFileDirs.resolve(context, "debug_samples"), "$hourKey-diagnostic-monitor-events.txt")
+                hourlyFile = File(DebugFileDirs.resolveAppScoped(context, "debug_samples"), "$hourKey-diagnostic-monitor-events.txt")
             )
         )
         val successes = mutableListOf<File>()
@@ -84,7 +104,7 @@ object DiagnosticLogStore {
         writeFile(target.hourlyFile, line)
             .onSuccess { successes.add(it) }
             .onFailure {
-                failures.add("${target.label} 小时檔 ${target.hourlyFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
+                failures.add("${target.label} 小時檔 ${target.hourlyFile.absolutePath}: ${it.javaClass.simpleName} ${it.message.orEmpty()}")
             }
     }
 

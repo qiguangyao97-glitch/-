@@ -42,7 +42,7 @@ object AppSettings {
     }
 
     fun debugSamplePath(context: Context): String {
-        return DebugFileDirs.resolve(context, "debug_samples").absolutePath
+        return DebugFileDirs.resolveAppScoped(context, "debug_samples").absolutePath
     }
 
     fun orderCapturePath(context: Context): String {
@@ -50,11 +50,11 @@ object AppSettings {
     }
 
     fun manualOcrDebugPath(context: Context): String {
-        return DebugFileDirs.resolve(context, "manual_ocr_debug").absolutePath
+        return DebugFileDirs.resolveAppScoped(context, "manual_ocr_debug").absolutePath
     }
 
     fun diagnosticLogPath(context: Context): String {
-        return DebugFileDirs.resolve(context, "diagnostic_logs").absolutePath
+        return DebugFileDirs.resolveAppScoped(context, "diagnostic_logs").absolutePath
     }
 
     private fun prefs(context: Context) =

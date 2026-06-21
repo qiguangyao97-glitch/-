@@ -15,9 +15,14 @@ object DebugFileDirs {
     )
 
     fun resolve(context: Context, folderName: String): File {
+        val channelName = if (context.applicationContext.packageName.endsWith(".beta")) {
+            "測試版"
+        } else {
+            "正式版"
+        }
         val publicDir = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "$ROOT_NAME/$folderName"
+            "$ROOT_NAME/$channelName/$folderName"
         )
         return runCatching {
             publicDir.mkdirs()
@@ -32,10 +37,16 @@ object DebugFileDirs {
         }
     }
 
+    fun resolveAppScoped(context: Context, folderName: String): File {
+        return File(context.applicationContext.getExternalFilesDir(null), folderName).apply {
+            mkdirs()
+        }
+    }
+
     fun clearDiagnostics(context: Context) {
         diagnosticFolders.forEach { folderName ->
             runCatching {
-                resolve(context, folderName)
+                resolveAppScoped(context, folderName)
                     .takeIf { it.exists() }
                     ?.deleteRecursively()
             }
