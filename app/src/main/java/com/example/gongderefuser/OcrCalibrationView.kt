@@ -95,7 +95,9 @@ class OcrCalibrationView(context: Context) : View(context) {
             drawSpecialHint(canvas, name, rect, color)
             if (name == selectedName) {
                 drawLabel(canvas, name, rect, color)
-                canvas.drawCircle(rect.right, rect.bottom, 18f, strokePaint)
+                if (!isResizeLocked(name)) {
+                    canvas.drawCircle(rect.right, rect.bottom, 18f, strokePaint)
+                }
             }
         }
     }
@@ -109,7 +111,10 @@ class OcrCalibrationView(context: Context) : View(context) {
                 val hit = hitRegion(event.x, event.y)
                 if (hit != null) selectedName = hit
                 val rect = toViewRect(regions.getValue(selectedName))
-                mode = if (abs(event.x - rect.right) < 48f && abs(event.y - rect.bottom) < 48f) {
+                mode = if (!isResizeLocked(selectedName) &&
+                    abs(event.x - rect.right) < 48f &&
+                    abs(event.y - rect.bottom) < 48f
+                ) {
                     DragMode.Resize
                 } else {
                     DragMode.Move
@@ -293,6 +298,10 @@ class OcrCalibrationView(context: Context) : View(context) {
 
     private fun isSelectableProxy(name: String): Boolean {
         return name in OcrCalibrationStore.editableRegionNames
+    }
+
+    private fun isResizeLocked(name: String): Boolean {
+        return name == "closeButton" || name == "price"
     }
 
     private fun applyLinkedMove(name: String, dx: Float, dy: Float) {

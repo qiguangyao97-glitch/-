@@ -1884,7 +1884,7 @@ class MainActivity : AppCompatActivity() {
             detail = "選擇截圖產生區域框圖",
             accentColor = COLOR_ACCENT
         ).apply {
-            setOnClickListener { showOcrCalibration() }
+            setOnClickListener { showOcrCalibration(guided = true) }
         })
         if (isDebugBuild()) {
             card.addView(createSettingsToggleRow(
