@@ -75,6 +75,10 @@ class MyAccessibilityService : AccessibilityService() {
     private var currentOcrAttemptElapsedMs: Long = 0L
     private var lastPopupStructureScanTime: Long = 0L
     private var lastPopupCandidateLogTime: Long = 0L
+    private var currentSessionEventType: String = ""
+    private var currentSessionPackageName: String = ""
+    private var currentSessionClassName: String = ""
+    private var currentSessionTriggerReason: String = ""
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -93,7 +97,6 @@ class MyAccessibilityService : AccessibilityService() {
         if (packageName != "com.ubercab.driver") return
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             logTargetClickEvent(event, packageName)
-            return
         }
         val now = System.currentTimeMillis()
 
@@ -115,12 +118,14 @@ class MyAccessibilityService : AccessibilityService() {
     private fun scheduleEventDrivenCapture(event: AccessibilityEvent, now: Long, popupScan: PopupStructureScan?) {
         val triggerDecision = shouldTriggerOrderDetection(event, now, popupScan)
         if (!triggerDecision.shouldTrigger) {
+            logOrderTriggerRejected(event, triggerDecision, popupScan)
             logObservation(
                 "ORDER_DETECTION_WAIT",
                 "ignoredEvent reason=${triggerDecision.reason} type=${eventTypeName(event.eventType)} class=${event.className}"
             )
             return
         }
+        logOrderTriggerCandidate(event, triggerDecision)
         if (now - lastDetectionEventTime > DETECTION_BURST_RESET_MS) {
             currentBurstDetectCount = 0
             pendingDetectionAfterCurrent = false
@@ -136,16 +141,21 @@ class MyAccessibilityService : AccessibilityService() {
             return
         }
         if (currentBurstDetectCount >= maxDetectionsForCurrentWindow()) {
+            logOrderTriggerRejected(event, triggerDecision.copy(reason = "BURST_LIMIT_${triggerDecision.reason}"), popupScan)
             logObservation(
                 "ORDER_DETECTION_WAIT",
                 "skipBurstLimit count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
             )
             return
         }
-        startOrderDetectionSession(now)
+        startOrderDetectionSession(now, event, triggerDecision)
     }
 
-    private fun startOrderDetectionSession(now: Long) {
+    private fun startOrderDetectionSession(
+        now: Long,
+        event: AccessibilityEvent,
+        triggerDecision: TriggerDecision
+    ) {
         if (isOrderDetectionSessionActive) {
             pendingDetectionAfterCurrent = true
             logObservation("ORDER_DETECTION_WAIT", "pendingAfterCurrent=true reason=SESSION_ACTIVE")
@@ -157,8 +167,16 @@ class MyAccessibilityService : AccessibilityService() {
         orderDetectionSessionNextAttemptIndex = 0
         orderDetectionSessionFailureCount = 0
         orderDetectionSessionLastHadAnchor = false
+        currentSessionEventType = eventTypeName(event.eventType)
+        currentSessionPackageName = event.packageName?.toString().orEmpty()
+        currentSessionClassName = event.className?.toString().orEmpty()
+        currentSessionTriggerReason = triggerDecision.reason
         clearPendingOcrRetry(resetAttempt = true)
-        DiagnosticLogStore.append(this, "ORDER_SESSION_START", "sessionId=$orderDetectionSessionId")
+        DiagnosticLogStore.append(
+            this,
+            "ORDER_SESSION_START",
+            "sessionId=$orderDetectionSessionId reason=${triggerDecision.reason} eventType=$currentSessionEventType packageName=$currentSessionPackageName className=$currentSessionClassName"
+        )
         armSessionTimeout(orderDetectionSessionId)
         scheduleNextSessionCapture()
     }
@@ -212,8 +230,19 @@ class MyAccessibilityService : AccessibilityService() {
         Toast.makeText(this, "無障礙截圖失敗：$reason", Toast.LENGTH_SHORT).show()
     }
 
+    private fun logScreenshotFailureDetail(reason: String, errorCode: String = "") {
+        DiagnosticLogStore.append(
+            this,
+            "SCREENSHOT_FAILURE_DETAIL",
+            "sessionId=$orderDetectionSessionId attempt=$currentOcrAttemptNumber elapsedMs=${eventElapsedMs()} " +
+                    "eventType=$currentSessionEventType packageName=$currentSessionPackageName className=$currentSessionClassName " +
+                    "errorCode=$errorCode reason=$reason"
+        )
+    }
+
     private fun tryAccessibilityScreenshot(isSecondCheck: Boolean = false, sessionId: Long = orderDetectionSessionId): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            logScreenshotFailureDetail("SDK_TOO_LOW", "sdk_${Build.VERSION.SDK_INT}")
             reportAccessibilityScreenshotFailure("sdk_${Build.VERSION.SDK_INT}")
             if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
             return false
@@ -240,6 +269,7 @@ class MyAccessibilityService : AccessibilityService() {
                         isTakingScreenshot = false
                         val bitmap = screenshot.toBitmap()
                         if (bitmap == null) {
+                            logScreenshotFailureDetail("BITMAP_NULL", "bitmap_null")
                             reportAccessibilityScreenshotFailure("bitmap_null")
                             if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
                             return
@@ -254,10 +284,12 @@ class MyAccessibilityService : AccessibilityService() {
                         isTakingScreenshot = false
                         Log.d("A11Y_SCREENSHOT", "failed code=$errorCode")
                         if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
+                            logScreenshotFailureDetail("INTERVAL_TOO_SHORT", errorCode.toString())
                             DiagnosticLogStore.append(this@MyAccessibilityService, "A11Y_SCREENSHOT", "failed_interval_too_short_no_toast code=$errorCode")
                             if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
                             return
                         }
+                        logScreenshotFailureDetail("TAKE_SCREENSHOT_FAILURE", errorCode.toString())
                         reportAccessibilityScreenshotFailure("error_$errorCode")
                         if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
                     }
@@ -266,6 +298,7 @@ class MyAccessibilityService : AccessibilityService() {
         } catch (throwable: Throwable) {
             clearScreenshotTimeout()
             isTakingScreenshot = false
+            logScreenshotFailureDetail("EXCEPTION_${throwable.javaClass.simpleName}", throwable.message.orEmpty())
             DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "exception=${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}")
             if (!isSecondCheck) resetAnalysisSession("SCREENSHOT_FAILURE")
             return false
@@ -278,6 +311,7 @@ class MyAccessibilityService : AccessibilityService() {
         screenshotTimeoutRunnable = Runnable {
             if (isTakingScreenshot) {
                 isTakingScreenshot = false
+                logScreenshotFailureDetail("TIMEOUT", "timeout")
                 DiagnosticLogStore.append(this, "A11Y_SCREENSHOT", "timeout_reset")
                 Log.d("A11Y_SCREENSHOT", "timeout reset")
                 resetAnalysisSession("SCREENSHOT_FAILURE")
@@ -422,9 +456,7 @@ class MyAccessibilityService : AccessibilityService() {
         }
         if (pendingDetectionAfterCurrent && currentBurstDetectCount < maxDetectionsForCurrentWindow()) {
             pendingDetectionAfterCurrent = false
-            logObservation("ORDER_DETECTION_WAIT", "reschedule reason=PENDING_EVENT_AFTER_EMPTY")
-            startOrderDetectionSession(System.currentTimeMillis())
-            return
+            logObservation("ORDER_DETECTION_WAIT", "dropPending reason=PENDING_EVENT_REQUIRES_FRESH_GATE")
         }
         pendingDetectionAfterCurrent = false
         logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=NO_ORDER")
@@ -699,74 +731,55 @@ class MyAccessibilityService : AccessibilityService() {
         now: Long,
         popupScan: PopupStructureScan?
     ): TriggerDecision {
-        if (!isBetaPackage()) {
-            return legacyTriggerDecision(event, now)
-        }
         return when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                TriggerDecision(true, "BETA_WINDOW_STATE_CHANGED")
-            }
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                TriggerDecision(true, "BETA_WINDOWS_CHANGED")
-            }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                val scan = popupScan ?: inspectRootForPopupStructure(rootInActiveWindow ?: return TriggerDecision(false, "BETA_CONTENT_NO_ROOT"))
-                betaContentChangedDecision(event, now, scan)
-            }
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> popupCandidateDecision(event, now, popupScan)
             else -> TriggerDecision(false, "UNSUPPORTED_EVENT")
         }
     }
 
-    private fun legacyTriggerDecision(event: AccessibilityEvent, now: Long): TriggerDecision {
-        return when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                TriggerDecision(true, "LEGACY_WINDOW_STATE_CHANGED")
-            }
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                TriggerDecision(true, "LEGACY_WINDOWS_CHANGED")
-            }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                if (lastShownOrderSignature.isBlank() && overlayView == null) {
-                    popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-                    TriggerDecision(true, "LEGACY_CONTENT_NO_OVERLAY")
-                } else {
-                    TriggerDecision(true, "LEGACY_CONTENT_WITH_OVERLAY")
-                }
-            }
-            else -> TriggerDecision(false, "UNSUPPORTED_EVENT")
-        }
-    }
-
-    private fun betaContentChangedDecision(
+    private fun popupCandidateDecision(
         event: AccessibilityEvent,
         now: Long,
-        scan: PopupStructureScan
+        popupScan: PopupStructureScan?
     ): TriggerDecision {
-        if (overlayView != null || lastShownOrderSignature.isNotBlank()) {
-            return TriggerDecision(true, "BETA_CONTENT_EXISTING_OVERLAY")
-        }
+        val scan = popupScan ?: rootInActiveWindow?.let(::inspectRootForPopupStructure)
+            ?: return TriggerDecision(false, "NO_ROOT_FOR_POPUP_SCAN")
         if (scan.isLikelyBlockingPopup) {
             popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-            return TriggerDecision(true, "BETA_BLOCKING_POPUP_SCAN")
+            return popupTriggerDecision(true, "POPUP_SCAN_BLOCKING", scan)
         }
         if (scan.hasOrderTextSignal) {
             popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-            return TriggerDecision(true, "BETA_ORDER_TEXT_SIGNAL")
+            return popupTriggerDecision(true, "POPUP_SCAN_ORDER_TEXT_SIGNAL", scan)
         }
         if (scan.isRenderedPopupShell) {
             popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-            return TriggerDecision(true, "BETA_RENDERED_POPUP_SHELL")
+            return popupTriggerDecision(true, "POPUP_SCAN_RENDERED_SHELL", scan)
         }
         if (now <= popupCandidateUntilTime && scan.isSparsePopupShell) {
-            return TriggerDecision(true, "BETA_POPUP_WINDOW_SPARSE_SHELL")
+            return popupTriggerDecision(true, "POPUP_SCAN_SPARSE_SHELL_IN_CANDIDATE_WINDOW", scan)
         }
+        return popupTriggerDecision(
+            shouldTrigger = false,
+            reason = "POPUP_SCAN_REJECTED textNodes=${scan.textNodeCount} nodes=${scan.nodeCount} class=${event.className}",
+            scan = scan
+        )
+    }
+
+    private fun popupTriggerDecision(
+        shouldTrigger: Boolean,
+        reason: String,
+        scan: PopupStructureScan
+    ): TriggerDecision {
         return TriggerDecision(
-            false,
-            "BETA_FILTERED_CONTENT textNodes=${scan.textNodeCount} nodes=${scan.nodeCount} class=${event.className}"
+            shouldTrigger = shouldTrigger,
+            reason = reason,
+            score = scan.score,
+            features = scan.featureSummary(),
+            samples = scan.samples.joinToString(" | ")
         )
     }
 
@@ -824,7 +837,6 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun logPopupStructureScan(event: AccessibilityEvent, targetPackageName: String, now: Long): PopupStructureScan? {
-        if (!isBetaPackage()) return null
         if (now - lastPopupStructureScanTime < POPUP_STRUCTURE_SCAN_MIN_INTERVAL_MS) return null
         lastPopupStructureScanTime = now
 
@@ -886,6 +898,31 @@ class MyAccessibilityService : AccessibilityService() {
             )
         }
         return scan
+    }
+
+    private fun logOrderTriggerCandidate(event: AccessibilityEvent, decision: TriggerDecision) {
+        DiagnosticLogStore.append(
+            this,
+            "ORDER_TRIGGER_CANDIDATE",
+            "reason=${decision.reason} eventType=${eventTypeName(event.eventType)} packageName=${event.packageName?.toString().orEmpty()} " +
+                    "className=${event.className?.toString().orEmpty()} score=${decision.score} features=${decision.features} samples=${decision.samples}"
+        )
+    }
+
+    private fun logOrderTriggerRejected(
+        event: AccessibilityEvent,
+        decision: TriggerDecision,
+        popupScan: PopupStructureScan?
+    ) {
+        val score = if (decision.features.isNotBlank()) decision.score else popupScan?.score ?: 0
+        val features = decision.features.ifBlank { popupScan?.featureSummary().orEmpty() }
+        val samples = decision.samples.ifBlank { popupScan?.samples?.joinToString(" | ").orEmpty() }
+        DiagnosticLogStore.append(
+            this,
+            "ORDER_TRIGGER_REJECTED",
+            "reason=${decision.reason} eventType=${eventTypeName(event.eventType)} packageName=${event.packageName?.toString().orEmpty()} " +
+                    "className=${event.className?.toString().orEmpty()} score=$score features=$features samples=$samples"
+        )
     }
 
     private fun inspectEventSource(event: AccessibilityEvent): String {
@@ -1035,7 +1072,10 @@ class MyAccessibilityService : AccessibilityService() {
 
     private data class TriggerDecision(
         val shouldTrigger: Boolean,
-        val reason: String
+        val reason: String,
+        val score: Int = 0,
+        val features: String = "",
+        val samples: String = ""
     )
 
     private data class PopupStructureScan(
