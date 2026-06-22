@@ -790,6 +790,7 @@ class MyAccessibilityService : AccessibilityService() {
             return popupTriggerDecision(true, "POPUP_SCAN_BLOCKING", scan)
         }
         popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+        logTriggerGateBypass("UBER_EVENT_DIRECT_OCR", scan)
         return popupTriggerDecision(true, "UBER_EVENT_FALLBACK_OCR", scan)
     }
 
@@ -837,6 +838,12 @@ class MyAccessibilityService : AccessibilityService() {
     private fun logObservation(tag: String, message: String) {
         Log.i(tag, message)
         DiagnosticLogStore.append(this, tag, message)
+    }
+
+    private fun logTriggerGateBypass(reason: String, scan: PopupStructureScan) {
+        val message = "reason=$reason score=${scan.score} likelyBlockingPopup=${scan.isLikelyBlockingPopup} features=${scan.featureSummary()} samples=${scan.samples.joinToString(" | ")}"
+        Log.i("TRIGGER_GATE_BYPASS", message)
+        DiagnosticLogStore.append(this, "TRIGGER_GATE_BYPASS", message)
     }
 
     private fun logTargetClickEvent(event: AccessibilityEvent, packageName: String) {
