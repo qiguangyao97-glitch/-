@@ -380,11 +380,11 @@ object OrderParser {
 
     private fun correctMissingDistanceDecimal(raw: String, parsed: Double): Double {
         if (raw.contains(".")) return parsed
-        if (parsed < 30.0) return parsed
-        if (!Regex("^[0-9]{2}$").matches(raw)) return parsed
+        if (parsed <= 10.0) return parsed
+        if (!Regex("^[0-9]{2,3}$").matches(raw)) return parsed
 
         val restored = raw.toDoubleOrNull()?.div(10.0) ?: return parsed
-        return if (restored in 1.0..20.0) restored else parsed
+        return if (restored in 1.0..99.9) restored else parsed
     }
 
     private fun parseDeliveryCount(text: String): Int {

@@ -11,6 +11,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageDecoder
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
@@ -31,6 +32,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -1532,6 +1534,9 @@ class MainActivity : AppCompatActivity() {
                 },
                 SettingsEntry("OCR", "OCR 引擎狀態", "正常") {
                     showDebugSettings()
+                },
+                SettingsEntry("框", "失敗 OCR 截圖", if (OcrFailureDebugStore.latestFailure(this) != null) "有記錄" else "無記錄") {
+                    showLastFailedOcrScreenshot()
                 }
             )
         ))
@@ -1763,7 +1768,7 @@ class MainActivity : AppCompatActivity() {
 
                 本次更新：
                 1. 新增首次啟動設定流程，依序檢查無障礙服務、OCR 狀態、OCR 校準與即時監測。
-                2. OCR 校準新增逐步引導：關閉按鈕、金額、時間距離、商家、地址、定位搜尋框、同地點配送。
+                2. OCR 校準新增逐步引導：關閉按鈕、金額、時間距離、商家、地址、同地點配送。
                 3. 設定頁整理系統資訊，合併版本號與關於頁，減少重複入口。
                 4. 更新隱私政策與免責聲明。
                 5. 保留現有 OCR、Parser、評分、Overlay 與訂單記錄邏輯。
@@ -1886,6 +1891,20 @@ class MainActivity : AppCompatActivity() {
         ).apply {
             setOnClickListener { showOcrCalibration(guided = true) }
         })
+        card.addView(createActionCard(
+            title = "上一張失敗 OCR 截圖",
+            detail = if (OcrFailureDebugStore.latestFailure(this) != null) "查看帶框截圖" else "目前無記錄",
+            accentColor = COLOR_WARNING
+        ).apply {
+            setOnClickListener { showLastFailedOcrScreenshot() }
+        })
+        card.addView(createActionCard(
+            title = "上一張 OCR 截圖",
+            detail = if (OcrFailureDebugStore.latestOcr(this) != null) "查看帶框截圖" else "目前無記錄",
+            accentColor = COLOR_ACCENT
+        ).apply {
+            setOnClickListener { showLatestOcrScreenshot() }
+        })
         if (isDebugBuild()) {
             card.addView(createSettingsToggleRow(
                 title = "記錄無障礙事件日誌",
@@ -1911,6 +1930,68 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(card)
         setBaseContent(layout)
+    }
+
+    private fun showLastFailedOcrScreenshot() {
+        showOcrDebugScreenshot(
+            title = "上一張失敗 OCR 截圖",
+            latest = OcrFailureDebugStore.latestFailure(this),
+            emptyMessage = "目前沒有失敗 OCR 截圖"
+        )
+    }
+
+    private fun showLatestOcrScreenshot() {
+        showOcrDebugScreenshot(
+            title = "上一張 OCR 截圖",
+            latest = OcrFailureDebugStore.latestOcr(this),
+            emptyMessage = "目前沒有 OCR 截圖"
+        )
+    }
+
+    private fun showOcrDebugScreenshot(
+        title: String,
+        latest: OcrFailureDebugStore.LatestFailure?,
+        emptyMessage: String
+    ) {
+        if (latest == null) {
+            Toast.makeText(this, emptyMessage, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val bitmap = BitmapFactory.decodeFile(latest.regionImageFile.absolutePath)
+        if (bitmap == null) {
+            Toast.makeText(this, "截圖讀取失敗", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(8))
+        }
+        content.addView(ImageView(this).apply {
+            setImageBitmap(bitmap)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        content.addView(TextView(this).apply {
+            text = buildString {
+                append("來源：${latest.source.ifBlank { "未知" }}\n")
+                append("路徑：${latest.regionImageFile.absolutePath}")
+                latest.textFile?.let { append("\n文字診斷：${it.absolutePath}") }
+            }
+            textSize = 11f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.12f)
+            setPadding(0, dp(10), 0, 0)
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(ScrollView(this).apply { addView(content) })
+            .setPositiveButton("知道了", null)
+            .show()
     }
 
     private fun showDataSettings() {
@@ -2009,7 +2090,9 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.BLACK)
         }
         calibrationBitmap?.let { bitmap ->
-            val initialRegions = OcrCalibrationStore.load(this)
+            val activeTemplate = OcrTemplateRepository.getActiveTemplate(this)
+            logTemplateLoadForEditor(activeTemplate)
+            val initialRegions = activeTemplate.regions
             val view = OcrCalibrationView(this).apply {
                 setImageAndRegions(bitmap, initialRegions)
                 selectRegion(selectedRegion)
@@ -2079,7 +2162,7 @@ class MainActivity : AppCompatActivity() {
             text = "保存"
             setOnClickListener {
                 val current = calibrationView?.currentRegions().orEmpty()
-                OcrCalibrationStore.save(this@MainActivity, current)
+                saveOcrCalibrationTemplate(current)
                 Toast.makeText(this@MainActivity, "OCR 模板已保存", Toast.LENGTH_SHORT).show()
             }
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
@@ -2090,6 +2173,12 @@ class MainActivity : AppCompatActivity() {
             text = "預設"
             setOnClickListener {
                 OcrCalibrationStore.reset(this@MainActivity)
+                DiagnosticLogStore.append(
+                    this@MainActivity,
+                    "OCR_TEMPLATE_SOURCE",
+                    "templateSource=DEFAULT templateVersion=${OcrTemplateRepository.TEMPLATE_VERSION} loadedAt=${System.currentTimeMillis()} hasUserSavedTemplate=false fallbackReason=USER_RESET"
+                )
+                lastCalibrationImageFile().delete()
                 calibrationBitmap = BitmapFactory.decodeResource(resources, R.drawable.default_ocr_calibration)
                 calibrationSavedPath = "內建預設 OCR 校準圖"
                 calibrationBitmap?.let { bitmap ->
@@ -2177,6 +2266,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadLastCalibrationBitmapIfNeeded() {
         if (calibrationBitmap != null) return
+        val savedFile = lastCalibrationImageFile()
+        if (savedFile.exists()) {
+            BitmapFactory.decodeFile(savedFile.absolutePath)?.let { bitmap ->
+                calibrationBitmap = bitmap
+                calibrationSavedPath = savedFile.absolutePath
+                return
+            }
+        }
         val bitmap = BitmapFactory.decodeResource(resources, R.drawable.default_ocr_calibration) ?: return
         calibrationBitmap = bitmap
         calibrationSavedPath = "內建預設 OCR 校準圖"
@@ -2197,7 +2294,7 @@ class MainActivity : AppCompatActivity() {
         return TextView(this).apply {
             text = OcrCalibrationStore.displayName(name)
             textSize = 13f
-            typeface = if (name == "closeButton" || name == "deliveryAnchorSearch") {
+            typeface = if (name == "closeButton") {
                 Typeface.DEFAULT_BOLD
             } else {
                 Typeface.DEFAULT
@@ -2208,7 +2305,6 @@ class MainActivity : AppCompatActivity() {
             background = roundedFill(
                 when (name) {
                     "closeButton" -> COLOR_DANGER
-                    "deliveryAnchorSearch", "pickupAnchor", "dropoffAnchor" -> COLOR_ACCENT
                     else -> COLOR_MUTED
                 },
                 999f
@@ -2239,13 +2335,31 @@ class MainActivity : AppCompatActivity() {
             })
             addView(createSmallActionButton("保存完成", COLOR_SUCCESS) {
                 val current = calibrationView?.currentRegions().orEmpty()
-                OcrCalibrationStore.save(this@MainActivity, current)
+                saveOcrCalibrationTemplate(current)
                 Toast.makeText(this@MainActivity, "OCR 校準已保存", Toast.LENGTH_SHORT).show()
                 showInitialSetup()
             }, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
                 leftMargin = dp(5)
             })
         }
+    }
+
+    private fun saveOcrCalibrationTemplate(regions: Map<String, RectF>) {
+        val success = OcrTemplateRepository.save(this, regions)
+        val active = OcrTemplateRepository.getActiveTemplate(this)
+        DiagnosticLogStore.append(
+            this,
+            "OCR_TEMPLATE_SAVE",
+            "saveSuccess=$success savePath=${OcrTemplateRepository.savePath(this)} ${OcrTemplateRepository.templateSummary(active.regions)}"
+        )
+    }
+
+    private fun logTemplateLoadForEditor(activeTemplate: OcrTemplateRepository.ActiveTemplate) {
+        DiagnosticLogStore.append(
+            this,
+            "OCR_TEMPLATE_LOAD_FOR_EDITOR",
+            "templateSource=${activeTemplate.source.name} templateVersion=${activeTemplate.version} fallbackReason=${activeTemplate.fallbackReason} ${OcrTemplateRepository.templateSummary(activeTemplate.regions)}"
+        )
     }
 
     private fun moveCalibrationGuide(delta: Int) {
@@ -2276,14 +2390,14 @@ class MainActivity : AppCompatActivity() {
             "price" -> "中心線放在金額和訂單數中心線。"
             "trip" -> "框住分鐘與公里區域，例如 12 分鐘、2.2 公里。"
             "type" -> "跟隨金額模板：與金額模板上下排並連動移動。"
-            "merchant" -> "商家左側圓放在小方塊正中心。"
-            "address" -> "地址左側方形放在小方塊正中心。"
-            "addressWide" -> "跟隨地址模板：放在地址模板下半部作備用。"
+            "merchant" -> "完整大框代表兩行商家；上半框代表一行商家。實際識別會依圓圈與方塊距離自動套用。"
+            "address" -> "完整大框代表兩行地址；上半框代表一行地址。方塊位置用來決定地址起點。"
+            "addressWide" -> "地址兩行參考框：完整框讀兩行，上半框讀一行。"
+            "pickupAnchor" -> "取餐圓圈定位框：用來判斷商家/地址行數，不直接讀文字。"
+            "dropoffAnchor" -> "送達方塊定位框：用來判斷地址起點與行數，不直接讀文字。"
+            "deliveryAnchorSearch" -> "舊定位搜尋框已停用；新幾何定位只使用取餐圓圈搜尋框與送達方塊搜尋框。"
             "sameDropoff" -> "框住同地點配送、相同送達點等提示文字。"
-            "pickupAnchor" -> "跟隨商家模板：取餐圓點放在商家左側小方塊正中心。"
-            "dropoffAnchor" -> "跟隨地址模板：送達方形放在地址左側小方塊正中心。"
-            "deliveryAnchorSearch" -> "框住商家和地址左側的圓、豎線、方塊，中心放在豎線中心點。"
-            else -> "拖曳框線調整位置，調好後記得點「儲存」。"
+            else -> "拖曳框線上下調整位置，調好後記得點「儲存」。"
         }
     }
 
@@ -2970,7 +3084,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun normalizedRecommendation(record: OrderHistory.Record): String {
-        return normalizeRecommendation(record.recommendation, record.score)
+        return recommendationForRecord(record)
     }
 
     private fun realtimeRecords(): List<OrderHistory.Record> {
@@ -2981,13 +3095,14 @@ class MainActivity : AppCompatActivity() {
         return OrderHistory.load(this).filter { it.source == "截圖" || it.source == "截图" }
     }
 
-    private fun normalizeRecommendation(recommendation: String, score: Int): String {
-        return recommendationForScore(score)
-    }
-
-    private fun recommendationForScore(score: Int): String {
-        val scoreBase = RuleSettings.load(this).normal.scoreBase
-        return OrderAnalyzer.recommendationForScore(score, scoreBase)
+    private fun recommendationForRecord(record: OrderHistory.Record): String {
+        val rule = RuleSettings.load(this).normal
+        return OrderAnalyzer.recommendationForScore(
+            score = record.score,
+            scoreBase = rule.scoreBase,
+            money = record.price,
+            fatOrderMinAmount = rule.fatOrderMinAmount
+        )
     }
 
     private fun todayRecords(records: List<OrderHistory.Record>): List<OrderHistory.Record> {
@@ -3041,9 +3156,8 @@ class MainActivity : AppCompatActivity() {
                     setAnalyzing(false)
                     showFailureResult(
                         buildString {
-                            appendLine("未識別到完整訂單")
                             appendLine("skipResultReason=${gate.skipResultReason}")
-                            appendLine(if (regionText.hasAnchoredCard) "模板定位成功，但訂單欄位不完整。" else "模板定位失敗。")
+                            appendLine(buildMissingOrderFieldMessage(order, regionText.hasAnchoredCard, gate.skipResultReason))
                             appendLine()
                             appendLine("區域 OCR / 定位診斷：")
                             append(
@@ -3067,6 +3181,36 @@ class MainActivity : AppCompatActivity() {
                     showFloatingAnalysisResult(analysis)
                 }
             }
+        }
+    }
+
+    private fun buildMissingOrderFieldMessage(
+        order: OrderData?,
+        hasAnchoredCard: Boolean,
+        skipResultReason: String
+    ): String {
+        val missingItems = mutableListOf<String>()
+        if (!hasAnchoredCard || skipResultReason == "NO_ORDER_CARD") {
+            missingItems.add("訂單卡片定位")
+        }
+        if (order == null) {
+            if (hasAnchoredCard) {
+                missingItems.add("金額")
+                missingItems.add("分鐘")
+                missingItems.add("公里")
+            }
+        } else {
+            if (order.price <= 0 || order.priceStatus != "OK") missingItems.add("金額")
+            if (order.minutes <= 0 || order.tripStatus != "OK") missingItems.add("分鐘")
+            if (order.distance <= 0.0 || order.tripStatus != "OK") missingItems.add("公里")
+            if (order.storeName.isBlank() || order.merchantStatus != "OK") missingItems.add("商家")
+            if (order.address.isBlank() || order.addressStatus != "OK") missingItems.add("地址")
+            if (order.typeStatus != "OK") missingItems.add("訂單類型")
+        }
+        return if (missingItems.isEmpty()) {
+            "缺少：未知欄位（$skipResultReason）"
+        } else {
+            "缺少：${missingItems.distinct().joinToString("、")}"
         }
     }
 
@@ -3101,12 +3245,13 @@ class MainActivity : AppCompatActivity() {
                     )
                 ) else null
                 val savedPath = ManualOcrDebugStore.save(this, bitmap, regionText, order, "calibration")
+                val calibrationImagePath = saveLastCalibrationBitmap(bitmap)
                 calibrationBitmap = null
-                calibrationSavedPath = ""
+                calibrationSavedPath = calibrationImagePath
                 setAnalyzing(false)
                 Toast.makeText(
                     this,
-                    if (savedPath.isBlank()) "OCR 校準圖儲存失敗" else "已儲存 OCR 調試輸出",
+                    if (savedPath.isBlank() || calibrationImagePath.isBlank()) "OCR 校準圖儲存失敗" else "已儲存 OCR 校準圖",
                     Toast.LENGTH_LONG
                 ).show()
                 showOcrCalibration(guided = calibrationGuidedMode)
@@ -3944,7 +4089,8 @@ class MainActivity : AppCompatActivity() {
             "trip",
             "merchant",
             "address",
-            "deliveryAnchorSearch",
+            "pickupAnchor",
+            "dropoffAnchor",
             "sameDropoff"
         )
         private val COLOR_BACKGROUND = Color.rgb(246, 248, 250)

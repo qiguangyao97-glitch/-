@@ -44,11 +44,27 @@ object OcrHelper {
         val anchorSource: String,
         val pickupDetected: Boolean,
         val dropoffDetected: Boolean,
-        val templateCloseY: Int?,
-        val actualCloseY: Int?,
-        val closeShiftY: Int?,
-        val pickupAnchorRect: Rect?,
-        val dropoffAnchorRect: Rect?,
+        val sameDropoffMatched: Boolean = false,
+        val merchantRows: Int? = null,
+        val addressRows: Int? = null,
+        val selectedTemplate: String? = null,
+        val lineHeight: Int? = null,
+        val pickupY: Int? = null,
+        val dropoffY: Int? = null,
+        val baseGap: Int? = null,
+        val detectedGap: Int? = null,
+        val dropoffShift: Int? = null,
+        val anchorConflict: Boolean = false,
+        val anchorConflictReason: String? = null,
+        val pickupDetectDebug: String? = null,
+        val dropoffDetectDebug: String? = null,
+        val templateCloseY: Int? = null,
+        val actualCloseY: Int? = null,
+        val closeShiftY: Int? = null,
+        val pickupAnchorRect: Rect? = null,
+        val dropoffAnchorRect: Rect? = null,
+        val pickupSearchRect: Rect? = null,
+        val dropoffSearchRect: Rect? = null,
         val cardRect: Rect? = null,
         val closeButtonRect: Rect? = null,
         val priceRect: Rect? = null,
@@ -72,20 +88,28 @@ object OcrHelper {
         bitmap: Bitmap,
         callback: (OrderRegionText) -> Unit
     ) {
+        val activeTemplate = OcrTemplateRepository.getActiveTemplate(context)
+        DiagnosticLogStore.append(
+            context,
+            "OCR_TEMPLATE_SOURCE",
+            "templateSource=${activeTemplate.source.name} templateVersion=${activeTemplate.version} loadedAt=${activeTemplate.loadedAt} hasUserSavedTemplate=${activeTemplate.hasUserSavedTemplate} fallbackReason=${activeTemplate.fallbackReason}"
+        )
+        DiagnosticLogStore.append(
+            context,
+            "OCR_TEMPLATE_ACTIVE",
+            OcrTemplateRepository.templateSummary(activeTemplate.regions)
+        )
         val closeSearchRect = closeSearchRect(context, bitmap)
         val closeButton = findCloseButton(context, bitmap, closeSearchRect)
         val anchorDebugInfo = buildAnchorDebugInfo(context, bitmap, closeButton)
-        val anchoredRegions = buildAnchoredRegions(context, bitmap, closeButton)
-        val hasAnchoredCard = anchoredRegions != null
-        val regions = anchoredRegions.orEmpty()
-        val debugRegions = calibrationDebugRegions(context, bitmap) +
-                listOfNotNull(closeButton?.let { DebugRegion("closeButtonDetected", it.rect) }) +
-                diagnosticAnchorDebugRegions(context, bitmap, closeButton) +
-                regions.map { DebugRegion(actualDebugName(it.name), Rect(it.rect)) }
-        if (regions.isEmpty()) {
+        val upperRegions = buildUpperRegions(context, bitmap, closeButton)
+        val hasAnchoredCard = upperRegions != null
+        if (upperRegions == null) {
             val diagnostics = listOf(
                 region(bitmap, "closeSearch", closeSearchRect, prepare = true)
             )
+            val debugRegions = listOfNotNull(closeButton?.let { DebugRegion("closeButtonDetected", it.rect) }) +
+                    diagnostics.map { DebugRegion(actualDebugName(it.name), Rect(it.rect)) }
             runDiagnosticRegions(diagnostics) { diagnosticText ->
                 callback(
                     OrderRegionText(
@@ -111,36 +135,81 @@ object OcrHelper {
             }
             return
         }
+        runRegions(upperRegions) { upperResults ->
+            val sameDropoffText = upperResults["sameDropoff"].orEmpty()
+            val sameDropoffMatched = isSameDropoffText(sameDropoffText)
+            val lowerBuild = buildLowerRegions(context, bitmap, closeButton, sameDropoffMatched)
+            val lowerRegions = lowerBuild.regions
+            val allRegions = upperRegions + lowerRegions
+            val visibleRegions = allRegions.filter { it.name != "sameDropoff" || sameDropoffMatched }
+            val debugRegions = listOfNotNull(closeButton?.let { DebugRegion("closeButtonDetected", it.rect) }) +
+                    lowerBuild.debugRegions +
+                    visibleRegions.map { DebugRegion(actualDebugName(it.name), Rect(it.rect)) }
+            if (lowerRegions.isEmpty()) {
+                callback(
+                    OrderRegionText(
+                        fullText = "",
+                        isPairOffer = false,
+                        hasAnchoredCard = true,
+                        anchorDebugInfo = lowerBuild.debugInfo,
+                        debugRegions = debugRegions,
+                        cardText = "",
+                        typeText = upperResults["type"].orEmpty(),
+                        priceText = upperResults["price"].orEmpty(),
+                        tripText = upperResults["trip"].orEmpty(),
+                        detailText = "",
+                        sameDropoffText = sameDropoffText,
+                        merchantText = "",
+                        merchantWideText = "",
+                        addressText = "",
+                        addressWideText = "",
+                        addressLowerText = "",
+                        ocrPreprocessDebugInfo = preprocessDebugInfo(allRegions)
+                    )
+                )
+                return@runRegions
+            }
+            runRegions(lowerRegions) { lowerResults ->
+                callback(
+                    OrderRegionText(
+                        fullText = "",
+                        isPairOffer = false,
+                        hasAnchoredCard = hasAnchoredCard,
+                        anchorDebugInfo = lowerBuild.debugInfo,
+                        debugRegions = debugRegions,
+                        cardText = "",
+                        typeText = upperResults["type"].orEmpty(),
+                        priceText = upperResults["price"].orEmpty(),
+                        tripText = upperResults["trip"].orEmpty(),
+                        detailText = "",
+                        sameDropoffText = sameDropoffText,
+                        merchantText = lowerResults["merchant"].orEmpty(),
+                        merchantWideText = lowerResults["merchantWide"].orEmpty(),
+                        addressText = lowerResults["address"].orEmpty(),
+                        addressWideText = lowerResults["addressWide"].orEmpty(),
+                        addressLowerText = "",
+                        ocrPreprocessDebugInfo = preprocessDebugInfo(allRegions)
+                    )
+                )
+            }
+        }
+    }
+
+    private fun runRegions(regions: List<RegionCrop>, callback: (Map<String, String>) -> Unit) {
         val results = mutableMapOf<String, String>()
         var remaining = regions.size
         val lock = Any()
+        if (regions.isEmpty()) {
+            callback(emptyMap())
+            return
+        }
 
         fun finishOne(key: String, text: String) {
             synchronized(lock) {
                 results[key] = text
                 remaining -= 1
                 if (remaining == 0) {
-                    callback(
-                        OrderRegionText(
-                            fullText = "",
-                            isPairOffer = false,
-                            hasAnchoredCard = hasAnchoredCard,
-                            anchorDebugInfo = anchorDebugInfo,
-                            debugRegions = debugRegions,
-                            cardText = results["card"].orEmpty(),
-                            typeText = results["type"].orEmpty(),
-                            priceText = results["price"].orEmpty(),
-                            tripText = results["trip"].orEmpty(),
-                            detailText = results["detail"].orEmpty(),
-                            sameDropoffText = results["sameDropoff"].orEmpty(),
-                            merchantText = results["merchant"].orEmpty(),
-                            merchantWideText = results["merchantWide"].orEmpty(),
-                            addressText = results["address"].orEmpty(),
-                            addressWideText = results["addressWide"].orEmpty(),
-                            addressLowerText = results["addressLower"].orEmpty(),
-                            ocrPreprocessDebugInfo = preprocessDebugInfo(regions)
-                        )
-                    )
+                    callback(results.toMap())
                 }
             }
         }
@@ -152,6 +221,10 @@ object OcrHelper {
                 runMlKitRegion(region.bitmap) { text -> finishOne(region.name, text) }
             }
         }
+    }
+
+    private fun isSameDropoffText(text: String): Boolean {
+        return text.contains("同") && (text.contains("送達") || text.contains("送达") || text.contains("相同"))
     }
 
     private fun runMlKitRegion(bitmap: Bitmap, callback: (String) -> Unit) {
@@ -197,7 +270,80 @@ object OcrHelper {
         val bottom: Int,
         val pickupY: Int,
         val dropoffY: Int,
-        val searchRect: Rect
+        val pickupRect: Rect,
+        val dropoffRect: Rect,
+        val pickupSearchRect: Rect,
+        val dropoffSearchRect: Rect,
+        val pickupDetection: ShapeDetectionResult,
+        val dropoffDetection: ShapeDetectionResult
+    )
+
+    private data class ShapeCandidate(
+        val rect: Rect,
+        val centerX: Int,
+        val centerY: Int,
+        val darkPixels: Int,
+        val area: Int,
+        val fillRatio: Float,
+        val centerDarkRatio: Float,
+        val aspectRatio: Float,
+        val edgePixelRatio: Float,
+        val circularity: Float,
+        val rectangularity: Float,
+        val cornerRatio: Float
+    )
+
+    private data class CandidateDebug(
+        val index: Int,
+        val candidate: ShapeCandidate,
+        val accepted: Boolean,
+        val rejectReason: String
+    )
+
+    private data class ShapeDetectionResult(
+        val center: Pair<Int, Int>?,
+        val actualRect: Rect?,
+        val acceptedRects: List<Rect>,
+        val rejectedByShapeRects: List<Rect>,
+        val rejectedBySizeRects: List<Rect>,
+        val candidates: List<CandidateDebug>,
+        val expectedSize: Int,
+        val candidateCount: Int,
+        val acceptedCount: Int,
+        val rejectedByShape: Int,
+        val rejectedBySize: Int
+    ) {
+        val detected: Boolean get() = center != null && actualRect != null
+    }
+
+    private data class AnchorConflict(
+        val hasConflict: Boolean,
+        val reason: String? = null,
+        val distance: Int? = null
+    )
+
+    private data class DeliveryAnchorProbe(
+        val anchor: DeliveryAnchor?,
+        val pickupDetection: ShapeDetectionResult,
+        val dropoffDetection: ShapeDetectionResult,
+        val pickupSearchRect: Rect?,
+        val dropoffSearchRect: Rect?
+    )
+
+    private data class LayoutDecision(
+        val merchantRows: Int,
+        val addressRows: Int,
+        val selectedTemplate: String,
+        val baseGap: Int,
+        val detectedGap: Int?,
+        val dropoffShift: Int?,
+        val fallbackUsed: Boolean
+    )
+
+    private data class LowerBuildResult(
+        val regions: List<RegionCrop>,
+        val debugInfo: AnchorDebugInfo,
+        val debugRegions: List<DebugRegion>
     )
 
     private data class RegionCrop(
@@ -216,79 +362,688 @@ object OcrHelper {
         val extraLines: Int get() = (merchantLines - 1) + (addressLines - 1)
     }
 
-    private fun buildAnchoredRegions(
+    private fun buildUpperRegions(
         context: Context,
         bitmap: Bitmap,
         closeButton: CloseButton?
     ): List<RegionCrop>? {
         val close = closeButton ?: return null
-        val card = findCardRect(bitmap, close)
-        val cardHeight = card.height().coerceAtLeast(1)
-        val cardWidth = card.width().coerceAtLeast(1)
-        val contentBottom = (card.bottom - cardHeight * 0.08f).toInt().coerceIn(card.top + 1, card.bottom)
-        val anchor = findDeliveryAnchor(context, bitmap, card, contentBottom, close.deltaY) ?: return null
-
-        fun x(relative: Float): Int = (card.left + cardWidth * relative).toInt()
-        fun y(relative: Float): Int = (card.top + cardHeight * relative).toInt()
-
-        val detailRight = (card.right - cardWidth * 0.05f).toInt()
-
-        val merchantTop = (anchor.pickupY - cardHeight * 0.065f).toInt()
-        val merchantBottom = (anchor.pickupY + cardHeight * 0.075f).toInt()
-        val addressTop = (anchor.dropoffY - cardHeight * 0.115f).toInt()
-        val addressBottom = (contentBottom - cardHeight * 0.03f).toInt()
-            .coerceAtLeast(addressTop + 1)
-        val merchantFallback = rect(bitmap, x(0.145f), merchantTop, detailRight, merchantBottom)
-        val addressFallback = rect(bitmap, x(0.145f), addressTop, detailRight, addressBottom)
-        val template = detectOfferLayoutTemplate(context, bitmap, card, anchor)
-        val fallbackTemplate = template.copy(addressLines = 1)
-        val merchantRect = anchoredTextRect(context, bitmap, "merchant", "pickupAnchor", anchor.lineX, anchor.pickupY, template.merchantLines, template.lineHeight, merchantFallback)
-        val addressRect = anchoredTextRect(context, bitmap, "address", "dropoffAnchor", anchor.lineX, anchor.dropoffY, template.addressLines, template.lineHeight, addressFallback)
-        val fallbackAddressRect = anchoredTextRect(context, bitmap, "addressWide", "dropoffAnchor", anchor.lineX, anchor.dropoffY, fallbackTemplate.addressLines, fallbackTemplate.lineHeight, addressFallback)
-        val typeRect = anchoredTemplateRect(
-            context = context,
-            bitmap = bitmap,
-            textName = "type",
-            iconName = "pickupAnchor",
-            detectedIconX = anchor.lineX,
-            detectedIconY = anchor.pickupY,
-            fallback = rect(bitmap, x(0.03f), y(0.02f), x(0.55f), y(0.14f))
-        )
-        val priceRect = anchoredTemplateRect(
-            context = context,
-            bitmap = bitmap,
-            textName = "price",
-            iconName = "pickupAnchor",
-            detectedIconX = anchor.lineX,
-            detectedIconY = anchor.pickupY,
-            fallback = rect(bitmap, x(0.03f), y(0.13f), x(0.50f), y(0.33f))
-        )
-        val tripRect = anchoredTemplateRect(
-            context = context,
-            bitmap = bitmap,
-            textName = "trip",
-            iconName = "pickupAnchor",
-            detectedIconX = anchor.lineX,
-            detectedIconY = anchor.pickupY,
-            fallback = rect(bitmap, x(0.03f), y(0.32f), x(0.92f), y(0.48f))
-        )
-        val sameDropoffRect = calibratedPixelRect(context, bitmap, "sameDropoff", close.deltaY)
-            ?: rect(bitmap, x(0.20f), y(0.42f), x(0.92f), y(0.50f))
+        val card = calibratedPixelRect(context, bitmap, "card", close.deltaY)
+            ?.let { expandCardRect(bitmap, it) }
+            ?: findCardRect(bitmap, close)
+        val lineHeight = estimateLineHeight(context, bitmap, card)
+        val typeRect = calibratedPixelRect(context, bitmap, "type", close.deltaY)
+            ?: rect(bitmap, 0.03f, 0.50f, 0.55f, 0.60f)
+        val priceRect = calibratedPixelRect(context, bitmap, "price", close.deltaY)
+            ?: rect(bitmap, 0.03f, 0.56f, 0.50f, 0.66f)
+        val tripRect = calibratedPixelRect(context, bitmap, "trip", close.deltaY)
+            ?: rect(bitmap, 0.12f, 0.64f, 0.94f, 0.74f)
+        val sameDropoffRect = calibratedPixelRect(context, bitmap, "sameDropoff")
+            ?: rect(bitmap, 0.16f, 0.82f, 0.92f, 0.88f)
 
         return listOf(
             RegionCrop("card", card, blankBitmap()),
-            RegionCrop("deliveryAnchorSearch", Rect(anchor.searchRect), blankBitmap()),
             region(bitmap, "type", typeRect, prepare = true),
             region(bitmap, "price", priceRect, prepare = true),
             region(bitmap, "trip", tripRect, prepare = true),
-            region(bitmap, "sameDropoff", sameDropoffRect, prepare = true),
-            region(bitmap, "merchant", merchantRect, prepare = true),
-            region(bitmap, "address", addressRect, prepare = true),
-            if (close.deltaY != 0) {
-                region(bitmap, "addressWide", fallbackAddressRect, prepare = true)
+            region(bitmap, "sameDropoff", sameDropoffRect, prepare = true)
+        )
+    }
+
+    private fun buildLowerRegions(
+        context: Context,
+        bitmap: Bitmap,
+        closeButton: CloseButton?,
+        sameDropoffMatched: Boolean
+    ): LowerBuildResult {
+        val close = closeButton ?: return LowerBuildResult(
+            regions = emptyList(),
+            debugInfo = buildAnchorDebugInfo(context, bitmap, closeButton),
+            debugRegions = emptyList()
+        )
+        val templateClose = calibratedPixelRect(context, bitmap, "closeButton")
+        val card = calibratedPixelRect(context, bitmap, "card", close.deltaY)
+            ?.let { expandCardRect(bitmap, it) }
+            ?: findCardRect(bitmap, close)
+        val lineHeight = estimateLineHeight(context, bitmap, card)
+        val lowerShiftY = if (sameDropoffMatched) -lineHeight else 0
+        val basePickup = calibratedPixelRect(context, bitmap, "pickupAnchor", lowerShiftY)
+        val baseDropoff = calibratedPixelRect(context, bitmap, "dropoffAnchor", lowerShiftY)
+        val anchorProbe = findSeparatedDeliveryAnchor(context, bitmap, lowerShiftY, lineHeight)
+        val anchor = anchorProbe.anchor
+        val conflict = detectAnchorConflict(anchor, lineHeight)
+        val decision = decideLayoutFromGeometry(
+            anchor = anchor,
+            conflict = conflict,
+            basePickupY = basePickup?.centerY(),
+            baseDropoffY = baseDropoff?.centerY(),
+            lineHeight = lineHeight
+        )
+        val tripActualRect = calibratedPixelRect(context, bitmap, "trip", close.deltaY)
+        val merchantLong = guardMerchantBelowTrip(
+            bitmap = bitmap,
+            merchant = m2A2TextRect(context, bitmap, "merchant", lowerShiftY, lineHeight),
+            trip = tripActualRect,
+            lineHeight = lineHeight
+        )
+        val merchantShort = oneLineRect(bitmap, merchantLong, lineHeight)
+        val addressLong = m2A2TextRect(context, bitmap, "address", lowerShiftY, lineHeight)
+        val addressShort = oneLineRect(bitmap, addressLong, lineHeight)
+        val merchantRect = if (decision.merchantRows >= 2) merchantLong else merchantShort
+        val addressRect = if (decision.addressRows >= 2) addressLong else addressShort
+        val debugInfo = AnchorDebugInfo(
+            anchorSource = if (decision.fallbackUsed) "GEOMETRY_FALLBACK_M2_A2" else "GEOMETRY_PICKUP_DROPOFF",
+            pickupDetected = anchorProbe.pickupDetection.detected,
+            dropoffDetected = anchorProbe.dropoffDetection.detected,
+            sameDropoffMatched = sameDropoffMatched,
+            merchantRows = decision.merchantRows,
+            addressRows = decision.addressRows,
+            selectedTemplate = decision.selectedTemplate,
+            lineHeight = lineHeight,
+            pickupY = anchor?.pickupY,
+            dropoffY = anchor?.dropoffY,
+            baseGap = decision.baseGap,
+            detectedGap = decision.detectedGap,
+            dropoffShift = decision.dropoffShift,
+            anchorConflict = conflict.hasConflict,
+            anchorConflictReason = conflict.reason,
+            pickupDetectDebug = detectorDebugText("PICKUP_DETECT_DEBUG", anchorProbe.pickupDetection),
+            dropoffDetectDebug = detectorDebugText("DROPOFF_DETECT_DEBUG", anchorProbe.dropoffDetection),
+            templateCloseY = templateClose?.centerY(),
+            actualCloseY = close.rect.centerY(),
+            closeShiftY = close.deltaY,
+            pickupAnchorRect = anchor?.pickupRect,
+            dropoffAnchorRect = anchor?.dropoffRect,
+            pickupSearchRect = anchorProbe.pickupSearchRect ?: pickupCircleSearchRect(context, bitmap, lowerShiftY),
+            dropoffSearchRect = anchorProbe.dropoffSearchRect ?: dropoffSquareSearchRect(context, bitmap, lowerShiftY),
+            cardRect = card,
+            closeButtonRect = close.rect,
+            priceRect = calibratedPixelRect(context, bitmap, "price", close.deltaY),
+            tripRect = tripActualRect,
+            merchantRect = merchantRect,
+            addressRect = addressRect
+        )
+        val debugRegions = buildList {
+            debugInfo.pickupSearchRect?.let { add(DebugRegion("pickupSearchRect", it)) }
+            debugInfo.dropoffSearchRect?.let { add(DebugRegion("dropoffSearchRect", it)) }
+            addAll(candidateDebugRegions("pickupCandidate", anchorProbe.pickupDetection))
+            addAll(candidateDebugRegions("dropoffCandidate", anchorProbe.dropoffDetection))
+            if (anchorProbe.pickupDetection.detected) {
+                anchor?.pickupRect?.let { add(DebugRegion("pickupDetectedRect", it)) }
             } else {
-                RegionCrop("addressWide", fallbackAddressRect, blankBitmap())
+                debugInfo.pickupSearchRect?.let { add(DebugRegion("pickupNotDetected", it)) }
             }
+            if (anchorProbe.dropoffDetection.detected) {
+                anchor?.dropoffRect?.let { add(DebugRegion("dropoffDetectedRect", it)) }
+            } else {
+                debugInfo.dropoffSearchRect?.let { add(DebugRegion("dropoffNotDetected", it)) }
+            }
+        }
+        return LowerBuildResult(
+            regions = listOf(
+                region(bitmap, "merchant", merchantRect, prepare = true),
+                region(bitmap, "address", addressRect, prepare = true)
+            ),
+            debugInfo = debugInfo,
+            debugRegions = debugRegions
+        )
+    }
+
+    private fun oneLineRect(bitmap: Bitmap, longRect: Rect, lineHeight: Int): Rect {
+        val height = minOf(longRect.height(), (lineHeight * 1.25f).toInt().coerceAtLeast(1))
+        return rect(bitmap, longRect.left, longRect.top, longRect.right, longRect.top + height)
+    }
+
+    private fun guardMerchantBelowTrip(bitmap: Bitmap, merchant: Rect, trip: Rect?, lineHeight: Int): Rect {
+        val minTop = (trip?.bottom ?: return merchant) + 20
+        if (merchant.top > minTop) return merchant
+        val height = merchant.height().coerceAtLeast((lineHeight * 1.6f).toInt().coerceAtLeast(1))
+        return rect(
+            bitmap = bitmap,
+            left = merchant.left,
+            top = minTop,
+            right = merchant.right,
+            bottom = minTop + height
+        )
+    }
+
+    private fun candidateDebugRegions(prefix: String, detection: ShapeDetectionResult): List<DebugRegion> {
+        return buildList {
+            detection.candidates.forEach { item ->
+                val c = item.candidate
+                val state = if (item.accepted) "ACCEPTED" else item.rejectReason
+                add(
+                    DebugRegion(
+                        "${prefix}#${item.index} ${c.rect.width()}x${c.rect.height()} fill=${fmt(c.fillRatio)} center=${fmt(c.centerDarkRatio)} $state",
+                        c.rect
+                    )
+                )
+            }
+        }
+    }
+
+    private fun m2A2TextRect(
+        context: Context,
+        bitmap: Bitmap,
+        name: String,
+        shiftY: Int,
+        lineHeight: Int
+    ): Rect {
+        return when (name) {
+            "merchant" -> widenedMerchantRect(context, bitmap, shiftY, lineHeight)
+            "address" -> widenedAddressRect(context, bitmap, shiftY, lineHeight)
+            else -> calibratedPixelRect(context, bitmap, name, shiftY) ?: rect(bitmap, 0, 0, 1, 1)
+        }
+    }
+
+    private fun decideLayoutFromGeometry(
+        anchor: DeliveryAnchor?,
+        conflict: AnchorConflict,
+        basePickupY: Int?,
+        baseDropoffY: Int?,
+        lineHeight: Int
+    ): LayoutDecision {
+        val baseGap = if (basePickupY != null && baseDropoffY != null) {
+            (baseDropoffY - basePickupY).coerceAtLeast(1)
+        } else {
+            (lineHeight * 2.0f).toInt().coerceAtLeast(1)
+        }
+        if (anchor == null || baseDropoffY == null || conflict.hasConflict) {
+            return LayoutDecision(
+                merchantRows = 2,
+                addressRows = 2,
+                selectedTemplate = "M2+A2",
+                baseGap = baseGap,
+                detectedGap = null,
+                dropoffShift = null,
+                fallbackUsed = true
+            )
+        }
+        val dropoffShift = anchor.dropoffY - baseDropoffY
+        val addressRows = if (dropoffShift >= lineHeight * 0.5f) 1 else 2
+        val detectedGap = (anchor.dropoffY - anchor.pickupY).coerceAtLeast(1)
+        val merchantRows = if (detectedGap <= baseGap - lineHeight * 0.5f) 1 else 2
+        return LayoutDecision(
+            merchantRows = merchantRows,
+            addressRows = addressRows,
+            selectedTemplate = "M${merchantRows}+A${addressRows}",
+            baseGap = baseGap,
+            detectedGap = detectedGap,
+            dropoffShift = dropoffShift,
+            fallbackUsed = false
+        )
+    }
+
+    private fun findSeparatedDeliveryAnchor(
+        context: Context,
+        bitmap: Bitmap,
+        lowerShiftY: Int,
+        lineHeight: Int
+    ): DeliveryAnchorProbe {
+        val emptyDetection = emptyShapeDetection()
+        val pickupTemplate = calibratedPixelRect(context, bitmap, "pickupAnchor", lowerShiftY)
+            ?: return DeliveryAnchorProbe(null, emptyDetection, emptyDetection, null, null)
+        val dropoffTemplate = calibratedPixelRect(context, bitmap, "dropoffAnchor", lowerShiftY)
+            ?: return DeliveryAnchorProbe(null, emptyDetection, emptyDetection, null, null)
+        val fixedLineX = ((pickupTemplate.centerX() + dropoffTemplate.centerX()) / 2f).toInt()
+        val pickupSearch = pickupCircleSearchRect(context, bitmap, lowerShiftY)
+        val dropoffSearch = dropoffSquareSearchRect(context, bitmap, lowerShiftY)
+        val pickupDetection = detectPickupCircle(bitmap, pickupSearch, fixedLineX, lineHeight)
+        val dropoffDetection = detectDropoffSquare(bitmap, dropoffSearch, fixedLineX, lineHeight)
+        if (!pickupDetection.detected || !dropoffDetection.detected) {
+            return DeliveryAnchorProbe(null, pickupDetection, dropoffDetection, pickupSearch, dropoffSearch)
+        }
+        val pickupCenter = pickupDetection.center
+            ?: return DeliveryAnchorProbe(null, pickupDetection, dropoffDetection, pickupSearch, dropoffSearch)
+        val dropoffCenter = dropoffDetection.center
+            ?: return DeliveryAnchorProbe(null, pickupDetection, dropoffDetection, pickupSearch, dropoffSearch)
+        val pickupRect = centerTemplateAtFixedX(bitmap, pickupTemplate, fixedLineX, pickupCenter.second)
+        val dropoffRect = centerTemplateAtFixedX(bitmap, dropoffTemplate, fixedLineX, dropoffCenter.second)
+        val anchor = DeliveryAnchor(
+            lineX = fixedLineX,
+            top = minOf(pickupRect.centerY(), dropoffRect.centerY()),
+            bottom = maxOf(pickupRect.centerY(), dropoffRect.centerY()),
+            pickupY = pickupRect.centerY(),
+            dropoffY = dropoffRect.centerY(),
+            pickupRect = pickupRect,
+            dropoffRect = dropoffRect,
+            pickupSearchRect = pickupSearch,
+            dropoffSearchRect = dropoffSearch,
+            pickupDetection = pickupDetection,
+            dropoffDetection = dropoffDetection
+        )
+        return DeliveryAnchorProbe(anchor, pickupDetection, dropoffDetection, pickupSearch, dropoffSearch)
+    }
+
+    private fun detectPickupCircle(
+        bitmap: Bitmap,
+        searchRect: Rect,
+        fixedLineX: Int,
+        lineHeight: Int
+    ): ShapeDetectionResult {
+        return detectShape(
+            bitmap = bitmap,
+            searchRect = searchRect,
+            fixedLineX = fixedLineX,
+            lineHeight = lineHeight,
+            expectCircle = true
+        )
+    }
+
+    private fun detectDropoffSquare(
+        bitmap: Bitmap,
+        searchRect: Rect,
+        fixedLineX: Int,
+        lineHeight: Int
+    ): ShapeDetectionResult {
+        return detectShape(
+            bitmap = bitmap,
+            searchRect = searchRect,
+            fixedLineX = fixedLineX,
+            lineHeight = lineHeight,
+            expectCircle = false
+        )
+    }
+
+    private fun detectShape(
+        bitmap: Bitmap,
+        searchRect: Rect,
+        fixedLineX: Int,
+        lineHeight: Int,
+        expectCircle: Boolean
+    ): ShapeDetectionResult {
+        val candidates = collectDarkComponents(bitmap, searchRect, lineHeight)
+        var rejectedByShape = 0
+        var rejectedBySize = 0
+        val acceptedRects = mutableListOf<Rect>()
+        val rejectedByShapeRects = mutableListOf<Rect>()
+        val rejectedBySizeRects = mutableListOf<Rect>()
+        val candidateDebug = mutableListOf<CandidateDebug>()
+        val accepted = candidates.mapIndexedNotNull { index, candidate ->
+            val sizeRejectReason = anchorSizeRejectReason(candidate, lineHeight, expectCircle)
+            val shapeRejectReason = anchorShapeRejectReason(candidate)
+            when {
+                sizeRejectReason != null -> {
+                    rejectedBySize += 1
+                    rejectedBySizeRects.add(candidate.rect)
+                    candidateDebug.add(CandidateDebug(index + 1, candidate, accepted = false, rejectReason = sizeRejectReason))
+                    null
+                }
+                shapeRejectReason != null -> {
+                    rejectedByShape += 1
+                    rejectedByShapeRects.add(candidate.rect)
+                    candidateDebug.add(CandidateDebug(index + 1, candidate, accepted = false, rejectReason = shapeRejectReason))
+                    null
+                }
+                else -> {
+                    acceptedRects.add(candidate.rect)
+                    candidateDebug.add(CandidateDebug(index + 1, candidate, accepted = true, rejectReason = "ACCEPTED"))
+                    candidate
+                }
+            }
+        }
+        val selected = accepted.minByOrNull { candidate ->
+            val dx = kotlin.math.abs(candidate.centerX - fixedLineX)
+            val expectedSize = expectedAnchorSize(lineHeight)
+            val actualSize = (candidate.rect.width() + candidate.rect.height()) / 2
+            val sizePenalty = kotlin.math.abs(actualSize - expectedSize)
+            val aspectPenalty = (kotlin.math.abs(1f - candidate.aspectRatio) * lineHeight).toInt()
+            val fillReward = (candidate.fillRatio * 40f).toInt()
+            val centerReward = (candidate.centerDarkRatio * 60f).toInt()
+            dx + sizePenalty + aspectPenalty - fillReward - centerReward
+        }
+        val actualRect = selected?.let {
+            centerRect(bitmap, fixedLineX, it.centerY, it.rect.width().coerceAtLeast(2), it.rect.height().coerceAtLeast(2))
+        }
+        return ShapeDetectionResult(
+            center = selected?.let { fixedLineX to it.centerY },
+            actualRect = actualRect,
+            acceptedRects = acceptedRects,
+            rejectedByShapeRects = rejectedByShapeRects,
+            rejectedBySizeRects = rejectedBySizeRects,
+            candidates = candidateDebug,
+            expectedSize = expectedAnchorSize(lineHeight),
+            candidateCount = candidates.size,
+            acceptedCount = accepted.size,
+            rejectedByShape = rejectedByShape,
+            rejectedBySize = rejectedBySize
+        )
+    }
+
+    private fun collectDarkComponents(bitmap: Bitmap, searchRect: Rect, lineHeight: Int): List<ShapeCandidate> {
+        val width = searchRect.width().coerceAtLeast(1)
+        val height = searchRect.height().coerceAtLeast(1)
+        val visited = BooleanArray(width * height)
+        val candidates = mutableListOf<ShapeCandidate>()
+        fun index(localX: Int, localY: Int) = localY * width + localX
+
+        var localY = 0
+        while (localY < height) {
+            var localX = 0
+            while (localX < width) {
+                val idx = index(localX, localY)
+                val pixelX = searchRect.left + localX
+                val pixelY = searchRect.top + localY
+                if (!visited[idx] && isAnchorDarkPixel(bitmap.getPixel(pixelX, pixelY))) {
+                    val stack = ArrayDeque<Pair<Int, Int>>()
+                    stack.add(localX to localY)
+                    visited[idx] = true
+                    var minX = localX
+                    var maxX = localX
+                    var minY = localY
+                    var maxY = localY
+                    var darkPixels = 0
+                    while (stack.isNotEmpty()) {
+                        val (cx, cy) = stack.removeLast()
+                        darkPixels += 1
+                        minX = minOf(minX, cx)
+                        maxX = maxOf(maxX, cx)
+                        minY = minOf(minY, cy)
+                        maxY = maxOf(maxY, cy)
+                        for (ny in (cy - 1)..(cy + 1)) {
+                            for (nx in (cx - 1)..(cx + 1)) {
+                                if (nx !in 0 until width || ny !in 0 until height) continue
+                                val nextIdx = index(nx, ny)
+                                if (visited[nextIdx]) continue
+                                visited[nextIdx] = true
+                                if (isAnchorDarkPixel(bitmap.getPixel(searchRect.left + nx, searchRect.top + ny))) {
+                                    stack.add(nx to ny)
+                                }
+                            }
+                        }
+                    }
+                    val rect = Rect(
+                        searchRect.left + minX,
+                        searchRect.top + minY,
+                        searchRect.left + maxX + 1,
+                        searchRect.top + maxY + 1
+                    )
+                    val candidate = shapeCandidateFromRect(bitmap, rect, darkPixels)
+                    candidates.add(candidate)
+                    candidates.addAll(splitElongatedComponent(bitmap, rect, lineHeight))
+                } else {
+                    visited[idx] = true
+                }
+                localX += 1
+            }
+            localY += 1
+        }
+        return candidates
+    }
+
+    private fun shapeCandidateFromRect(bitmap: Bitmap, rect: Rect, knownDarkPixels: Int? = null): ShapeCandidate {
+        val darkPixels = knownDarkPixels ?: countAnchorDarkPixels(bitmap, rect)
+        val area = rect.width().coerceAtLeast(1) * rect.height().coerceAtLeast(1)
+        val aspect = rect.width().toFloat() / rect.height().toFloat().coerceAtLeast(1f)
+        val fill = darkPixels.toFloat() / area.toFloat()
+        val centerRatio = centerDarkRatio(bitmap, rect)
+        val edgeRatio = edgeDarkRatio(bitmap, rect, darkPixels)
+        val roundness = minOf(aspect, 1f / aspect.coerceAtLeast(0.001f)).coerceIn(0f, 1f)
+        val circularity = (roundness * (0.45f + edgeRatio * 0.55f)).coerceIn(0f, 1f)
+        val rectangularity = (roundness * (0.35f + edgeRatio * 0.65f)).coerceIn(0f, 1f)
+        return ShapeCandidate(
+            rect = rect,
+            centerX = rect.centerX(),
+            centerY = rect.centerY(),
+            darkPixels = darkPixels,
+            area = area,
+            fillRatio = fill,
+            centerDarkRatio = centerRatio,
+            aspectRatio = aspect,
+            edgePixelRatio = edgeRatio,
+            circularity = circularity,
+            rectangularity = rectangularity,
+            cornerRatio = cornerDarkRatio(bitmap, rect)
+        )
+    }
+
+    private fun splitElongatedComponent(bitmap: Bitmap, rect: Rect, lineHeight: Int): List<ShapeCandidate> {
+        val aspect = rect.width().toFloat() / rect.height().toFloat().coerceAtLeast(1f)
+        val elongated = aspect < 0.35f || aspect > 3.2f
+        if (!elongated) return emptyList()
+        val window = minOf(
+            maxOf(rect.width(), rect.height()),
+            (lineHeight * 0.72f).toInt().coerceAtLeast(16)
+        ).coerceAtLeast(8)
+        val step = (window * 0.35f).toInt().coerceAtLeast(4)
+        val local = mutableListOf<ShapeCandidate>()
+        if (rect.height() >= rect.width()) {
+            var top = rect.top
+            while (top < rect.bottom) {
+                val centerY = (top + window / 2).coerceAtMost(rect.bottom)
+                val slice = rect(
+                    bitmap,
+                    rect.centerX() - window / 2,
+                    centerY - window / 2,
+                    rect.centerX() + window / 2,
+                    centerY + window / 2
+                )
+                val dark = countAnchorDarkPixels(bitmap, slice)
+                if (dark >= 3) local.add(shapeCandidateFromRect(bitmap, slice, dark))
+                top += step
+            }
+        } else {
+            var left = rect.left
+            while (left < rect.right) {
+                val centerX = (left + window / 2).coerceAtMost(rect.right)
+                val slice = rect(
+                    bitmap,
+                    centerX - window / 2,
+                    rect.centerY() - window / 2,
+                    centerX + window / 2,
+                    rect.centerY() + window / 2
+                )
+                val dark = countAnchorDarkPixels(bitmap, slice)
+                if (dark >= 3) local.add(shapeCandidateFromRect(bitmap, slice, dark))
+                left += step
+            }
+        }
+        return local
+    }
+
+    private fun countAnchorDarkPixels(bitmap: Bitmap, rect: Rect): Int {
+        var count = 0
+        var y = rect.top.coerceAtLeast(0)
+        while (y < rect.bottom.coerceAtMost(bitmap.height)) {
+            var x = rect.left.coerceAtLeast(0)
+            while (x < rect.right.coerceAtMost(bitmap.width)) {
+                if (isAnchorDarkPixel(bitmap.getPixel(x, y))) count += 1
+                x += 1
+            }
+            y += 1
+        }
+        return count
+    }
+
+    private fun cornerDarkRatio(bitmap: Bitmap, rect: Rect): Float {
+        val cornerSize = (minOf(rect.width(), rect.height()) * 0.28f).toInt().coerceAtLeast(2)
+        val corners = listOf(
+            Rect(rect.left, rect.top, rect.left + cornerSize, rect.top + cornerSize),
+            Rect(rect.right - cornerSize, rect.top, rect.right, rect.top + cornerSize),
+            Rect(rect.left, rect.bottom - cornerSize, rect.left + cornerSize, rect.bottom),
+            Rect(rect.right - cornerSize, rect.bottom - cornerSize, rect.right, rect.bottom)
+        )
+        var dark = 0
+        var total = 0
+        corners.forEach { corner ->
+            var y = corner.top.coerceAtLeast(0)
+            while (y < corner.bottom.coerceAtMost(bitmap.height)) {
+                var x = corner.left.coerceAtLeast(0)
+                while (x < corner.right.coerceAtMost(bitmap.width)) {
+                    total += 1
+                    if (isAnchorDarkPixel(bitmap.getPixel(x, y))) dark += 1
+                    x += 1
+                }
+                y += 1
+            }
+        }
+        return if (total == 0) 0f else dark.toFloat() / total.toFloat()
+    }
+
+    private fun edgeDarkRatio(bitmap: Bitmap, rect: Rect, darkPixels: Int): Float {
+        if (darkPixels <= 0) return 0f
+        val band = (minOf(rect.width(), rect.height()) * 0.24f).toInt().coerceAtLeast(1)
+        var edgeDark = 0
+        var y = rect.top.coerceAtLeast(0)
+        while (y < rect.bottom.coerceAtMost(bitmap.height)) {
+            var x = rect.left.coerceAtLeast(0)
+            while (x < rect.right.coerceAtMost(bitmap.width)) {
+                val nearEdge = x - rect.left < band ||
+                    rect.right - x <= band ||
+                    y - rect.top < band ||
+                    rect.bottom - y <= band
+                if (nearEdge && isAnchorDarkPixel(bitmap.getPixel(x, y))) edgeDark += 1
+                x += 1
+            }
+            y += 1
+        }
+        return (edgeDark.toFloat() / darkPixels.toFloat()).coerceIn(0f, 1f)
+    }
+
+    private fun centerDarkRatio(bitmap: Bitmap, rect: Rect): Float {
+        val insetX = (rect.width() * 0.25f).toInt()
+        val insetY = (rect.height() * 0.25f).toInt()
+        val center = Rect(
+            rect.left + insetX,
+            rect.top + insetY,
+            rect.right - insetX,
+            rect.bottom - insetY
+        )
+        val safe = rect(bitmap, center.left, center.top, center.right, center.bottom)
+        val total = safe.width().coerceAtLeast(1) * safe.height().coerceAtLeast(1)
+        return countAnchorDarkPixels(bitmap, safe).toFloat() / total.toFloat()
+    }
+
+    private fun expectedAnchorSize(lineHeight: Int): Int {
+        return (lineHeight * 0.36f).toInt().coerceAtLeast(8)
+    }
+
+    private fun anchorSizeRejectReason(candidate: ShapeCandidate, lineHeight: Int, expectCircle: Boolean): String? {
+        val minAnchorSize = maxOf(8, (lineHeight * 0.12f).toInt())
+        val maxAnchorSize = (lineHeight * 0.8f).toInt().coerceAtLeast(minAnchorSize)
+        return when {
+            candidate.rect.width() < minAnchorSize -> "SIZE_TOO_SMALL"
+            candidate.rect.height() < minAnchorSize -> "SIZE_TOO_SMALL"
+            candidate.rect.width() > maxAnchorSize -> "SIZE_TOO_LARGE"
+            candidate.rect.height() > maxAnchorSize -> "SIZE_TOO_LARGE"
+            else -> null
+        }
+    }
+
+    private fun anchorShapeRejectReason(candidate: ShapeCandidate): String? {
+        return when {
+            candidate.aspectRatio !in 0.6f..1.6f -> "ASPECT_RATIO_OUT_OF_RANGE"
+            candidate.fillRatio < 0.45f -> "FILL_RATIO_TOO_LOW"
+            candidate.centerDarkRatio < 0.35f -> "CENTER_DARK_RATIO_TOO_LOW"
+            else -> null
+        }
+    }
+
+    private fun detectAnchorConflict(anchor: DeliveryAnchor?, lineHeight: Int): AnchorConflict {
+        anchor ?: return AnchorConflict(false)
+        val distance = kotlin.math.abs(anchor.dropoffY - anchor.pickupY)
+        return if (distance < lineHeight * 0.25f) {
+            AnchorConflict(
+                hasConflict = true,
+                reason = "SAME_OR_TOO_CLOSE",
+                distance = distance
+            )
+        } else {
+            AnchorConflict(false, distance = distance)
+        }
+    }
+
+    private fun detectorDebugText(tag: String, detection: ShapeDetectionResult): String {
+        return buildString {
+            appendLine(tag)
+            appendLine("candidateCount=${detection.candidateCount}")
+            appendLine("acceptedCount=${detection.acceptedCount}")
+            appendLine("rejectedByShape=${detection.rejectedByShape}")
+            appendLine("rejectedBySize=${detection.rejectedBySize}")
+            appendLine("selectedCenterX=${detection.center?.first ?: ""}")
+            appendLine("selectedCenterY=${detection.center?.second ?: ""}")
+            appendLine("thresholds=minAnchorSize=max(8,lineHeight*0.12) maxAnchorSize=lineHeight*0.8 aspectRatio=0.6..1.6 fillRatio>=0.45 centerDarkRatio>=0.35")
+            detection.candidates.forEach { item ->
+                val c = item.candidate
+                val actualSize = (c.rect.width() + c.rect.height()) / 2
+                appendLine("Candidate#${item.index}")
+                appendLine("centerX=${c.centerX}")
+                appendLine("centerY=${c.centerY}")
+                appendLine("width=${c.rect.width()}")
+                appendLine("height=${c.rect.height()}")
+                appendLine("area=${c.area}")
+                appendLine("expectedSize=${detection.expectedSize}")
+                appendLine("actualSize=$actualSize")
+                appendLine("aspectRatio=${fmt(c.aspectRatio)}")
+                appendLine("fillRatio=${fmt(c.fillRatio)}")
+                appendLine("centerDarkRatio=${fmt(c.centerDarkRatio)}")
+                appendLine("edgePixelRatio=${fmt(c.edgePixelRatio)}")
+                appendLine("circularity=${fmt(c.circularity)}")
+                appendLine("rectangularity=${fmt(c.rectangularity)}")
+                appendLine("rejectReason=${item.rejectReason}")
+            }
+        }.trim()
+    }
+
+    private fun fmt(value: Float): String {
+        return "%.3f".format(java.util.Locale.US, value)
+    }
+
+    private fun emptyShapeDetection(): ShapeDetectionResult {
+        return ShapeDetectionResult(
+            center = null,
+            actualRect = null,
+            acceptedRects = emptyList(),
+            rejectedByShapeRects = emptyList(),
+            rejectedBySizeRects = emptyList(),
+            candidates = emptyList(),
+            expectedSize = 0,
+            candidateCount = 0,
+            acceptedCount = 0,
+            rejectedByShape = 0,
+            rejectedBySize = 0
+        )
+    }
+
+    private fun pickupCircleSearchRect(context: Context, bitmap: Bitmap, shiftY: Int): Rect {
+        return calibratedPixelRect(context, bitmap, "pickupCircleSearch", shiftY)
+            ?: calibratedPixelRect(context, bitmap, "pickupAnchor", shiftY)
+                ?.let { expandAroundCenter(bitmap, it, scaleX = 1.65f, scaleY = 1.8f) }
+            ?: rect(bitmap, 0.05f, 0.70f, 0.19f, 0.81f)
+    }
+
+    private fun dropoffSquareSearchRect(context: Context, bitmap: Bitmap, shiftY: Int): Rect {
+        return calibratedPixelRect(context, bitmap, "dropoffSquareSearch", shiftY)
+            ?: calibratedPixelRect(context, bitmap, "dropoffAnchor", shiftY)
+                ?.let { expandAroundCenter(bitmap, it, scaleX = 1.65f, scaleY = 1.8f) }
+            ?: rect(bitmap, 0.05f, 0.78f, 0.19f, 0.87f)
+    }
+
+    private fun centerTemplateAtFixedX(bitmap: Bitmap, template: Rect, centerX: Int, centerY: Int): Rect {
+        val halfWidth = template.width() / 2
+        val halfHeight = template.height() / 2
+        return rect(
+            bitmap,
+            centerX - halfWidth,
+            centerY - halfHeight,
+            centerX + halfWidth,
+            centerY + halfHeight
+        )
+    }
+
+    private fun pointRect(centerX: Int, centerY: Int): Rect {
+        return Rect(centerX - 1, centerY - 1, centerX + 1, centerY + 1)
+    }
+
+    private fun expandAroundCenter(bitmap: Bitmap, source: Rect, scaleX: Float, scaleY: Float): Rect {
+        val halfWidth = (source.width() * scaleX / 2f).toInt().coerceAtLeast(source.width() / 2)
+        val halfHeight = (source.height() * scaleY / 2f).toInt().coerceAtLeast(source.height() / 2)
+        return rect(
+            bitmap,
+            source.centerX() - halfWidth,
+            source.centerY() - halfHeight,
+            source.centerX() + halfWidth,
+            source.centerY() + halfHeight
         )
     }
 
@@ -459,8 +1214,23 @@ object OcrHelper {
             .minByOrNull { kotlin.math.abs(it.width() - it.height()) + kotlin.math.abs(it.centerX() - (bitmap.width * 0.86f).toInt()) / 3 }
             ?: return null
         val templateClose = calibratedPixelRect(context, bitmap, "closeButton")
-        val deltaY = templateClose?.let { close.centerY() - it.centerY() } ?: 0
-        return CloseButton(close, searchRect, deltaY)
+        val fixedClose = templateClose?.let {
+            centerRect(bitmap, close.centerX(), close.centerY(), it.width(), it.height())
+        } ?: close
+        val deltaY = templateClose?.let { fixedClose.centerY() - it.centerY() } ?: 0
+        return CloseButton(fixedClose, searchRect, deltaY)
+    }
+
+    private fun centerRect(bitmap: Bitmap, centerX: Int, centerY: Int, width: Int, height: Int): Rect {
+        val safeWidth = width.coerceAtLeast(1)
+        val safeHeight = height.coerceAtLeast(1)
+        return rect(
+            bitmap = bitmap,
+            left = centerX - safeWidth / 2,
+            top = centerY - safeHeight / 2,
+            right = centerX - safeWidth / 2 + safeWidth,
+            bottom = centerY - safeHeight / 2 + safeHeight
+        )
     }
 
     private fun findCardRect(bitmap: Bitmap, close: CloseButton): Rect {
@@ -528,153 +1298,28 @@ object OcrHelper {
                 closeButtonRect = closeButton?.rect
             )
         }
-
-        fun withRegionDebug(info: AnchorDebugInfo): AnchorDebugInfo {
-            val card = findCardRect(bitmap, closeButton)
-            val cardHeight = card.height().coerceAtLeast(1)
-            val cardWidth = card.width().coerceAtLeast(1)
-            val contentBottom = (card.bottom - cardHeight * 0.08f).toInt().coerceIn(card.top + 1, card.bottom)
-            val anchor = findDeliveryAnchor(context, bitmap, card, contentBottom, closeShiftY)
-            if (anchor == null) {
-                return info.copy(
-                    cardRect = card,
-                    closeButtonRect = closeButton.rect
-                )
-            }
-
-            fun x(relative: Float): Int = (card.left + cardWidth * relative).toInt()
-            fun y(relative: Float): Int = (card.top + cardHeight * relative).toInt()
-            val detailRight = (card.right - cardWidth * 0.05f).toInt()
-            val merchantTop = (anchor.pickupY - cardHeight * 0.065f).toInt()
-            val merchantBottom = (anchor.pickupY + cardHeight * 0.075f).toInt()
-            val addressTop = (anchor.dropoffY - cardHeight * 0.115f).toInt()
-            val addressBottom = (contentBottom - cardHeight * 0.03f).toInt()
-                .coerceAtLeast(addressTop + 1)
-            val merchantFallback = rect(bitmap, x(0.145f), merchantTop, detailRight, merchantBottom)
-            val addressFallback = rect(bitmap, x(0.145f), addressTop, detailRight, addressBottom)
-            val template = detectOfferLayoutTemplate(context, bitmap, card, anchor)
-            val fallbackTemplate = template.copy(addressLines = 1)
-            val merchantRect = anchoredTextRect(context, bitmap, "merchant", "pickupAnchor", anchor.lineX, anchor.pickupY, template.merchantLines, template.lineHeight, merchantFallback)
-            val addressRect = anchoredTextRect(context, bitmap, "address", "dropoffAnchor", anchor.lineX, anchor.dropoffY, template.addressLines, template.lineHeight, addressFallback)
-            val addressWideRect = anchoredTextRect(context, bitmap, "addressWide", "dropoffAnchor", anchor.lineX, anchor.dropoffY, fallbackTemplate.addressLines, fallbackTemplate.lineHeight, addressFallback)
-            val priceRect = anchoredTemplateRect(
-                context = context,
-                bitmap = bitmap,
-                textName = "price",
-                iconName = "pickupAnchor",
-                detectedIconX = anchor.lineX,
-                detectedIconY = anchor.pickupY,
-                fallback = rect(bitmap, x(0.03f), y(0.13f), x(0.50f), y(0.33f))
-            )
-            val tripRect = anchoredTemplateRect(
-                context = context,
-                bitmap = bitmap,
-                textName = "trip",
-                iconName = "pickupAnchor",
-                detectedIconX = anchor.lineX,
-                detectedIconY = anchor.pickupY,
-                fallback = rect(bitmap, x(0.03f), y(0.32f), x(0.92f), y(0.48f))
-            )
-            return info.copy(
-                cardRect = card,
-                closeButtonRect = closeButton.rect,
-                priceRect = priceRect,
-                tripRect = tripRect,
-                merchantRect = merchantRect,
-                addressRect = addressRect,
-                addressWideRect = addressWideRect
-            )
-        }
-
-        val pickup = calibratedPixelRect(context, bitmap, "pickupAnchor", closeShiftY)
-        val dropoff = calibratedPixelRect(context, bitmap, "dropoffAnchor", closeShiftY)
-        val precisePickup = pickup?.let { findDarkIconCenter(bitmap, it) }
-        val preciseDropoff = dropoff?.let { findDarkIconCenter(bitmap, it) }
-        if (precisePickup != null && preciseDropoff != null) {
-            return withRegionDebug(AnchorDebugInfo(
-                anchorSource = "PRECISE_BOX",
-                pickupDetected = true,
-                dropoffDetected = true,
-                templateCloseY = templateCloseY,
-                actualCloseY = actualCloseY,
-                closeShiftY = closeShiftY,
-                pickupAnchorRect = pickup,
-                dropoffAnchorRect = dropoff
-            ))
-        }
-
-        val card = findCardRect(bitmap, closeButton)
-        val contentBottom = (card.bottom - card.height() * 0.08f).toInt().coerceIn(card.top + 1, card.bottom)
-        val calibrated = calibratedPixelRect(context, bitmap, "deliveryAnchorSearch", closeShiftY)
-        val lineHeight = estimateLineHeight(context, bitmap, card)
-        val xRects = listOfNotNull(calibrated, pickup, dropoff)
-        val left = (xRects.minOfOrNull { it.left } ?: (card.left + card.width() * 0.04f).toInt())
-            .minus((card.width() * 0.012f).toInt())
-            .coerceAtLeast(0)
-        val right = (xRects.maxOfOrNull { it.right } ?: (card.left + card.width() * 0.20f).toInt())
-            .plus((card.width() * 0.012f).toInt())
-            .coerceAtMost(bitmap.width)
-        val calibratedTop = listOfNotNull(pickup?.top, dropoff?.top).minOrNull()
-            ?: calibrated?.top
-            ?: (card.top + card.height() * 0.50f).toInt()
-        val calibratedBottom = listOfNotNull(pickup?.bottom, dropoff?.bottom).maxOrNull()
-            ?: calibrated?.bottom
-            ?: (contentBottom - card.height() * 0.04f).toInt()
-        val tripGuard = maxOf(
-            card.top + (card.height() * 0.48f).toInt(),
-            (calibratedPixelRect(context, bitmap, "trip", closeShiftY)?.bottom ?: card.top) + lineHeight / 3
-        )
-        val top = maxOf(
-            calibratedTop - lineHeight,
-            tripGuard
-        ).coerceIn(card.top, contentBottom - 1)
-        val bottom = minOf(
-            calibratedBottom + (lineHeight * 1.8f).toInt(),
-            contentBottom - (card.height() * 0.025f).toInt()
-        ).coerceIn(top + 1, contentBottom)
-
-        var bestX = left
-        var bestCount = 0
-        var x = left
-        while (x < right) {
-            var count = 0
-            var y = top
-            while (y < bottom) {
-                if (isDarkPixel(bitmap.getPixel(x, y))) count += 1
-                y += 2
-            }
-            if (count > bestCount) {
-                bestCount = count
-                bestX = x
-            }
-            x += 2
-        }
-
-        if (bestCount >= (bottom - top) / 18) {
-            val expectedGap = calibratedIconGap(context, bitmap, card)
-            val scannedIconCenters = findDeliveryIconCenters(bitmap, bestX, card, top, bottom, expectedGap)
-            return withRegionDebug(AnchorDebugInfo(
-                anchorSource = "WIDE_SCAN",
-                pickupDetected = precisePickup != null || scannedIconCenters.first != null,
-                dropoffDetected = preciseDropoff != null || scannedIconCenters.second != null,
-                templateCloseY = templateCloseY,
-                actualCloseY = actualCloseY,
-                closeShiftY = closeShiftY,
-                pickupAnchorRect = pickup,
-                dropoffAnchorRect = dropoff
-            ))
-        }
-
-        return withRegionDebug(AnchorDebugInfo(
-            anchorSource = if (pickup != null && dropoff != null) "TEMPLATE_ONLY" else "FAILED",
-            pickupDetected = precisePickup != null,
-            dropoffDetected = preciseDropoff != null,
+        val closeOnlyCard = calibratedPixelRect(context, bitmap, "card", closeShiftY)
+            ?.let { expandCardRect(bitmap, it) }
+            ?: findCardRect(bitmap, closeButton)
+        val closeOnlyLineHeight = estimateLineHeight(context, bitmap, closeOnlyCard)
+        return AnchorDebugInfo(
+            anchorSource = "CLOSE_BUTTON_Y_TEMPLATE",
+            pickupDetected = false,
+            dropoffDetected = false,
             templateCloseY = templateCloseY,
             actualCloseY = actualCloseY,
             closeShiftY = closeShiftY,
-            pickupAnchorRect = pickup,
-            dropoffAnchorRect = dropoff
-        ))
+            pickupAnchorRect = null,
+            dropoffAnchorRect = null,
+            cardRect = closeOnlyCard,
+            closeButtonRect = closeButton.rect,
+            priceRect = calibratedPixelRect(context, bitmap, "price", closeShiftY),
+            tripRect = calibratedPixelRect(context, bitmap, "trip", closeShiftY),
+            merchantRect = widenedMerchantRect(context, bitmap, closeShiftY, closeOnlyLineHeight),
+            addressRect = widenedAddressRect(context, bitmap, closeShiftY, closeOnlyLineHeight),
+            addressWideRect = calibratedPixelRect(context, bitmap, "addressWide", closeShiftY)
+        )
+
     }
 
     private fun findDeliveryAnchor(
@@ -703,7 +1348,12 @@ object OcrHelper {
                 bottom = maxOf(precisePickup.second, preciseDropoff.second),
                 pickupY = precisePickup.second,
                 dropoffY = preciseDropoff.second,
-                searchRect = searchRect
+                pickupRect = centerTemplateAtFixedX(bitmap, pickup, pickup.centerX(), precisePickup.second),
+                dropoffRect = centerTemplateAtFixedX(bitmap, dropoff, dropoff.centerX(), preciseDropoff.second),
+                pickupSearchRect = searchRect,
+                dropoffSearchRect = searchRect,
+                pickupDetection = legacyDetection(precisePickup, centerTemplateAtFixedX(bitmap, pickup, pickup.centerX(), precisePickup.second)),
+                dropoffDetection = legacyDetection(preciseDropoff, centerTemplateAtFixedX(bitmap, dropoff, dropoff.centerX(), preciseDropoff.second))
             )
         }
         val templatePickup = precisePickup ?: pickup?.let { it.centerX() to it.centerY() }
@@ -793,7 +1443,12 @@ object OcrHelper {
             bottom = anchorBottom,
             pickupY = iconCenters.first ?: anchorTop,
             dropoffY = iconCenters.second ?: anchorBottom,
-            searchRect = Rect(left, top, right, bottom)
+            pickupRect = pointRect(lineX, iconCenters.first ?: anchorTop),
+            dropoffRect = pointRect(lineX, iconCenters.second ?: anchorBottom),
+            pickupSearchRect = Rect(left, top, right, bottom),
+            dropoffSearchRect = Rect(left, top, right, bottom),
+            pickupDetection = legacyDetection(lineX to (iconCenters.first ?: anchorTop), pointRect(lineX, iconCenters.first ?: anchorTop)),
+            dropoffDetection = legacyDetection(lineX to (iconCenters.second ?: anchorBottom), pointRect(lineX, iconCenters.second ?: anchorBottom))
         )
     }
 
@@ -809,7 +1464,28 @@ object OcrHelper {
             bottom = maxOf(pickup.second, dropoff.second),
             pickupY = pickup.second,
             dropoffY = dropoff.second,
-            searchRect = searchRect
+            pickupRect = pointRect(pickup.first, pickup.second),
+            dropoffRect = pointRect(dropoff.first, dropoff.second),
+            pickupSearchRect = searchRect,
+            dropoffSearchRect = searchRect,
+            pickupDetection = legacyDetection(pickup, pointRect(pickup.first, pickup.second)),
+            dropoffDetection = legacyDetection(dropoff, pointRect(dropoff.first, dropoff.second))
+        )
+    }
+
+    private fun legacyDetection(center: Pair<Int, Int>, rect: Rect): ShapeDetectionResult {
+        return ShapeDetectionResult(
+            center = center,
+            actualRect = rect,
+            acceptedRects = listOf(rect),
+            rejectedByShapeRects = emptyList(),
+            rejectedBySizeRects = emptyList(),
+            candidates = emptyList(),
+            expectedSize = rect.width().coerceAtLeast(rect.height()),
+            candidateCount = 1,
+            acceptedCount = 1,
+            rejectedByShape = 0,
+            rejectedBySize = 0
         )
     }
 
@@ -833,13 +1509,64 @@ object OcrHelper {
         name: String,
         shiftY: Int = 0
     ): Rect? {
-        val normalized = OcrCalibrationStore.load(context)[name] ?: return null
+        val normalized = OcrTemplateRepository.getActiveTemplate(context).regions[name] ?: return null
         val rect = normalizedToPixelRect(bitmap, normalized)
         return if (shiftY == 0) {
             rect
         } else {
             rect(bitmap, rect.left, rect.top + shiftY, rect.right, rect.bottom + shiftY)
         }
+    }
+
+    private fun expandCardRect(bitmap: Bitmap, template: Rect): Rect {
+        val verticalPadding = (bitmap.height * 0.018f).toInt().coerceAtLeast(18)
+        return rect(
+            bitmap = bitmap,
+            left = 0,
+            top = template.top - verticalPadding,
+            right = bitmap.width,
+            bottom = template.bottom + verticalPadding
+        )
+    }
+
+    private fun widenedMerchantRect(
+        context: Context,
+        bitmap: Bitmap,
+        shiftY: Int,
+        lineHeight: Int
+    ): Rect {
+        val base = calibratedPixelRect(context, bitmap, "merchant", shiftY)
+            ?: return rect(bitmap, 0.15f, 0.72f, 0.94f, 0.80f)
+        val targetHeight = maxOf(base.height(), (lineHeight * 2.15f).toInt())
+        return rect(
+            bitmap = bitmap,
+            left = base.left,
+            top = base.top - (lineHeight * 0.18f).toInt(),
+            right = base.right,
+            bottom = base.top - (lineHeight * 0.18f).toInt() + targetHeight
+        )
+    }
+
+    private fun widenedAddressRect(
+        context: Context,
+        bitmap: Bitmap,
+        shiftY: Int,
+        lineHeight: Int
+    ): Rect {
+        val base = calibratedPixelRect(context, bitmap, "address", shiftY)
+            ?: return rect(bitmap, 0.15f, 0.78f, 0.94f, 0.88f)
+        val sameDropoffTop = calibratedPixelRect(context, bitmap, "sameDropoff", shiftY)?.top
+        val targetBottom = minOf(
+            base.top + maxOf(base.height(), (lineHeight * 3.25f).toInt()),
+            sameDropoffTop?.minus((lineHeight * 0.12f).toInt()) ?: bitmap.height
+        )
+        return rect(
+            bitmap = bitmap,
+            left = base.left,
+            top = base.top - (lineHeight * 0.20f).toInt(),
+            right = base.right,
+            bottom = targetBottom.coerceAtLeast(base.top + lineHeight)
+        )
     }
 
     private fun calibrationDebugRegions(context: Context, bitmap: Bitmap): List<DebugRegion> {
@@ -863,13 +1590,19 @@ object OcrHelper {
     private fun diagnosticAnchorDebugRegions(
         context: Context,
         bitmap: Bitmap,
-        closeButton: CloseButton?
+        closeButton: CloseButton?,
+        sameDropoffMatched: Boolean = false
     ): List<DebugRegion> {
-        val shiftY = closeButton?.deltaY ?: return emptyList()
+        closeButton ?: return emptyList()
+        val card = calibratedPixelRect(context, bitmap, "card", closeButton.deltaY)
+            ?.let { expandCardRect(bitmap, it) }
+            ?: findCardRect(bitmap, closeButton)
+        val lineHeight = estimateLineHeight(context, bitmap, card)
+        val lowerShiftY = if (sameDropoffMatched) -lineHeight else 0
         return listOfNotNull(
-            calibratedPixelRect(context, bitmap, "deliveryAnchorSearch", shiftY)?.let { DebugRegion("deliveryAnchorSearchActual", it) },
-            calibratedPixelRect(context, bitmap, "pickupAnchor", shiftY)?.let { DebugRegion("pickupAnchorShiftedReference", it) },
-            calibratedPixelRect(context, bitmap, "dropoffAnchor", shiftY)?.let { DebugRegion("dropoffAnchorShiftedReference", it) }
+            calibratedPixelRect(context, bitmap, "deliveryAnchorSearch", lowerShiftY)?.let { DebugRegion("deliveryAnchorSearchActual", it) },
+            calibratedPixelRect(context, bitmap, "pickupAnchor", lowerShiftY)?.let { DebugRegion("pickupAnchorShiftedReference", it) },
+            calibratedPixelRect(context, bitmap, "dropoffAnchor", lowerShiftY)?.let { DebugRegion("dropoffAnchorShiftedReference", it) }
         )
     }
 
@@ -880,6 +1613,7 @@ object OcrHelper {
             "price" -> "priceActual"
             "trip" -> "tripActual"
             "merchant" -> "merchantActual"
+            "merchantWide" -> "merchantWideActual"
             "address" -> "addressActual"
             "addressWide" -> "addressWideActual"
             "sameDropoff" -> "sameDropoffActual"
@@ -899,7 +1633,7 @@ object OcrHelper {
         lineHeight: Int,
         fallback: Rect
     ): Rect {
-        val calibrated = OcrCalibrationStore.load(context)
+        val calibrated = OcrTemplateRepository.getActiveTemplate(context).regions
         val text = calibrated[textName]?.let { normalizedToPixelRect(bitmap, it) } ?: return fallback
         val icon = calibrated[iconName]?.let { normalizedToPixelRect(bitmap, it) } ?: return fallback
         val iconCenterX = icon.centerX()
@@ -926,7 +1660,7 @@ object OcrHelper {
         detectedIconY: Int,
         fallback: Rect
     ): Rect {
-        val calibrated = OcrCalibrationStore.load(context)
+        val calibrated = OcrTemplateRepository.getActiveTemplate(context).regions
         val text = calibrated[textName]?.let { normalizedToPixelRect(bitmap, it) } ?: return fallback
         val icon = calibrated[iconName]?.let { normalizedToPixelRect(bitmap, it) } ?: return fallback
         val dx = detectedIconX - icon.centerX()
@@ -950,13 +1684,13 @@ object OcrHelper {
         if (anchor == null) return OfferLayoutTemplate(1, 2, lineHeight)
 
         val iconDistance = (anchor.dropoffY - anchor.pickupY).coerceAtLeast(1)
-        val merchantLines = if (iconDistance > lineHeight * 2.35f) 2 else 1
-
-        return OfferLayoutTemplate(
-            merchantLines = merchantLines.coerceIn(1, 2),
-            addressLines = 2,
-            lineHeight = lineHeight
-        )
+        val rows = iconDistance.toFloat() / lineHeight.toFloat().coerceAtLeast(1f)
+        return when {
+            rows <= 1.6f -> OfferLayoutTemplate(1, 1, lineHeight)
+            rows <= 2.25f -> OfferLayoutTemplate(1, 2, lineHeight)
+            rows <= 2.95f -> OfferLayoutTemplate(2, 1, lineHeight)
+            else -> OfferLayoutTemplate(2, 2, lineHeight)
+        }
     }
 
     private fun findDarkIconCenter(bitmap: Bitmap, rect: Rect): Pair<Int, Int>? {
@@ -986,7 +1720,7 @@ object OcrHelper {
     }
 
     private fun estimateLineHeight(context: Context, bitmap: Bitmap, card: Rect): Int {
-        val calibrated = OcrCalibrationStore.load(context)
+        val calibrated = OcrTemplateRepository.getActiveTemplate(context).regions
         val merchant = calibrated["merchant"]?.let { normalizedToPixelRect(bitmap, it) }
         val address = calibrated["address"]?.let { normalizedToPixelRect(bitmap, it) }
         val fromMerchant = merchant?.height()?.takeIf { it > 0 }?.div(2)
@@ -1080,6 +1814,18 @@ object OcrHelper {
 
     private fun isDarkPixel(color: Int): Boolean {
         return Color.red(color) < 65 && Color.green(color) < 65 && Color.blue(color) < 65
+    }
+
+    private fun isAnchorDarkPixel(color: Int): Boolean {
+        val red = Color.red(color)
+        val green = Color.green(color)
+        val blue = Color.blue(color)
+        val max = maxOf(red, green, blue)
+        val min = minOf(red, green, blue)
+        val darkNeutral = max < 118 && max - min < 58
+        val darkBlue = blue < 150 && red < 105 && green < 125 && blue >= red
+        val blackStroke = red < 95 && green < 95 && blue < 95
+        return darkNeutral || darkBlue || blackStroke
     }
 
     private fun preprocessDebugInfo(regions: List<RegionCrop>): String {

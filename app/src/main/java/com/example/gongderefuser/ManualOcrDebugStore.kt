@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import com.example.gongderefuser.analyzer.OrderAnalyzer
 import com.example.gongderefuser.model.OrderData
@@ -30,8 +31,9 @@ object ManualOcrDebugStore {
             File(dir, "$name.jpg").outputStream().use { output ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 88, output)
             }
-            saveRegionOverlay(dir, "$name-regions.jpg", bitmap, regionText.debugRegions)
-            File(dir, "$name.txt").writeText(
+            val regionFile = saveRegionOverlay(dir, "$name-regions.jpg", bitmap, regionText.debugRegions)
+            val textFile = File(dir, "$name.txt")
+            textFile.writeText(
                 buildString {
                     appendLine("source=$source")
                     appendLine("parsed=${order != null}")
@@ -98,7 +100,11 @@ object ManualOcrDebugStore {
                 },
                 Charsets.UTF_8
             )
-            File(dir, "$name-regions.jpg").absolutePath
+            if (OcrFailureDebugStore.isIncomplete(order)) {
+                OcrFailureDebugStore.recordFailure(context, regionFile, textFile, source)
+            }
+            OcrFailureDebugStore.recordLatest(context, regionFile, textFile, source)
+            regionFile?.absolutePath.orEmpty()
         }.getOrDefault("")
     }
 
@@ -107,8 +113,8 @@ object ManualOcrDebugStore {
         fileName: String,
         source: Bitmap,
         regions: List<OcrHelper.DebugRegion>
-    ) {
-        if (regions.isEmpty()) return
+    ): File? {
+        if (regions.isEmpty()) return null
         val overlay = source.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(overlay)
         val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -129,11 +135,14 @@ object ManualOcrDebugStore {
 
         regions.filter { it.rect.width() > 2 && it.rect.height() > 2 }.forEach { region ->
             val color = regionColor(region.name)
+            val candidate = isCandidateRegion(region.name)
             stroke.color = color
-            fill.color = withAlpha(color, 34)
+            stroke.pathEffect = if (candidate) DashPathEffect(floatArrayOf(18f, 12f), 0f) else null
+            fill.color = withAlpha(color, if (candidate) 14 else 34)
             canvas.drawRect(region.rect, fill)
             canvas.drawRect(region.rect, stroke)
-            labelBackground.color = withAlpha(color, 180)
+            stroke.pathEffect = null
+            labelBackground.color = withAlpha(color, if (candidate) 135 else 180)
             val label = OcrCalibrationStore.displayName(region.name)
             val padding = 8f
             val labelWidth = labelPaint.measureText(label) + padding * 2
@@ -144,9 +153,11 @@ object ManualOcrDebugStore {
             canvas.drawText(label, left + padding, top + labelPaint.textSize + padding / 2, labelPaint)
         }
 
-        File(dir, fileName).outputStream().use { output ->
+        val file = File(dir, fileName)
+        file.outputStream().use { output ->
             overlay.compress(Bitmap.CompressFormat.JPEG, 90, output)
         }
+        return file
     }
 
     private fun acceptModeLabel(mode: com.example.gongderefuser.analyzer.RuleSettings.AcceptMode): String {
@@ -161,10 +172,12 @@ object ManualOcrDebugStore {
             "actionButton" -> Color.rgb(255, 45, 85)
             "closeSearch" -> Color.rgb(175, 82, 222)
             "closeButton", "closeButtonDetected" -> Color.rgb(255, 45, 85)
-            "deliveryAnchorSearch", "deliveryAnchorSearchActual" -> Color.rgb(0, 180, 255)
+            "deliveryAnchorSearch", "deliveryAnchorSearchActual" -> Color.rgb(130, 130, 130)
             "deliveryAnchor" -> Color.rgb(0, 122, 255)
-            "pickupAnchor", "pickupAnchorShiftedReference" -> Color.rgb(90, 200, 250)
-            "dropoffAnchor", "dropoffAnchorShiftedReference" -> Color.rgb(88, 86, 214)
+            "pickupAnchor", "pickupAnchorActual", "pickupDetectedRect", "pickupAnchorShiftedReference" -> Color.rgb(90, 200, 250)
+            "dropoffAnchor", "dropoffAnchorActual", "dropoffDetectedRect", "dropoffAnchorShiftedReference" -> Color.rgb(88, 86, 214)
+            "pickupCircleSearchActual", "pickupSearchRect", "pickupNotDetected" -> Color.rgb(0, 180, 255)
+            "dropoffSquareSearchActual", "dropoffSearchRect", "dropoffNotDetected" -> Color.rgb(175, 82, 222)
             "card", "cardActual" -> Color.rgb(0, 122, 255)
             "type", "typeActual" -> Color.rgb(128, 0, 255)
             "price", "priceActual" -> Color.rgb(255, 149, 0)
@@ -172,8 +185,17 @@ object ManualOcrDebugStore {
             "sameDropoff", "sameDropoffActual" -> Color.rgb(48, 209, 88)
             "merchant", "merchantWide", "merchantActual" -> Color.rgb(52, 199, 89)
             "address", "addressWide", "addressLower", "addressActual", "addressWideActual" -> Color.rgb(255, 59, 48)
-            else -> Color.rgb(90, 200, 250)
+            else -> when {
+                name.contains("ACCEPTED") -> Color.rgb(52, 199, 89)
+                name.contains("SIZE_") -> Color.rgb(255, 59, 48)
+                name.contains("ASPECT") || name.contains("EDGE") || name.contains("CIRCULARITY") || name.contains("RECTANGULARITY") -> Color.rgb(255, 149, 0)
+                else -> Color.rgb(90, 200, 250)
+            }
         }
+    }
+
+    private fun isCandidateRegion(name: String): Boolean {
+        return name.contains("Candidate")
     }
 
     private fun withAlpha(color: Int, alpha: Int): Int {
@@ -189,6 +211,28 @@ object ManualOcrDebugStore {
         appendLine("anchorSource=${info.anchorSource}")
         appendLine("pickupDetected=${info.pickupDetected}")
         appendLine("dropoffDetected=${info.dropoffDetected}")
+        appendLine("sameDropoffMatched=${info.sameDropoffMatched}")
+        appendLine("merchantRows=${info.merchantRows ?: ""}")
+        appendLine("addressRows=${info.addressRows ?: ""}")
+        appendLine("selectedTemplate=${info.selectedTemplate ?: ""}")
+        appendLine("lineHeight=${info.lineHeight ?: ""}")
+        appendLine("pickupY=${info.pickupY ?: ""}")
+        appendLine("dropoffY=${info.dropoffY ?: ""}")
+        appendLine("baseGap=${info.baseGap ?: ""}")
+        appendLine("detectedGap=${info.detectedGap ?: ""}")
+        appendLine("dropoffShift=${info.dropoffShift ?: ""}")
+        appendLine("gap=${info.detectedGap ?: ""}")
+        appendLine("anchorConflict=${info.anchorConflict}")
+        appendLine("anchorConflictReason=${info.anchorConflictReason ?: ""}")
+        if (info.anchorConflict) {
+            appendLine("ANCHOR_CONFLICT")
+            appendLine("pickupCenter=${info.pickupY ?: ""}")
+            appendLine("dropoffCenter=${info.dropoffY ?: ""}")
+            appendLine("distance=${info.detectedGap ?: ""}")
+            appendLine("reason=${info.anchorConflictReason ?: ""}")
+        }
+        info.pickupDetectDebug?.let { appendLine(it) }
+        info.dropoffDetectDebug?.let { appendLine(it) }
         appendLine("cardRect=${formatRect(info.cardRect)}")
         appendLine("cardTop=${info.cardRect?.top ?: ""}")
         appendLine("cardBottom=${info.cardRect?.bottom ?: ""}")
@@ -199,6 +243,8 @@ object ManualOcrDebugStore {
         appendLine("closeShiftY=${info.closeShiftY ?: ""}")
         appendLine("pickupAnchorRect=${formatRect(info.pickupAnchorRect)}")
         appendLine("dropoffAnchorRect=${formatRect(info.dropoffAnchorRect)}")
+        appendLine("pickupSearchRect=${formatRect(info.pickupSearchRect)}")
+        appendLine("dropoffSearchRect=${formatRect(info.dropoffSearchRect)}")
         appendLine("priceRect=${formatRect(info.priceRect)}")
         appendLine("tripRect=${formatRect(info.tripRect)}")
         appendLine("merchantRect=${formatRect(info.merchantRect)}")

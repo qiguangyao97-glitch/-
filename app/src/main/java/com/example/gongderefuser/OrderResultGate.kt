@@ -67,20 +67,6 @@ object OrderResultGate {
             )
         }
 
-        val foundMinuteKeyword = minuteKeywordRegex.containsMatchIn(tripText)
-        val foundKmKeyword = kmKeywordRegex.containsMatchIn(tripText)
-        val foundTotalKeyword = tripText.contains("總計") || tripText.contains("总计")
-        val matchesTripFormat = tripFormatRegex.containsMatchIn(tripText)
-        val hasOrderTripText = (foundMinuteKeyword && foundKmKeyword && foundTotalKeyword) || matchesTripFormat
-        if (!hasOrderTripText) {
-            return buildDecision(
-                order = order,
-                tripText = tripText,
-                shouldShow = false,
-                reason = "MISSING_TRIP_KEYWORDS"
-            )
-        }
-
         return buildDecision(
             order = order,
             tripText = tripText,
@@ -123,5 +109,4 @@ object OrderResultGate {
 
     private val minuteKeywordRegex = Regex("(分鐘|分钟|分鍾|分锺|分鈡|分鋒|\\d+\\s*分)")
     private val kmKeywordRegex = Regex("(公里|公裏|公哩|\\d+(?:\\.\\d+)?\\s*里)")
-    private val tripFormatRegex = Regex("\\d+\\s*(?:分鐘|分钟|分鍾|分锺|分鈡|分鋒|分)\\s*[（(]\\s*\\d+(?:\\.\\d+)?\\s*(?:公里|公裏|公哩|里)\\s*[）)]\\s*(?:總計|总计)")
 }

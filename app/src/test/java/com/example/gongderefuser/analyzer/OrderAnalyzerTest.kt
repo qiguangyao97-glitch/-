@@ -159,6 +159,18 @@ class OrderAnalyzerTest {
     }
 
     @Test
+    fun highScoreBelowFatOrderAmountStaysNormalAccept() {
+        val recommendation = OrderAnalyzer.recommendationForScore(
+            score = 90,
+            scoreBase = 80,
+            money = 94,
+            fatOrderMinAmount = 100
+        )
+
+        assertEquals("站著掙", recommendation)
+    }
+
+    @Test
     fun multiOrderUsesDynamicFactorWithoutHardProtection() {
         val analysis = OrderAnalyzer.analyzeResult(
             order = OrderData(

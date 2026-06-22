@@ -516,7 +516,7 @@ object OrderAnalyzer {
     fun recommendationForScore(
         score: Int,
         scoreBase: Int,
-        money: Int = Int.MAX_VALUE,
+        money: Int = 0,
         fatOrderMinAmount: Int = RuleManager.DEFAULT_FAT_ORDER_MIN_AMOUNT
     ): String {
         return buildRecommendation(
@@ -542,7 +542,6 @@ object OrderAnalyzer {
     ): String {
         return when {
             score >= SCORE_SURPRISE && money >= fatOrderMinAmount -> "掙他娘的"
-            score >= SCORE_SURPRISE -> "掙他娘的"
             score >= acceptThreshold -> "站著掙"
             score >= SCORE_REVIEW -> "跪著送"
             else -> "狗都不接"
