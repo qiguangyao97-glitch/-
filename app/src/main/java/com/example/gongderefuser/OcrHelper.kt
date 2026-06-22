@@ -290,7 +290,10 @@ object OcrHelper {
         val edgePixelRatio: Float,
         val circularity: Float,
         val rectangularity: Float,
-        val cornerRatio: Float
+        val cornerRatio: Float,
+        val outerDarkRatio: Float,
+        val ringScore: Float,
+        val candidateScore: Int
     )
 
     private data class CandidateDebug(
@@ -659,7 +662,11 @@ object OcrHelper {
         val rejectedByShapeRects = mutableListOf<Rect>()
         val rejectedBySizeRects = mutableListOf<Rect>()
         val candidateDebug = mutableListOf<CandidateDebug>()
-        val accepted = candidates.mapIndexedNotNull { index, candidate ->
+        val expectedSize = expectedAnchorSize(lineHeight)
+        val accepted = candidates.mapIndexedNotNull { index, rawCandidate ->
+            val candidate = rawCandidate.copy(
+                candidateScore = scoreAnchorCandidate(rawCandidate, fixedLineX, expectedSize)
+            )
             val sizeRejectReason = anchorSizeRejectReason(candidate, lineHeight, expectCircle)
             val shapeRejectReason = anchorShapeRejectReason(candidate)
             when {
@@ -682,16 +689,7 @@ object OcrHelper {
                 }
             }
         }
-        val selected = accepted.minByOrNull { candidate ->
-            val dx = kotlin.math.abs(candidate.centerX - fixedLineX)
-            val expectedSize = expectedAnchorSize(lineHeight)
-            val actualSize = (candidate.rect.width() + candidate.rect.height()) / 2
-            val sizePenalty = kotlin.math.abs(actualSize - expectedSize)
-            val aspectPenalty = (kotlin.math.abs(1f - candidate.aspectRatio) * lineHeight).toInt()
-            val fillReward = (candidate.fillRatio * 40f).toInt()
-            val centerReward = (candidate.centerDarkRatio * 60f).toInt()
-            dx + sizePenalty + aspectPenalty - fillReward - centerReward
-        }
+        val selected = accepted.maxByOrNull { candidate -> candidate.candidateScore }
         val actualRect = selected?.let {
             centerRect(bitmap, fixedLineX, it.centerY, it.rect.width().coerceAtLeast(2), it.rect.height().coerceAtLeast(2))
         }
@@ -702,7 +700,7 @@ object OcrHelper {
             rejectedByShapeRects = rejectedByShapeRects,
             rejectedBySizeRects = rejectedBySizeRects,
             candidates = candidateDebug,
-            expectedSize = expectedAnchorSize(lineHeight),
+            expectedSize = expectedSize,
             candidateCount = candidates.size,
             acceptedCount = accepted.size,
             rejectedByShape = rejectedByShape,
@@ -778,9 +776,21 @@ object OcrHelper {
         val fill = darkPixels.toFloat() / area.toFloat()
         val centerRatio = centerDarkRatio(bitmap, rect)
         val edgeRatio = edgeDarkRatio(bitmap, rect, darkPixels)
+        val outerRatio = outerDarkRatio(bitmap, rect, centerRatio)
+        val ring = (outerRatio - centerRatio).coerceAtLeast(0f)
         val roundness = minOf(aspect, 1f / aspect.coerceAtLeast(0.001f)).coerceIn(0f, 1f)
         val circularity = (roundness * (0.45f + edgeRatio * 0.55f)).coerceIn(0f, 1f)
         val rectangularity = (roundness * (0.35f + edgeRatio * 0.65f)).coerceIn(0f, 1f)
+        val candidateScore = scoreAnchorCandidate(
+            centerX = rect.centerX(),
+            rect = rect,
+            aspectRatio = aspect,
+            fillRatio = fill,
+            ringScore = ring,
+            edgePixelRatio = edgeRatio,
+            fixedLineX = rect.centerX(),
+            expectedSize = rect.width().coerceAtLeast(rect.height())
+        )
         return ShapeCandidate(
             rect = rect,
             centerX = rect.centerX(),
@@ -793,7 +803,10 @@ object OcrHelper {
             edgePixelRatio = edgeRatio,
             circularity = circularity,
             rectangularity = rectangularity,
-            cornerRatio = cornerDarkRatio(bitmap, rect)
+            cornerRatio = cornerDarkRatio(bitmap, rect),
+            outerDarkRatio = outerRatio,
+            ringScore = ring,
+            candidateScore = candidateScore
         )
     }
 
@@ -914,6 +927,24 @@ object OcrHelper {
         return countAnchorDarkPixels(bitmap, safe).toFloat() / total.toFloat()
     }
 
+    private fun outerDarkRatio(bitmap: Bitmap, rect: Rect, centerRatio: Float): Float {
+        val centerWidth = (rect.width() * 0.5f).toInt().coerceAtLeast(1)
+        val centerHeight = (rect.height() * 0.5f).toInt().coerceAtLeast(1)
+        val center = rect(
+            bitmap,
+            rect.centerX() - centerWidth / 2,
+            rect.centerY() - centerHeight / 2,
+            rect.centerX() - centerWidth / 2 + centerWidth,
+            rect.centerY() - centerHeight / 2 + centerHeight
+        )
+        val totalArea = rect.width().coerceAtLeast(1) * rect.height().coerceAtLeast(1)
+        val centerArea = center.width().coerceAtLeast(1) * center.height().coerceAtLeast(1)
+        val outerArea = (totalArea - centerArea).coerceAtLeast(1)
+        val totalDark = countAnchorDarkPixels(bitmap, rect)
+        val centerDark = (centerRatio * centerArea).toInt()
+        return ((totalDark - centerDark).coerceAtLeast(0)).toFloat() / outerArea.toFloat()
+    }
+
     private fun expectedAnchorSize(lineHeight: Int): Int {
         return (lineHeight * 0.36f).toInt().coerceAtLeast(8)
     }
@@ -933,10 +964,51 @@ object OcrHelper {
     private fun anchorShapeRejectReason(candidate: ShapeCandidate): String? {
         return when {
             candidate.aspectRatio !in 0.6f..1.6f -> "ASPECT_RATIO_OUT_OF_RANGE"
-            candidate.fillRatio < 0.45f -> "FILL_RATIO_TOO_LOW"
-            candidate.centerDarkRatio < 0.35f -> "CENTER_DARK_RATIO_TOO_LOW"
+            candidate.fillRatio < 0.03f -> "FILL_RATIO_TOO_LOW"
+            candidate.fillRatio > 0.75f -> "FILL_RATIO_TOO_HIGH"
             else -> null
         }
+    }
+
+    private fun scoreAnchorCandidate(
+        candidate: ShapeCandidate,
+        fixedLineX: Int,
+        expectedSize: Int
+    ): Int {
+        return scoreAnchorCandidate(
+            centerX = candidate.centerX,
+            rect = candidate.rect,
+            aspectRatio = candidate.aspectRatio,
+            fillRatio = candidate.fillRatio,
+            ringScore = candidate.ringScore,
+            edgePixelRatio = candidate.edgePixelRatio,
+            fixedLineX = fixedLineX,
+            expectedSize = expectedSize
+        )
+    }
+
+    private fun scoreAnchorCandidate(
+        centerX: Int,
+        rect: Rect,
+        aspectRatio: Float,
+        fillRatio: Float,
+        ringScore: Float,
+        edgePixelRatio: Float,
+        fixedLineX: Int,
+        expectedSize: Int
+    ): Int {
+        val actualSize = (rect.width() + rect.height()) / 2
+        val sizeScore = 100 - kotlin.math.abs(actualSize - expectedSize) * 3
+        val aspectScore = 100 - (kotlin.math.abs(1f - aspectRatio) * 100f).toInt()
+        val xScore = 100 - kotlin.math.abs(centerX - fixedLineX) * 4
+        val ringScoreInt = (ringScore * 160f).toInt()
+        val fillScore = when {
+            fillRatio in 0.08f..0.35f -> 80
+            fillRatio in 0.04f..0.50f -> 40
+            else -> -40
+        }
+        val edgeScore = (edgePixelRatio * 40f).toInt()
+        return sizeScore + aspectScore + xScore + ringScoreInt + fillScore + edgeScore
     }
 
     private fun detectAnchorConflict(anchor: DeliveryAnchor?, lineHeight: Int): AnchorConflict {
@@ -962,7 +1034,7 @@ object OcrHelper {
             appendLine("rejectedBySize=${detection.rejectedBySize}")
             appendLine("selectedCenterX=${detection.center?.first ?: ""}")
             appendLine("selectedCenterY=${detection.center?.second ?: ""}")
-            appendLine("thresholds=minAnchorSize=max(8,lineHeight*0.12) maxAnchorSize=lineHeight*0.8 aspectRatio=0.6..1.6 fillRatio>=0.45 centerDarkRatio>=0.35")
+            appendLine("thresholds=minAnchorSize=max(8,lineHeight*0.12) maxAnchorSize=lineHeight*0.8 aspectRatio=0.6..1.6 fillRatio=0.03..0.75 ringScore=preferred hollow icon")
             detection.candidates.forEach { item ->
                 val c = item.candidate
                 val actualSize = (c.rect.width() + c.rect.height()) / 2
@@ -977,6 +1049,9 @@ object OcrHelper {
                 appendLine("aspectRatio=${fmt(c.aspectRatio)}")
                 appendLine("fillRatio=${fmt(c.fillRatio)}")
                 appendLine("centerDarkRatio=${fmt(c.centerDarkRatio)}")
+                appendLine("outerDarkRatio=${fmt(c.outerDarkRatio)}")
+                appendLine("ringScore=${fmt(c.ringScore)}")
+                appendLine("candidateScore=${c.candidateScore}")
                 appendLine("edgePixelRatio=${fmt(c.edgePixelRatio)}")
                 appendLine("circularity=${fmt(c.circularity)}")
                 appendLine("rectangularity=${fmt(c.rectangularity)}")
