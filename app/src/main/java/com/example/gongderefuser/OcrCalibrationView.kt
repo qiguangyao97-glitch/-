@@ -137,11 +137,22 @@ class OcrCalibrationView(context: Context) : View(context) {
                     )
                 } else {
                     RectF(before).also {
-                        if (mode == DragMode.Move) it.offset(0f, dy)
+                        if (mode == DragMode.Move) {
+                            if (canMoveFreely(selectedName)) {
+                                it.offset(dx, dy)
+                            } else {
+                                it.offset(0f, dy)
+                            }
+                        }
                     }
                 }
                 regions[selectedName] = clamp(rect)
-                applyLinkedMove(selectedName, regions.getValue(selectedName).centerY() - before.centerY())
+                val after = regions.getValue(selectedName)
+                applyLinkedMove(
+                    name = selectedName,
+                    dx = after.centerX() - before.centerX(),
+                    dy = after.centerY() - before.centerY()
+                )
                 lastX = event.x
                 lastY = event.y
                 invalidate()
@@ -376,25 +387,35 @@ class OcrCalibrationView(context: Context) : View(context) {
     }
 
     private fun isResizeLocked(name: String): Boolean {
-        return name == "closeButton" || name == "price"
+        return name == "closeButton"
     }
 
     private fun isHorizontalResizeLocked(name: String): Boolean {
+        if (name == "type" || name == "price") return false
         return name in OcrCalibrationStore.editableRegionNames &&
             name !in setOf("pickupCircleSearch", "dropoffSquareSearch", "pickupAnchor", "dropoffAnchor")
     }
 
-    private fun applyLinkedMove(name: String, dy: Float) {
-        if (dy == 0f) return
+    private fun canMoveFreely(name: String): Boolean {
+        return name == "type" || name == "price"
+    }
+
+    private fun applyLinkedMove(name: String, dx: Float, dy: Float) {
+        if (dx == 0f && dy == 0f) return
         val linked = when (name) {
             "closeButton" -> listOf("closeSearch")
             "price" -> listOf("type")
+            "type" -> listOf("price")
             else -> emptyList()
         }
         linked.forEach { linkedName ->
             regions[linkedName]?.let {
                 val moved = RectF(it)
-                moved.offset(0f, dy)
+                if (canMoveFreely(name) && canMoveFreely(linkedName)) {
+                    moved.offset(dx, dy)
+                } else {
+                    moved.offset(0f, dy)
+                }
                 regions[linkedName] = clamp(moved)
             }
         }
