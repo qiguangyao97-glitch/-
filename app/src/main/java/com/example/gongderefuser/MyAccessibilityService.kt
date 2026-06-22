@@ -1016,24 +1016,25 @@ class MyAccessibilityService : AccessibilityService() {
         }
         if (packageName != "com.ubercab.driver" && !hasUberWindow) return
 
-        DiagnosticLogStore.append(
-            this,
-            "WINDOW_DEBUG",
+        logWindowDebug(
             "stage=$stage eventType=${eventTypeName(event.eventType)} package=$packageName class=${event.className?.toString().orEmpty()} " +
                     "windowId=${runCatching { event.source?.windowId }.getOrNull() ?: -1} " +
                     "rootPackage=${activeRoot?.packageName?.toString().orEmpty()} rootClass=${activeRoot?.className?.toString().orEmpty()}"
         )
-        DiagnosticLogStore.append(this, "WINDOW_DEBUG", "stage=$stage windowCount=${currentWindows.size}")
+        logWindowDebug("stage=$stage windowCount=${currentWindows.size}")
         currentWindows.forEachIndexed { index, window ->
             val root = window.root
-            DiagnosticLogStore.append(
-                this,
-                "WINDOW_DEBUG",
+            logWindowDebug(
                 "stage=$stage windowIndex=$index windowType=${window.type} windowLayer=${window.layer} " +
                         "windowTitle=${sanitizeForLog(window.title?.toString().orEmpty(), EVENT_STRUCTURE_TEXT_LIMIT)} " +
                         "rootPackage=${root?.packageName?.toString().orEmpty()} rootClass=${root?.className?.toString().orEmpty()}"
             )
         }
+    }
+
+    private fun logWindowDebug(message: String) {
+        Log.d("WINDOW_DEBUG", message)
+        DiagnosticLogStore.append(this, "WINDOW_DEBUG", message)
     }
 
     private fun inspectEventSource(event: AccessibilityEvent): String {
