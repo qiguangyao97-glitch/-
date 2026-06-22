@@ -79,6 +79,9 @@ class MyAccessibilityService : AccessibilityService() {
     private var currentSessionPackageName: String = ""
     private var currentSessionClassName: String = ""
     private var currentSessionTriggerReason: String = ""
+    private var currentSessionNoOrderStructureLogged: Boolean = false
+    private var currentSessionOcrSuccessStructureLogged: Boolean = false
+    private var lastEventStructureSnapshot: EventStructureSnapshot? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -107,6 +110,7 @@ class MyAccessibilityService : AccessibilityService() {
             )
         }
         lastTargetEventSummary = "type=${event.eventType} class=${event.className} time=$now"
+        lastEventStructureSnapshot = buildEventStructureSnapshot(event, packageName)
 
         Log.i("ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
         DiagnosticLogStore.append(this, "ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
@@ -161,12 +165,15 @@ class MyAccessibilityService : AccessibilityService() {
             logObservation("ORDER_DETECTION_WAIT", "pendingAfterCurrent=true reason=SESSION_ACTIVE")
             return
         }
+        logEventStructure("BEFORE_SESSION_START", buildEventStructureSnapshot(event, event.packageName?.toString().orEmpty()))
         isOrderDetectionSessionActive = true
         orderDetectionSessionId += 1
         orderDetectionSessionStartTime = now
         orderDetectionSessionNextAttemptIndex = 0
         orderDetectionSessionFailureCount = 0
         orderDetectionSessionLastHadAnchor = false
+        currentSessionNoOrderStructureLogged = false
+        currentSessionOcrSuccessStructureLogged = false
         currentSessionEventType = eventTypeName(event.eventType)
         currentSessionPackageName = event.packageName?.toString().orEmpty()
         currentSessionClassName = event.className?.toString().orEmpty()
@@ -525,6 +532,8 @@ class MyAccessibilityService : AccessibilityService() {
         orderDetectionSessionNextAttemptIndex = 0
         orderDetectionSessionFailureCount = 0
         orderDetectionSessionLastHadAnchor = false
+        currentSessionNoOrderStructureLogged = false
+        currentSessionOcrSuccessStructureLogged = false
         clearPendingOcrRetry(resetAttempt = true)
         pendingDetectionAfterCurrent = false
     }
@@ -547,6 +556,8 @@ class MyAccessibilityService : AccessibilityService() {
         orderDetectionSessionNextAttemptIndex = 0
         orderDetectionSessionFailureCount = 0
         orderDetectionSessionLastHadAnchor = false
+        currentSessionNoOrderStructureLogged = false
+        currentSessionOcrSuccessStructureLogged = false
         pendingDetectionAfterCurrent = false
         orderDetectionSessionId += 1
         DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason sessionId=$sessionId")
@@ -580,6 +591,10 @@ class MyAccessibilityService : AccessibilityService() {
             if (finalSkipReason == "OCR_MONEY_INVALID") {
                 Log.i("OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
                 DiagnosticLogStore.append(this, "OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
+            }
+            if (finalSkipReason == "NO_ORDER_CARD" && !currentSessionNoOrderStructureLogged) {
+                logEventStructure("NO_ORDER_CARD", lastEventStructureSnapshot)
+                currentSessionNoOrderStructureLogged = true
             }
             if (finalSkipReason == "NO_ORDER_CARD" && currentSessionTriggerReason in NON_ORDER_TRIGGER_REASONS) {
                 clearPendingOcrRetry(resetAttempt = true)
@@ -637,6 +652,10 @@ class MyAccessibilityService : AccessibilityService() {
             Log.i("ORDER_ANALYSIS_FINISH", "shown=false reason=DUPLICATE_RESULT")
             DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=false reason=DUPLICATE_RESULT")
             return false
+        }
+        if (!currentSessionOcrSuccessStructureLogged) {
+            logEventStructure("OCR_SUCCESS", lastEventStructureSnapshot)
+            currentSessionOcrSuccessStructureLogged = true
         }
         logOcrSuccess(ocrSuccessAttempt, ocrSuccessElapsedMs)
         if (lastShownOrderSignature.isNotBlank() && signature != lastShownOrderSignature) {
@@ -925,6 +944,7 @@ class MyAccessibilityService : AccessibilityService() {
         decision: TriggerDecision,
         popupScan: PopupStructureScan?
     ) {
+        logEventStructure("BEFORE_TRIGGER_REJECT", buildEventStructureSnapshot(event, event.packageName?.toString().orEmpty()))
         val score = if (decision.features.isNotBlank()) decision.score else popupScan?.score ?: 0
         val likelyBlockingPopup = if (decision.features.isNotBlank()) decision.likelyBlockingPopup else popupScan?.isLikelyBlockingPopup ?: false
         val features = decision.features.ifBlank { popupScan?.featureSummary().orEmpty() }
@@ -934,6 +954,54 @@ class MyAccessibilityService : AccessibilityService() {
             "ORDER_TRIGGER_REJECTED",
             "reason=${decision.reason} eventType=${eventTypeName(event.eventType)} packageName=${event.packageName?.toString().orEmpty()} " +
                     "className=${event.className?.toString().orEmpty()} score=$score likelyBlockingPopup=$likelyBlockingPopup features=$features samples=$samples"
+        )
+    }
+
+    private fun buildEventStructureSnapshot(event: AccessibilityEvent, packageName: String): EventStructureSnapshot {
+        val source = runCatching { event.source }.getOrNull()
+        val root = rootInActiveWindow
+        val counters = root?.let(::countAccessibilityStructure) ?: StructureCounters()
+        return EventStructureSnapshot(
+            eventType = eventTypeName(event.eventType),
+            packageName = packageName,
+            className = event.className?.toString().orEmpty(),
+            windowId = source?.windowId ?: root?.windowId ?: -1,
+            childCount = source?.childCount ?: -1,
+            nodeCount = counters.nodeCount,
+            textNodeCount = counters.textNodeCount,
+            sourceViewId = source?.viewIdResourceName?.takeIf { it.isNotBlank() } ?: "NULL",
+            contentDescription = sanitizeForLog(source?.contentDescription?.toString().orEmpty(), EVENT_STRUCTURE_TEXT_LIMIT),
+            eventTime = event.eventTime
+        )
+    }
+
+    private fun countAccessibilityStructure(root: AccessibilityNodeInfo): StructureCounters {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        var nodeCount = 0
+        var textNodeCount = 0
+        queue.add(root)
+        while (queue.isNotEmpty() && nodeCount < EVENT_STRUCTURE_NODE_LIMIT) {
+            val node = queue.removeFirst()
+            nodeCount += 1
+            if (!node.text.isNullOrBlank() || !node.contentDescription.isNullOrBlank()) {
+                textNodeCount += 1
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
+            }
+        }
+        return StructureCounters(nodeCount = nodeCount, textNodeCount = textNodeCount)
+    }
+
+    private fun logEventStructure(stage: String, snapshot: EventStructureSnapshot?) {
+        val data = snapshot ?: EventStructureSnapshot.empty()
+        DiagnosticLogStore.append(
+            this,
+            "EVENT_STRUCTURE",
+            "stage=$stage eventType=${data.eventType} packageName=${data.packageName} className=${data.className} " +
+                    "windowId=${data.windowId} childCount=${data.childCount} nodeCount=${data.nodeCount} " +
+                    "textNodeCount=${data.textNodeCount} sourceViewId=${data.sourceViewId} " +
+                    "contentDescription=${formatBracketed(data.contentDescription)} eventTime=${data.eventTime}"
         )
     }
 
@@ -1140,6 +1208,41 @@ class MyAccessibilityService : AccessibilityService() {
         val likelyBlockingPopup: Boolean = false,
         val features: String = "",
         val samples: String = ""
+    )
+
+    private data class EventStructureSnapshot(
+        val eventType: String,
+        val packageName: String,
+        val className: String,
+        val windowId: Int,
+        val childCount: Int,
+        val nodeCount: Int,
+        val textNodeCount: Int,
+        val sourceViewId: String,
+        val contentDescription: String,
+        val eventTime: Long
+    ) {
+        companion object {
+            fun empty(): EventStructureSnapshot {
+                return EventStructureSnapshot(
+                    eventType = "UNKNOWN",
+                    packageName = "",
+                    className = "",
+                    windowId = -1,
+                    childCount = -1,
+                    nodeCount = 0,
+                    textNodeCount = 0,
+                    sourceViewId = "NULL",
+                    contentDescription = "",
+                    eventTime = 0L
+                )
+            }
+        }
+    }
+
+    private data class StructureCounters(
+        val nodeCount: Int = 0,
+        val textNodeCount: Int = 0
     )
 
     private data class PopupStructureScan(
@@ -2012,6 +2115,8 @@ class MyAccessibilityService : AccessibilityService() {
         private const val POPUP_CANDIDATE_LOG_MIN_INTERVAL_MS = 3_000L
         private const val POPUP_STRUCTURE_SCAN_NODE_LIMIT = 140
         private const val POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT = 10
+        private const val EVENT_STRUCTURE_NODE_LIMIT = 160
+        private const val EVENT_STRUCTURE_TEXT_LIMIT = 80
         private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(1_500L, 1_800L)
         private val NON_ORDER_TRIGGER_REASONS = setOf(
             "OPPORTUNITY_PAGE",
