@@ -435,7 +435,9 @@ object OcrHelper {
             ?.let { expandCardRect(bitmap, it) }
             ?: findCardRect(bitmap, close)
         val lineHeight = estimateLineHeight(context, bitmap, card)
-        val lowerShiftY = if (sameDropoffMatched) -lineHeight else 0
+        val sameDropoffShiftY = if (sameDropoffMatched) -lineHeight else 0
+        val lowerShiftY = sameDropoffShiftY
+        val lowerTotalShiftY = close.deltaY + sameDropoffShiftY
         val basePickup = calibratedPixelRect(context, bitmap, "pickupAnchor", lowerShiftY)
         val baseDropoff = calibratedPixelRect(context, bitmap, "dropoffAnchor", lowerShiftY)
         val anchorProbe = findSeparatedDeliveryAnchor(context, bitmap, lowerShiftY, lineHeight)
@@ -451,25 +453,25 @@ object OcrHelper {
         val tripActualRect = calibratedPixelRect(context, bitmap, "trip", close.deltaY)
         val merchantLong = guardMerchantBelowTrip(
             bitmap = bitmap,
-            merchant = m2A2TextRect(context, bitmap, "merchant", lowerShiftY, lineHeight),
+            merchant = m2A2TextRect(context, bitmap, "merchant", lowerTotalShiftY, lineHeight),
             trip = tripActualRect,
             lineHeight = lineHeight
         )
         val merchantShort = oneLineRect(bitmap, merchantLong, lineHeight)
-        val addressLong = m2A2TextRect(context, bitmap, "address", lowerShiftY, lineHeight)
+        val addressLong = m2A2TextRect(context, bitmap, "address", lowerTotalShiftY, lineHeight)
         val addressShort = oneLineRect(bitmap, addressLong, lineHeight)
         val merchantRect = if (decision.merchantRows >= 2) merchantLong else merchantShort
         val addressRect = if (decision.addressRows >= 2) addressLong else addressShort
         val merchantAddressBlockRect = merchantAddressBlockRect(
             context = context,
             bitmap = bitmap,
-            shiftY = close.deltaY + lowerShiftY,
+            shiftY = lowerTotalShiftY,
             merchantLong = merchantLong,
             addressLong = addressLong
         )
-        logOcrRegionUsage(context, "merchant", true, merchantRect, lowerShiftY, "merchant")
-        logOcrRegionUsage(context, "address", true, addressRect, lowerShiftY, "address")
-        logOcrRegionUsage(context, "merchantAddressBlock", true, merchantAddressBlockRect, close.deltaY + lowerShiftY, "merchantAddressBlock")
+        logOcrRegionUsage(context, "merchant", true, merchantRect, lowerTotalShiftY, "merchant")
+        logOcrRegionUsage(context, "address", true, addressRect, lowerTotalShiftY, "address")
+        logOcrRegionUsage(context, "merchantAddressBlock", true, merchantAddressBlockRect, lowerTotalShiftY, "merchantAddressBlock")
         val debugInfo = AnchorDebugInfo(
             anchorSource = if (decision.fallbackUsed) "GEOMETRY_FALLBACK_M2_A2" else "GEOMETRY_PICKUP_DROPOFF",
             pickupDetected = anchorProbe.pickupDetection.detected,
