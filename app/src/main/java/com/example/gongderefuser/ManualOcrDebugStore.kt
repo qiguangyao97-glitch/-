@@ -43,6 +43,7 @@ object ManualOcrDebugStore {
                     appendLine("parsed=${order != null}")
                     appendLine("isPairOffer=${regionText.isPairOffer}")
                     appendLine("hasAnchoredCard=${regionText.hasAnchoredCard}")
+                    appendLine("debugOverlayMode=${if (OcrDebugConfig.SHOW_LEGACY_OCR_DEBUG_REGIONS) "LEGACY_FULL" else "MAIN_FLOW_ONLY"}")
                     appendAnchorDebug(regionText.anchorDebugInfo)
                     if (order != null) {
                         val analysis = OrderAnalyzer.analyzeResult(context, order)

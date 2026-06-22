@@ -80,6 +80,14 @@ object OcrHelper {
         TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
 
     private const val ENABLE_OCR_PREPROCESS = true
+    private val mainFlowDebugRegionNames = setOf(
+        "card",
+        "type",
+        "price",
+        "trip",
+        "sameDropoff",
+        "merchantAddressBlock"
+    )
 
     fun runOrderRegions(context: Context, bitmap: Bitmap, callback: (OrderRegionText) -> Unit) {
         runOrderRegionsInternal(context.applicationContext, bitmap, callback)
@@ -148,9 +156,18 @@ object OcrHelper {
             val lowerBuild = buildLowerRegions(context, bitmap, closeButton, sameDropoffMatched)
             val lowerRegions = lowerBuild.regions
             val allRegions = upperRegions + lowerRegions
-            val visibleRegions = allRegions.filter { it.name != "sameDropoff" || sameDropoffMatched }
+            val visibleRegions = if (OcrDebugConfig.SHOW_LEGACY_OCR_DEBUG_REGIONS) {
+                allRegions.filter { it.name != "sameDropoff" || sameDropoffMatched }
+            } else {
+                allRegions.filter { it.name in mainFlowDebugRegionNames }
+            }
+            val legacyDebugRegions = if (OcrDebugConfig.SHOW_LEGACY_OCR_DEBUG_REGIONS) {
+                lowerBuild.debugRegions
+            } else {
+                emptyList()
+            }
             val debugRegions = listOfNotNull(closeButton?.let { DebugRegion("closeButtonDetected", it.rect) }) +
-                    lowerBuild.debugRegions +
+                    legacyDebugRegions +
                     visibleRegions.map { DebugRegion(actualDebugName(it.name), Rect(it.rect)) }
             if (lowerRegions.isEmpty()) {
                 callback(
@@ -439,8 +456,10 @@ object OcrHelper {
             ?: findCardRect(bitmap, close)
         val lineHeight = estimateLineHeight(context, bitmap, card)
         val sameDropoffShiftY = if (sameDropoffMatched) -lineHeight else 0
+        val sameDropoffBlockShiftY = if (sameDropoffMatched) -(lineHeight * 0.45f).toInt() else 0
         val lowerShiftY = sameDropoffShiftY
         val lowerTotalShiftY = close.deltaY + sameDropoffShiftY
+        val lowerBlockTotalShiftY = close.deltaY + sameDropoffBlockShiftY
         val basePickup = calibratedPixelRect(context, bitmap, "pickupAnchor", lowerShiftY)
         val baseDropoff = calibratedPixelRect(context, bitmap, "dropoffAnchor", lowerShiftY)
         val anchorProbe = findSeparatedDeliveryAnchor(context, bitmap, lowerShiftY, lineHeight)
@@ -480,13 +499,15 @@ object OcrHelper {
         val merchantAddressBlockRect = merchantAddressBlockRect(
             context = context,
             bitmap = bitmap,
-            shiftY = lowerTotalShiftY,
+            shiftY = lowerBlockTotalShiftY,
             merchantLong = merchantLong,
-            addressLong = addressLong
+            addressLong = addressLong,
+            trip = tripActualRect,
+            lineHeight = lineHeight
         )
         logOcrRegionUsage(context, "merchant", false, true, merchantRect, lowerTotalShiftY, "merchant")
         logOcrRegionUsage(context, "address", false, true, addressRect, lowerTotalShiftY, "address")
-        logOcrRegionUsage(context, "merchantAddressBlock", true, false, merchantAddressBlockRect, lowerTotalShiftY, "merchantAddressBlock")
+        logOcrRegionUsage(context, "merchantAddressBlock", true, false, merchantAddressBlockRect, lowerBlockTotalShiftY, "merchantAddressBlock")
         val debugInfo = AnchorDebugInfo(
             anchorSource = if (decision.fallbackUsed) "GEOMETRY_FALLBACK_M2_A2" else "GEOMETRY_PICKUP_DROPOFF",
             pickupDetected = anchorProbe.pickupDetection.detected,
@@ -570,9 +591,11 @@ object OcrHelper {
         bitmap: Bitmap,
         shiftY: Int,
         merchantLong: Rect,
-        addressLong: Rect
+        addressLong: Rect,
+        trip: Rect?,
+        lineHeight: Int
     ): Rect {
-        return calibratedPixelRect(context, bitmap, "merchantAddressBlock", shiftY)
+        val block = calibratedPixelRect(context, bitmap, "merchantAddressBlock", shiftY)
             ?: rect(
                 bitmap = bitmap,
                 left = minOf(merchantLong.left, addressLong.left),
@@ -580,6 +603,9 @@ object OcrHelper {
                 right = maxOf(merchantLong.right, addressLong.right),
                 bottom = maxOf(merchantLong.bottom, addressLong.bottom)
             )
+        val minTop = (trip?.bottom ?: return block) + (lineHeight * 0.20f).toInt()
+        if (block.top >= minTop) return block
+        return rect(bitmap, block.left, minTop, block.right, maxOf(block.bottom, minTop + 1))
     }
 
     private fun logOcrRegionUsage(
