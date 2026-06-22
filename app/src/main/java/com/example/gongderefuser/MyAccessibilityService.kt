@@ -2160,7 +2160,7 @@ class MyAccessibilityService : AccessibilityService() {
         private const val POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT = 10
         private const val EVENT_STRUCTURE_NODE_LIMIT = 160
         private const val EVENT_STRUCTURE_TEXT_LIMIT = 80
-        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(400L)
+        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(1_500L, 2_200L, 3_000L)
         private val NON_ORDER_TRIGGER_REASONS = setOf(
             "OPPORTUNITY_PAGE",
             "MAIN_NAV_PAGE"
