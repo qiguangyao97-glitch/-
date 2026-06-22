@@ -599,10 +599,10 @@ class MyAccessibilityService : AccessibilityService() {
                 logEventStructure("NO_ORDER_CARD", lastEventStructureSnapshot)
                 currentSessionNoOrderStructureLogged = true
             }
-            if (finalSkipReason == "NO_ORDER_CARD" && currentSessionTriggerReason in NON_ORDER_TRIGGER_REASONS) {
+            if (finalSkipReason == "NO_ORDER_CARD") {
                 clearPendingOcrRetry(resetAttempt = true)
                 pendingDetectionAfterCurrent = false
-                endOrderDetectionSession("${currentSessionTriggerReason}_NO_ORDER_CARD")
+                endOrderDetectionSession("NO_ORDER_CARD")
                 logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=NO_ORDER_CARD_NO_RETRY triggerReason=$currentSessionTriggerReason")
                 return false
             }
@@ -774,6 +774,9 @@ class MyAccessibilityService : AccessibilityService() {
         now: Long,
         popupScan: PopupStructureScan?
     ): TriggerDecision {
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            return TriggerDecision(false, "USER_CLICK_EVENT")
+        }
         val scan = popupScan ?: rootInActiveWindow?.let(::inspectRootForPopupStructure)
             ?: return TriggerDecision(false, "NO_ROOT_FOR_POPUP_SCAN")
         if (scan.isOpportunityPage) {
@@ -786,18 +789,8 @@ class MyAccessibilityService : AccessibilityService() {
             popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
             return popupTriggerDecision(true, "POPUP_SCAN_BLOCKING", scan)
         }
-        if (scan.coreOrderFeatureCount >= 2) {
-            popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-            return popupTriggerDecision(true, "POPUP_SCAN_CORE_FEATURES", scan)
-        }
-        if (!scan.isLikelyBlockingPopup && scan.coreOrderFeatureCount < 2) {
-            return popupTriggerDecision(false, "UNKNOWN_NON_ORDER_PAGE", scan)
-        }
-        return popupTriggerDecision(
-            shouldTrigger = false,
-            reason = "POPUP_SCAN_REJECTED textNodes=${scan.textNodeCount} nodes=${scan.nodeCount} class=${event.className}",
-            scan = scan
-        )
+        popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+        return popupTriggerDecision(true, "UBER_EVENT_FALLBACK_OCR", scan)
     }
 
     private fun popupTriggerDecision(
@@ -2160,11 +2153,10 @@ class MyAccessibilityService : AccessibilityService() {
         private const val POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT = 10
         private const val EVENT_STRUCTURE_NODE_LIMIT = 160
         private const val EVENT_STRUCTURE_TEXT_LIMIT = 80
-        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(1_500L, 1_800L)
+        private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(400L)
         private val NON_ORDER_TRIGGER_REASONS = setOf(
             "OPPORTUNITY_PAGE",
-            "MAIN_NAV_PAGE",
-            "UNKNOWN_NON_ORDER_PAGE"
+            "MAIN_NAV_PAGE"
         )
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
