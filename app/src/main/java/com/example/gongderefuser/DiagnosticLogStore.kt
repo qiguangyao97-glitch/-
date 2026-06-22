@@ -47,7 +47,8 @@ object DiagnosticLogStore {
         "PROJECTION",
         "SCREEN",
         "SECOND_CHECK",
-        "SERVICE"
+        "SERVICE",
+        "WINDOW_DEBUG"
     )
     @Volatile
     private var lastWriteSummary: String = "尚未寫入"
@@ -93,6 +94,10 @@ object DiagnosticLogStore {
             }
         }
         return successes.firstOrNull()
+    }
+
+    fun add(context: Context, tag: String, message: String): File? {
+        return append(context, tag, message)
     }
 
     private data class LogTarget(

@@ -97,8 +97,8 @@ class MyAccessibilityService : AccessibilityService() {
         if (!isActivationActiveForMonitoring()) return
 
         val packageName = event?.packageName?.toString() ?: return
-        if (packageName != "com.ubercab.driver") return
         logUberWindowDebug(event, packageName, "EVENT_RECEIVED")
+        if (packageName != "com.ubercab.driver") return
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             logTargetClickEvent(event, packageName)
         }
@@ -1017,7 +1017,7 @@ class MyAccessibilityService : AccessibilityService() {
         if (packageName != "com.ubercab.driver" && !hasUberWindow) return
 
         logWindowDebug(
-            "stage=$stage eventType=${eventTypeName(event.eventType)} package=$packageName class=${event.className?.toString().orEmpty()} " +
+            "stage=$stage eventType=${eventTypeName(event.eventType)} packageName=$packageName className=${event.className?.toString().orEmpty()} " +
                     "windowId=${runCatching { event.source?.windowId }.getOrNull() ?: -1} " +
                     "rootPackage=${activeRoot?.packageName?.toString().orEmpty()} rootClass=${activeRoot?.className?.toString().orEmpty()}"
         )
@@ -1025,7 +1025,7 @@ class MyAccessibilityService : AccessibilityService() {
         currentWindows.forEachIndexed { index, window ->
             val root = window.root
             logWindowDebug(
-                "stage=$stage windowIndex=$index windowType=${window.type} windowLayer=${window.layer} " +
+                "stage=$stage windowIndex=$index windowType=${windowTypeName(window.type)} windowLayer=${window.layer} " +
                         "windowTitle=${sanitizeForLog(window.title?.toString().orEmpty(), EVENT_STRUCTURE_TEXT_LIMIT)} " +
                         "rootPackage=${root?.packageName?.toString().orEmpty()} rootClass=${root?.className?.toString().orEmpty()}"
             )
@@ -1034,7 +1034,18 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun logWindowDebug(message: String) {
         Log.d("WINDOW_DEBUG", message)
-        DiagnosticLogStore.append(this, "WINDOW_DEBUG", message)
+        DiagnosticLogStore.add(this, "WINDOW_DEBUG", message)
+    }
+
+    private fun windowTypeName(type: Int): String {
+        return when (type) {
+            android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION -> "TYPE_APPLICATION"
+            android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "TYPE_INPUT_METHOD"
+            android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM -> "TYPE_SYSTEM"
+            android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "TYPE_ACCESSIBILITY_OVERLAY"
+            android.view.accessibility.AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "TYPE_SPLIT_SCREEN_DIVIDER"
+            else -> type.toString()
+        }
     }
 
     private fun inspectEventSource(event: AccessibilityEvent): String {
