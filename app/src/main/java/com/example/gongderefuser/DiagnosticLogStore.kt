@@ -48,6 +48,7 @@ object DiagnosticLogStore {
         "SCREEN",
         "SECOND_CHECK",
         "SERVICE",
+        "TRIGGER_GATE_BYPASS",
         "WINDOW_DEBUG"
     )
     @Volatile
