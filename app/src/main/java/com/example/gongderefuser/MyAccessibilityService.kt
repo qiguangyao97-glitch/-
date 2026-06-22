@@ -581,11 +581,11 @@ class MyAccessibilityService : AccessibilityService() {
                 Log.i("OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
                 DiagnosticLogStore.append(this, "OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
             }
-            if (finalSkipReason == "NO_ORDER_CARD") {
+            if (finalSkipReason == "NO_ORDER_CARD" && currentSessionTriggerReason in NON_ORDER_TRIGGER_REASONS) {
                 clearPendingOcrRetry(resetAttempt = true)
                 pendingDetectionAfterCurrent = false
-                endOrderDetectionSession("NO_ORDER_CARD")
-                logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=NO_ORDER_CARD_NO_RETRY")
+                endOrderDetectionSession("${currentSessionTriggerReason}_NO_ORDER_CARD")
+                logObservation("ORDER_DETECTION_WAIT", "state=WAITING reason=NO_ORDER_CARD_NO_RETRY triggerReason=$currentSessionTriggerReason")
                 return false
             }
             handleInvalidOrderLifecycle(finalSkipReason, hasAnchoredCard, textLength)
@@ -757,20 +757,19 @@ class MyAccessibilityService : AccessibilityService() {
         if (scan.isOpportunityPage) {
             return popupTriggerDecision(false, "OPPORTUNITY_PAGE", scan)
         }
+        if (scan.isMainNavPage) {
+            return popupTriggerDecision(false, "MAIN_NAV_PAGE", scan)
+        }
         if (scan.isLikelyBlockingPopup) {
             popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
             return popupTriggerDecision(true, "POPUP_SCAN_BLOCKING", scan)
         }
-        if (scan.hasOrderTextSignal) {
+        if (scan.coreOrderFeatureCount >= 2) {
             popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-            return popupTriggerDecision(true, "POPUP_SCAN_ORDER_TEXT_SIGNAL", scan)
+            return popupTriggerDecision(true, "POPUP_SCAN_CORE_FEATURES", scan)
         }
-        if (scan.isRenderedPopupShell) {
-            popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
-            return popupTriggerDecision(true, "POPUP_SCAN_RENDERED_SHELL", scan)
-        }
-        if (now <= popupCandidateUntilTime && scan.isSparsePopupShell) {
-            return popupTriggerDecision(true, "POPUP_SCAN_SPARSE_SHELL_IN_CANDIDATE_WINDOW", scan)
+        if (!scan.isLikelyBlockingPopup && scan.coreOrderFeatureCount < 2) {
+            return popupTriggerDecision(false, "UNKNOWN_NON_ORDER_PAGE", scan)
         }
         return popupTriggerDecision(
             shouldTrigger = false,
@@ -788,6 +787,7 @@ class MyAccessibilityService : AccessibilityService() {
             shouldTrigger = shouldTrigger,
             reason = reason,
             score = scan.score,
+            likelyBlockingPopup = scan.isLikelyBlockingPopup,
             features = scan.featureSummary(),
             samples = scan.samples.joinToString(" | ")
         )
@@ -890,8 +890,8 @@ class MyAccessibilityService : AccessibilityService() {
         }
         DiagnosticLogStore.append(this, "POPUP_STRUCTURE_SCAN", summary)
 
-        if (!scan.isOpportunityPage &&
-            scan.score >= ORDER_TRIGGER_CANDIDATE_MIN_SCORE &&
+        if (!scan.isNonOrderPage &&
+            scan.hasTriggerableOrderSignal &&
             now - lastPopupCandidateLogTime >= POPUP_CANDIDATE_LOG_MIN_INTERVAL_MS
         ) {
             lastPopupCandidateLogTime = now
@@ -916,7 +916,7 @@ class MyAccessibilityService : AccessibilityService() {
             this,
             "ORDER_TRIGGER_CANDIDATE",
             "reason=${decision.reason} eventType=${eventTypeName(event.eventType)} packageName=${event.packageName?.toString().orEmpty()} " +
-                    "className=${event.className?.toString().orEmpty()} score=${decision.score} features=${decision.features} samples=${decision.samples}"
+                    "className=${event.className?.toString().orEmpty()} score=${decision.score} likelyBlockingPopup=${decision.likelyBlockingPopup} features=${decision.features} samples=${decision.samples}"
         )
     }
 
@@ -926,13 +926,14 @@ class MyAccessibilityService : AccessibilityService() {
         popupScan: PopupStructureScan?
     ) {
         val score = if (decision.features.isNotBlank()) decision.score else popupScan?.score ?: 0
+        val likelyBlockingPopup = if (decision.features.isNotBlank()) decision.likelyBlockingPopup else popupScan?.isLikelyBlockingPopup ?: false
         val features = decision.features.ifBlank { popupScan?.featureSummary().orEmpty() }
         val samples = decision.samples.ifBlank { popupScan?.samples?.joinToString(" | ").orEmpty() }
         DiagnosticLogStore.append(
             this,
             "ORDER_TRIGGER_REJECTED",
             "reason=${decision.reason} eventType=${eventTypeName(event.eventType)} packageName=${event.packageName?.toString().orEmpty()} " +
-                    "className=${event.className?.toString().orEmpty()} score=$score features=$features samples=$samples"
+                    "className=${event.className?.toString().orEmpty()} score=$score likelyBlockingPopup=$likelyBlockingPopup features=$features samples=$samples"
         )
     }
 
@@ -971,6 +972,12 @@ class MyAccessibilityService : AccessibilityService() {
         var hasCompleteTrips = false
         var hasStartTime = false
         var hasReward = false
+        var hasHomeNav = false
+        var hasExploreNav = false
+        var hasInboxNav = false
+        var hasTripFare = false
+        var hasMenuNav = false
+        var hasSettingsNav = false
 
         queue.add(root)
         while (queue.isNotEmpty() && nodeCount < POPUP_STRUCTURE_SCAN_NODE_LIMIT) {
@@ -1007,7 +1014,13 @@ class MyAccessibilityService : AccessibilityService() {
                     onExtraEarn = { hasExtraEarn = true },
                     onCompleteTrips = { hasCompleteTrips = true },
                     onStartTime = { hasStartTime = true },
-                    onReward = { hasReward = true }
+                    onReward = { hasReward = true },
+                    onHomeNav = { hasHomeNav = true },
+                    onExploreNav = { hasExploreNav = true },
+                    onInboxNav = { hasInboxNav = true },
+                    onTripFare = { hasTripFare = true },
+                    onMenuNav = { hasMenuNav = true },
+                    onSettingsNav = { hasSettingsNav = true }
                 )
                 if (samples.size < POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT) {
                     val rect = Rect()
@@ -1058,6 +1071,12 @@ class MyAccessibilityService : AccessibilityService() {
             hasCompleteTrips = hasCompleteTrips,
             hasStartTime = hasStartTime,
             hasReward = hasReward,
+            hasHomeNav = hasHomeNav,
+            hasExploreNav = hasExploreNav,
+            hasInboxNav = hasInboxNav,
+            hasTripFare = hasTripFare,
+            hasMenuNav = hasMenuNav,
+            hasSettingsNav = hasSettingsNav,
             score = score,
             isLikelyBlockingPopup = isLikelyBlockingPopup
         )
@@ -1078,7 +1097,13 @@ class MyAccessibilityService : AccessibilityService() {
         onExtraEarn: () -> Unit,
         onCompleteTrips: () -> Unit,
         onStartTime: () -> Unit,
-        onReward: () -> Unit
+        onReward: () -> Unit,
+        onHomeNav: () -> Unit,
+        onExploreNav: () -> Unit,
+        onInboxNav: () -> Unit,
+        onTripFare: () -> Unit,
+        onMenuNav: () -> Unit,
+        onSettingsNav: () -> Unit
     ) {
         val normalized = value.replace(" ", "")
         if (normalized.contains("接受") || normalized.contains("接單") || normalized.contains("Accept", ignoreCase = true)) onAccept()
@@ -1095,6 +1120,12 @@ class MyAccessibilityService : AccessibilityService() {
         if (Regex("""完成\d+趟行程""").containsMatchIn(normalized)) onCompleteTrips()
         if (normalized.contains("開始時間") || normalized.contains("开始时间")) onStartTime()
         if (normalized.contains("獎勵") || normalized.contains("奖励")) onReward()
+        if (normalized == "首頁" || normalized.equals("home", ignoreCase = true)) onHomeNav()
+        if (normalized == "探索" || normalized.equals("explore", ignoreCase = true)) onExploreNav()
+        if (normalized == "收件匣" || normalized.equals("inbox", ignoreCase = true)) onInboxNav()
+        if (normalized.contains("行程費用") || normalized.contains("行程费用")) onTripFare()
+        if (normalized == "選單" || normalized == "菜单" || normalized.equals("menu", ignoreCase = true)) onMenuNav()
+        if (normalized == "設定" || normalized == "设置" || normalized.equals("settings", ignoreCase = true)) onSettingsNav()
     }
 
     private fun sanitizeForLog(value: String, maxLength: Int): String {
@@ -1102,14 +1133,11 @@ class MyAccessibilityService : AccessibilityService() {
         return if (compact.length <= maxLength) compact else compact.take(maxLength) + "..."
     }
 
-    private fun isBetaPackage(): Boolean {
-        return packageName.endsWith(".beta")
-    }
-
     private data class TriggerDecision(
         val shouldTrigger: Boolean,
         val reason: String,
         val score: Int = 0,
+        val likelyBlockingPopup: Boolean = false,
         val features: String = "",
         val samples: String = ""
     )
@@ -1135,11 +1163,27 @@ class MyAccessibilityService : AccessibilityService() {
         val hasCompleteTrips: Boolean,
         val hasStartTime: Boolean,
         val hasReward: Boolean,
+        val hasHomeNav: Boolean,
+        val hasExploreNav: Boolean,
+        val hasInboxNav: Boolean,
+        val hasTripFare: Boolean,
+        val hasMenuNav: Boolean,
+        val hasSettingsNav: Boolean,
         val score: Int,
         val isLikelyBlockingPopup: Boolean
     ) {
         val hasOrderTextSignal: Boolean
             get() = hasMoney || hasMinute || hasDistance || hasAcceptAction || hasMatchAction
+
+        val coreOrderFeatureCount: Int
+            get() = listOf(
+                hasMoney || hasTotal,
+                hasMinute,
+                hasDistance
+            ).count { it }
+
+        val hasTriggerableOrderSignal: Boolean
+            get() = isLikelyBlockingPopup || coreOrderFeatureCount >= 2
 
         val isSparsePopupShell: Boolean
             get() {
@@ -1165,7 +1209,23 @@ class MyAccessibilityService : AccessibilityService() {
             ).count { it }
 
         val isOpportunityPage: Boolean
-            get() = opportunityScore >= 2
+            get() = hasOpportunityTitle && opportunityScore >= 2
+
+        val mainNavScore: Int
+            get() = listOf(
+                hasHomeNav,
+                hasExploreNav,
+                hasInboxNav,
+                hasTripFare,
+                hasMenuNav,
+                hasSettingsNav
+            ).count { it }
+
+        val isMainNavPage: Boolean
+            get() = mainNavScore >= 2
+
+        val isNonOrderPage: Boolean
+            get() = isOpportunityPage || isMainNavPage || (!isLikelyBlockingPopup && coreOrderFeatureCount < 2)
 
         fun featureSummary(): String {
             val topClasses = classCounts.entries
@@ -1174,7 +1234,8 @@ class MyAccessibilityService : AccessibilityService() {
                 .joinToString("|") { "${it.key.substringAfterLast('.')}:${it.value}" }
             return "money=$hasMoney minute=$hasMinute distance=$hasDistance total=$hasTotal delivery=$hasDelivery food=$hasFoodDelivery " +
                     "accept=$hasAcceptAction match=$hasMatchAction close=$hasCloseAction " +
-                    "opportunityScore=$opportunityScore opportunity=$hasOpportunityTitle extraEarn=$hasExtraEarn completeTrips=$hasCompleteTrips startTime=$hasStartTime reward=$hasReward classes=$topClasses"
+                    "coreOrderFeatures=$coreOrderFeatureCount opportunityScore=$opportunityScore opportunity=$hasOpportunityTitle extraEarn=$hasExtraEarn completeTrips=$hasCompleteTrips startTime=$hasStartTime reward=$hasReward " +
+                    "mainNavScore=$mainNavScore home=$hasHomeNav explore=$hasExploreNav inbox=$hasInboxNav tripFare=$hasTripFare menu=$hasMenuNav settings=$hasSettingsNav classes=$topClasses"
         }
     }
 
@@ -1951,8 +2012,12 @@ class MyAccessibilityService : AccessibilityService() {
         private const val POPUP_CANDIDATE_LOG_MIN_INTERVAL_MS = 3_000L
         private const val POPUP_STRUCTURE_SCAN_NODE_LIMIT = 140
         private const val POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT = 10
-        private const val ORDER_TRIGGER_CANDIDATE_MIN_SCORE = 3
         private val ORDER_DETECTION_CAPTURE_OFFSETS_MS = longArrayOf(1_500L, 1_800L)
+        private val NON_ORDER_TRIGGER_REASONS = setOf(
+            "OPPORTUNITY_PAGE",
+            "MAIN_NAV_PAGE",
+            "UNKNOWN_NON_ORDER_PAGE"
+        )
 
         private val COLOR_SUCCESS = Color.rgb(34, 197, 94)
         private val COLOR_DANGER = Color.rgb(239, 68, 68)
