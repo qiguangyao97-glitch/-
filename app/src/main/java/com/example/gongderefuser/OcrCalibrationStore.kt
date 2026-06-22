@@ -16,6 +16,7 @@ object OcrCalibrationStore {
         "type",
         "merchant",
         "address",
+        "merchantAddressBlock",
         "addressWide",
         "sameDropoff",
         "pickupCircleSearch",
@@ -30,11 +31,15 @@ object OcrCalibrationStore {
         "trip",
         "merchant",
         "address",
-        "pickupCircleSearch",
-        "dropoffSquareSearch",
+        "merchantAddressBlock",
+        "sameDropoff"
+    )
+
+    val advancedRegionNames = listOf(
         "pickupAnchor",
         "dropoffAnchor",
-        "sameDropoff"
+        "pickupCircleSearch",
+        "dropoffSquareSearch"
     )
 
     fun displayName(name: String): String {
@@ -54,7 +59,8 @@ object OcrCalibrationStore {
             "type" -> "訂單類型模板"
             "merchant" -> "商家一/兩行模板"
             "address" -> "地址一/兩行模板"
-            "addressWide" -> "地址兩行參考"
+            "merchantAddressBlock" -> "商家地址總文字區"
+            "addressWide" -> "地址兩行參考（已停用）"
             "sameDropoff" -> "同地點配送"
             "pickupCircleSearch" -> "取餐圓圈搜尋框"
             "dropoffSquareSearch" -> "送達方塊搜尋框"
@@ -78,6 +84,7 @@ object OcrCalibrationStore {
             "tripActual" -> "時間距離實際框"
             "merchantActual" -> "商家實際框"
             "merchantWideActual" -> "商家兩行實際框"
+            "merchantAddressBlockActual" -> "商家地址總文字區實際框"
             "addressActual" -> "地址實際框"
             "addressWideActual" -> "地址兩行實際框"
             "sameDropoffActual" -> "同地點配送實際框"
@@ -128,6 +135,7 @@ object OcrCalibrationStore {
             "sameDropoff" to RectF(0.16105202f, 0.8277047f, 0.7990283f, 0.87454516f),
             "merchant" to RectF(0.16389231f, 0.74912906f, 0.89558125f, 0.7777719f),
             "address" to RectF(0.15196417f, 0.7893281f, 0.92517924f, 0.8545573f),
+            "merchantAddressBlock" to RectF(0.15196417f, 0.7410f, 0.92517924f, 0.8740f),
             "pickupCircleSearch" to RectF(0.057f, 0.716f, 0.181f, 0.800f),
             "dropoffSquareSearch" to RectF(0.057f, 0.790f, 0.181f, 0.856f),
             "addressWide" to RectF(0.15518843f, 0.8188458f, 0.9224712f, 0.86461985f)

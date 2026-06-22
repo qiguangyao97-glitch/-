@@ -22,6 +22,7 @@ object DiagnosticLogStore {
         "OCR_FAIL",
         "OCR_MONEY_INVALID",
         "OCR_SUCCESS",
+        "OCR_REGION_USAGE",
         "OCR_TEMPLATE_ACTIVE",
         "OCR_TEMPLATE_LOAD_FOR_EDITOR",
         "OCR_TEMPLATE_SAVE",

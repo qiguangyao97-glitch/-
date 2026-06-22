@@ -2216,6 +2216,40 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(8)
         })
 
+        toolbar.addView(TextView(this).apply {
+            text = "高級 Anchor 診斷"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT_SECONDARY)
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = dp(4)
+        })
+
+        val advancedPicker = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+        val advancedRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        OcrCalibrationStore.advancedRegionNames.forEachIndexed { index, name ->
+            advancedRow.addView(createCalibrationRegionButton(name), LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                rightMargin = if (index == OcrCalibrationStore.advancedRegionNames.lastIndex) 0 else dp(8)
+            })
+        }
+        advancedPicker.addView(advancedRow)
+        toolbar.addView(advancedPicker, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = dp(8)
+        })
+
         if (calibrationGuidedMode) {
             toolbar.addView(createCalibrationGuideRow(), LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2392,7 +2426,8 @@ class MainActivity : AppCompatActivity() {
             "type" -> "跟隨金額模板：與金額模板上下排並連動移動。"
             "merchant" -> "完整大框代表兩行商家；上半框代表一行商家。實際識別會依圓圈與方塊距離自動套用。"
             "address" -> "完整大框代表兩行地址；上半框代表一行地址。方塊位置用來決定地址起點。"
-            "addressWide" -> "地址兩行參考框：完整框讀兩行，上半框讀一行。"
+            "merchantAddressBlock" -> "商家地址總文字區：框住最多兩行商家與兩行地址，供解析器在小框失準時兜底拆分。"
+            "addressWide" -> "已停用：目前主流程不使用此區域。"
             "pickupAnchor" -> "取餐圓圈定位框：用來判斷商家/地址行數，不直接讀文字。"
             "dropoffAnchor" -> "送達方塊定位框：用來判斷地址起點與行數，不直接讀文字。"
             "deliveryAnchorSearch" -> "舊定位搜尋框已停用；新幾何定位只使用取餐圓圈搜尋框與送達方塊搜尋框。"
@@ -3143,6 +3178,7 @@ class MainActivity : AppCompatActivity() {
                         sameDropoffText = regionText.sameDropoffText,
                         merchantText = regionText.merchantText,
                         merchantWideText = regionText.merchantWideText,
+                        merchantAddressBlockText = regionText.merchantAddressBlockText,
                         addressText = regionText.addressText,
                         addressWideText = regionText.addressWideText,
                         addressLowerText = regionText.addressLowerText
@@ -3239,6 +3275,7 @@ class MainActivity : AppCompatActivity() {
                         sameDropoffText = regionText.sameDropoffText,
                         merchantText = regionText.merchantText,
                         merchantWideText = regionText.merchantWideText,
+                        merchantAddressBlockText = regionText.merchantAddressBlockText,
                         addressText = regionText.addressText,
                         addressWideText = regionText.addressWideText,
                         addressLowerText = regionText.addressLowerText
@@ -4089,8 +4126,7 @@ class MainActivity : AppCompatActivity() {
             "trip",
             "merchant",
             "address",
-            "pickupAnchor",
-            "dropoffAnchor",
+            "merchantAddressBlock",
             "sameDropoff"
         )
         private val COLOR_BACKGROUND = Color.rgb(246, 248, 250)

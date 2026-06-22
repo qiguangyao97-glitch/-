@@ -25,6 +25,7 @@ object OrderParser {
         val sameDropoffText: String = "",
         val merchantText: String,
         val merchantWideText: String = "",
+        val merchantAddressBlockText: String = "",
         val addressText: String,
         val addressWideText: String = "",
         val addressLowerText: String = ""
@@ -33,6 +34,18 @@ object OrderParser {
     private data class AddressSelection(
         val text: String,
         val source: String
+    )
+
+    private data class MerchantAddressBlockFallback(
+        val merchant: String,
+        val address: String,
+        val used: Boolean,
+        val reason: String,
+        val lines: List<String>,
+        val lineScores: List<Pair<Int, Int>>,
+        val addressStartIndex: Int?,
+        val blockMerchantCandidate: String,
+        val blockAddressCandidate: String
     )
 
     @Volatile
@@ -108,6 +121,7 @@ object OrderParser {
             val sameDropoffText = normalize(input.sameDropoffText)
             val rawMerchant = input.merchantText.trim()
             val rawAddress = input.addressText.trim()
+            val merchantAddressBlockText = input.merchantAddressBlockText.trim()
             val combinedText = listOf(
                 priceText,
                 tripText,
@@ -121,8 +135,17 @@ object OrderParser {
             val isExclusive = deliveryCount <= 1
             val isTargetOffer = isLikelyTargetOffer(combinedText)
             val isAddOnOrder = isAddOnOrder(combinedText)
-            val storeName = rawMerchant
-            val address = rawAddress
+            val initialMerchantStatus = if (rawMerchant.isNotBlank()) "OK" else "PARSE_FAILED"
+            val initialAddressStatus = if (rawAddress.isNotBlank()) "OK" else "PARSE_FAILED"
+            val blockFallback = splitMerchantAddressBlock(
+                blockText = merchantAddressBlockText,
+                merchantText = rawMerchant,
+                addressText = rawAddress,
+                merchantStatus = initialMerchantStatus,
+                addressStatus = initialAddressStatus
+            )
+            val storeName = blockFallback.merchant.ifBlank { rawMerchant }
+            val address = blockFallback.address.ifBlank { rawAddress }
             val merchantStatus = if (storeName.isNotBlank()) "OK" else "PARSE_FAILED"
             val addressStatus = if (address.isNotBlank()) "OK" else "PARSE_FAILED"
             val sameDropoffMatched = matchesSameDropoff(sameDropoffText)
@@ -137,6 +160,14 @@ object OrderParser {
                     地址OCR原文=$rawAddress
                     最終地址=$address
                     地址狀態=$addressStatus
+                    merchantAddressBlockRaw=$merchantAddressBlockText
+                    merchantAddressBlockLines=${blockFallback.lines.joinToString("|")}
+                    lineAddressScore=${blockFallback.lineScores.joinToString("|") { "${it.first}:${it.second}" }}
+                    addressStartIndex=${blockFallback.addressStartIndex ?: ""}
+                    blockMerchantCandidate=${blockFallback.blockMerchantCandidate}
+                    blockAddressCandidate=${blockFallback.blockAddressCandidate}
+                    merchantAddressBlockFallbackUsed=${blockFallback.used}
+                    fallbackReason=${blockFallback.reason}
                     """.trimIndent()
                 )
             }
@@ -174,6 +205,130 @@ object OrderParser {
             source.isBlank() -> "MISSING"
             else -> "PARSE_FAILED"
         }
+    }
+
+    private fun splitMerchantAddressBlock(
+        blockText: String,
+        merchantText: String,
+        addressText: String,
+        merchantStatus: String,
+        addressStatus: String
+    ): MerchantAddressBlockFallback {
+        val lines = normalize(blockText)
+            .lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .filterNot(::isMerchantAddressBlockNoiseLine)
+        val scores = lines.mapIndexed { index, line -> index to addressScore(line) }
+        val addressStartIndex = scores
+            .filter { it.second >= 3 }
+            .maxByOrNull { it.second }
+            ?.let { best -> scores.indexOfFirst { it.second == best.second } }
+        val blockAddressLines = if (addressStartIndex != null) {
+            val result = mutableListOf<String>()
+            var index = addressStartIndex
+            while (index < lines.size) {
+                val score = addressScore(lines[index])
+                if (index == addressStartIndex || score >= 1 || isAddressContinuationCandidate(lines[index])) {
+                    result.add(lines[index])
+                    index += 1
+                } else {
+                    break
+                }
+            }
+            result
+        } else {
+            emptyList()
+        }
+        val blockMerchantLines = if (addressStartIndex != null) {
+            lines.take(addressStartIndex)
+                .asReversed()
+                .filter { addressScore(it) < 3 && !isMerchantAddressBlockNoiseLine(it) }
+                .take(2)
+                .asReversed()
+        } else {
+            emptyList()
+        }
+        val blockMerchant = blockMerchantLines.joinToString("\n")
+        val blockAddress = blockAddressLines.joinToString("\n")
+        val reason = merchantAddressFallbackReason(
+            merchantText = merchantText,
+            addressText = addressText,
+            merchantStatus = merchantStatus,
+            addressStatus = addressStatus
+        )
+        val blockAddressLooksBetter = blockAddress.isNotBlank() &&
+            addressScore(blockAddress.lines().firstOrNull().orEmpty()) >= 3 &&
+            !looksLikeAddressForBlock(addressText)
+        val shouldUse = blockAddress.isNotBlank() &&
+            blockMerchant.isNotBlank() &&
+            (reason.isNotBlank() || blockAddressLooksBetter)
+        return MerchantAddressBlockFallback(
+            merchant = if (shouldUse) blockMerchant else "",
+            address = if (shouldUse) blockAddress else "",
+            used = shouldUse,
+            reason = when {
+                shouldUse -> reason.ifBlank { "BLOCK_ADDRESS_LOOKS_BETTER" }
+                addressStartIndex == null -> "NO_ADDRESS_START"
+                blockMerchant.isBlank() -> "NO_BLOCK_MERCHANT"
+                blockAddress.isBlank() -> "NO_BLOCK_ADDRESS"
+                else -> ""
+            },
+            lines = lines,
+            lineScores = scores,
+            addressStartIndex = addressStartIndex,
+            blockMerchantCandidate = blockMerchant,
+            blockAddressCandidate = blockAddress
+        )
+    }
+
+    private fun merchantAddressFallbackReason(
+        merchantText: String,
+        addressText: String,
+        merchantStatus: String,
+        addressStatus: String
+    ): String {
+        val reasons = mutableListOf<String>()
+        if (merchantText.isBlank()) reasons.add("MERCHANT_EMPTY")
+        if (addressText.isBlank()) reasons.add("ADDRESS_EMPTY")
+        if (merchantStatus != "OK") reasons.add("MERCHANT_STATUS_$merchantStatus")
+        if (addressStatus != "OK") reasons.add("ADDRESS_STATUS_$addressStatus")
+        if (merchantText.lines().any { addressScore(it) >= 3 }) reasons.add("MERCHANT_CONTAINS_ADDRESS")
+        if (addressText.isNotBlank() && !looksLikeAddressForBlock(addressText)) reasons.add("ADDRESS_NOT_LIKE_ADDRESS")
+        if (merchantText.length in 1..1) reasons.add("MERCHANT_TOO_SHORT")
+        if (addressText.length in 1..1) reasons.add("ADDRESS_TOO_SHORT")
+        return reasons.joinToString(",")
+    }
+
+    private fun isMerchantAddressBlockNoiseLine(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.length < 2) return true
+        if (trimmed.matches(Regex("^[0-9]+$"))) return true
+        return listOf("外送", "獨享", "独享", "總計", "总计", "分鐘", "分钟", "公里", "NT", "$", "建議", "建议")
+            .any { trimmed.contains(it, ignoreCase = true) }
+    }
+
+    private fun addressScore(line: String): Int {
+        val text = line.trim()
+        var score = 0
+        if (text.contains("taiwan", ignoreCase = true)) score += 3
+        if (text.contains("台灣") || text.contains("台湾")) score += 3
+        if (text.contains("市")) score += 3
+        if (text.contains("區") || text.contains("区")) score += 3
+        if (Regex("^[0-9]{2,5}").containsMatchIn(text)) score += 1
+        if (text.contains("里")) score += 1
+        if (text.any { it in listOf('路', '街', '巷', '弄') }) score += 1
+        if (text.contains("號") || text.contains("号")) score += 1
+        if (text.any { it.isDigit() }) score += 1
+        return score
+    }
+
+    private fun looksLikeAddressForBlock(text: String): Boolean {
+        return text.lines().any { addressScore(it) >= 3 }
+    }
+
+    private fun isAddressContinuationCandidate(line: String): Boolean {
+        return addressScore(line) >= 1 || line.any { it.isDigit() } || line.contains("號") || line.contains("号")
     }
 
     private fun matchesSameDropoff(text: String): Boolean {

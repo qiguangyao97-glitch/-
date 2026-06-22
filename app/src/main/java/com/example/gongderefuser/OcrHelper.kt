@@ -34,6 +34,7 @@ object OcrHelper {
         val sameDropoffText: String,
         val merchantText: String,
         val merchantWideText: String,
+        val merchantAddressBlockText: String,
         val addressText: String,
         val addressWideText: String,
         val addressLowerText: String,
@@ -71,6 +72,7 @@ object OcrHelper {
         val tripRect: Rect? = null,
         val merchantRect: Rect? = null,
         val addressRect: Rect? = null,
+        val merchantAddressBlockRect: Rect? = null,
         val addressWideRect: Rect? = null
     )
 
@@ -100,6 +102,7 @@ object OcrHelper {
             OcrTemplateRepository.templateSummary(activeTemplate.regions)
         )
         val closeSearchRect = closeSearchRect(context, bitmap)
+        logOcrRegionUsage(context, "closeSearch", true, closeSearchRect, 0, "closeSearch")
         val closeButton = findCloseButton(context, bitmap, closeSearchRect)
         val anchorDebugInfo = buildAnchorDebugInfo(context, bitmap, closeButton)
         val upperRegions = buildUpperRegions(context, bitmap, closeButton)
@@ -126,6 +129,7 @@ object OcrHelper {
                         sameDropoffText = "",
                         merchantText = "",
                         merchantWideText = "",
+                        merchantAddressBlockText = "",
                         addressText = "",
                         addressWideText = "",
                         addressLowerText = "",
@@ -161,6 +165,7 @@ object OcrHelper {
                         sameDropoffText = sameDropoffText,
                         merchantText = "",
                         merchantWideText = "",
+                        merchantAddressBlockText = "",
                         addressText = "",
                         addressWideText = "",
                         addressLowerText = "",
@@ -172,7 +177,15 @@ object OcrHelper {
             runRegions(lowerRegions) { lowerResults ->
                 callback(
                     OrderRegionText(
-                        fullText = "",
+                        fullText = listOf(
+                            upperResults["type"].orEmpty(),
+                            upperResults["price"].orEmpty(),
+                            upperResults["trip"].orEmpty(),
+                            sameDropoffText,
+                            lowerResults["merchant"].orEmpty(),
+                            lowerResults["address"].orEmpty(),
+                            lowerResults["merchantAddressBlock"].orEmpty()
+                        ).filter { it.isNotBlank() }.joinToString("\n"),
                         isPairOffer = false,
                         hasAnchoredCard = hasAnchoredCard,
                         anchorDebugInfo = lowerBuild.debugInfo,
@@ -185,6 +198,7 @@ object OcrHelper {
                         sameDropoffText = sameDropoffText,
                         merchantText = lowerResults["merchant"].orEmpty(),
                         merchantWideText = lowerResults["merchantWide"].orEmpty(),
+                        merchantAddressBlockText = lowerResults["merchantAddressBlock"].orEmpty(),
                         addressText = lowerResults["address"].orEmpty(),
                         addressWideText = lowerResults["addressWide"].orEmpty(),
                         addressLowerText = "",
@@ -390,6 +404,11 @@ object OcrHelper {
             ?: rect(bitmap, 0.12f, 0.64f, 0.94f, 0.74f)
         val sameDropoffRect = calibratedPixelRect(context, bitmap, "sameDropoff")
             ?: rect(bitmap, 0.16f, 0.82f, 0.92f, 0.88f)
+        logOcrRegionUsage(context, "card", true, card, close.deltaY, "card")
+        logOcrRegionUsage(context, "type", true, typeRect, close.deltaY, "type")
+        logOcrRegionUsage(context, "price", true, priceRect, close.deltaY, "price")
+        logOcrRegionUsage(context, "trip", true, tripRect, close.deltaY, "trip")
+        logOcrRegionUsage(context, "sameDropoff", true, sameDropoffRect, 0, "sameDropoff")
 
         return listOf(
             RegionCrop("card", card, blankBitmap()),
@@ -441,6 +460,16 @@ object OcrHelper {
         val addressShort = oneLineRect(bitmap, addressLong, lineHeight)
         val merchantRect = if (decision.merchantRows >= 2) merchantLong else merchantShort
         val addressRect = if (decision.addressRows >= 2) addressLong else addressShort
+        val merchantAddressBlockRect = merchantAddressBlockRect(
+            context = context,
+            bitmap = bitmap,
+            shiftY = close.deltaY + lowerShiftY,
+            merchantLong = merchantLong,
+            addressLong = addressLong
+        )
+        logOcrRegionUsage(context, "merchant", true, merchantRect, lowerShiftY, "merchant")
+        logOcrRegionUsage(context, "address", true, addressRect, lowerShiftY, "address")
+        logOcrRegionUsage(context, "merchantAddressBlock", true, merchantAddressBlockRect, close.deltaY + lowerShiftY, "merchantAddressBlock")
         val debugInfo = AnchorDebugInfo(
             anchorSource = if (decision.fallbackUsed) "GEOMETRY_FALLBACK_M2_A2" else "GEOMETRY_PICKUP_DROPOFF",
             pickupDetected = anchorProbe.pickupDetection.detected,
@@ -471,7 +500,8 @@ object OcrHelper {
             priceRect = calibratedPixelRect(context, bitmap, "price", close.deltaY),
             tripRect = tripActualRect,
             merchantRect = merchantRect,
-            addressRect = addressRect
+            addressRect = addressRect,
+            merchantAddressBlockRect = merchantAddressBlockRect
         )
         val debugRegions = buildList {
             debugInfo.pickupSearchRect?.let { add(DebugRegion("pickupSearchRect", it)) }
@@ -492,7 +522,8 @@ object OcrHelper {
         return LowerBuildResult(
             regions = listOf(
                 region(bitmap, "merchant", merchantRect, prepare = true),
-                region(bitmap, "address", addressRect, prepare = true)
+                region(bitmap, "address", addressRect, prepare = true),
+                region(bitmap, "merchantAddressBlock", merchantAddressBlockRect, prepare = true)
             ),
             debugInfo = debugInfo,
             debugRegions = debugRegions
@@ -514,6 +545,39 @@ object OcrHelper {
             top = minTop,
             right = merchant.right,
             bottom = minTop + height
+        )
+    }
+
+    private fun merchantAddressBlockRect(
+        context: Context,
+        bitmap: Bitmap,
+        shiftY: Int,
+        merchantLong: Rect,
+        addressLong: Rect
+    ): Rect {
+        return calibratedPixelRect(context, bitmap, "merchantAddressBlock", shiftY)
+            ?: rect(
+                bitmap = bitmap,
+                left = minOf(merchantLong.left, addressLong.left),
+                top = minOf(merchantLong.top, addressLong.top),
+                right = maxOf(merchantLong.right, addressLong.right),
+                bottom = maxOf(merchantLong.bottom, addressLong.bottom)
+            )
+    }
+
+    private fun logOcrRegionUsage(
+        context: Context,
+        regionName: String,
+        usedByMainFlow: Boolean,
+        rect: Rect,
+        shiftY: Int,
+        cropName: String
+    ) {
+        val source = OcrTemplateRepository.getActiveTemplate(context).source.name
+        DiagnosticLogStore.append(
+            context,
+            "OCR_REGION_USAGE",
+            "regionName=$regionName usedByMainFlow=$usedByMainFlow source=$source rect=${rect.left},${rect.top},${rect.right},${rect.bottom} shiftY=$shiftY cropName=$cropName"
         )
     }
 
@@ -1792,6 +1856,7 @@ object OcrHelper {
             "trip" -> "tripActual"
             "merchant" -> "merchantActual"
             "merchantWide" -> "merchantWideActual"
+            "merchantAddressBlock" -> "merchantAddressBlockActual"
             "address" -> "addressActual"
             "addressWide" -> "addressWideActual"
             "sameDropoff" -> "sameDropoffActual"
@@ -2027,14 +2092,14 @@ object OcrHelper {
             "type", "trip" -> 1.62f
             "sameDropoff" -> 1.58f
             "price" -> 1.55f
-            "merchant", "merchantWide", "address", "addressWide", "addressLower" -> 1.22f
+            "merchant", "merchantWide", "merchantAddressBlock", "address", "addressWide", "addressLower" -> 1.22f
             else -> 1.25f
         }
         val translate = when (cropName) {
             "type", "trip" -> -44f
             "sameDropoff" -> -40f
             "price" -> -38f
-            "merchant", "merchantWide", "address", "addressWide", "addressLower" -> -12f
+            "merchant", "merchantWide", "merchantAddressBlock", "address", "addressWide", "addressLower" -> -12f
             else -> -18f
         }
         val grayscale = cropName == "type" ||
@@ -2058,7 +2123,7 @@ object OcrHelper {
         Canvas(output).drawBitmap(scaled, 0f, 0f, paint)
         return when (cropName) {
             "type", "trip", "price", "sameDropoff",
-            "merchant", "merchantWide", "address", "addressWide", "addressLower" -> sharpen(output)
+            "merchant", "merchantWide", "merchantAddressBlock", "address", "addressWide", "addressLower" -> sharpen(output)
             else -> output
         }
     }
@@ -2067,7 +2132,7 @@ object OcrHelper {
         return when (cropName) {
             "type", "trip", "sameDropoff" -> 3
             "price" -> 1
-            "merchant", "merchantWide", "address", "addressWide", "addressLower" -> 2
+            "merchant", "merchantWide", "merchantAddressBlock", "address", "addressWide", "addressLower" -> 2
             else -> 2
         }
     }
@@ -2077,7 +2142,7 @@ object OcrHelper {
             "type", "trip" -> "TYPE_TRIP_STRONG"
             "price" -> "NONE"
             "sameDropoff" -> "SAME_DROPOFF_STRONG"
-            "merchant", "merchantWide", "address", "addressWide", "addressLower" -> "TEXT_LIGHT"
+            "merchant", "merchantWide", "merchantAddressBlock", "address", "addressWide", "addressLower" -> "TEXT_LIGHT"
             else -> "DEFAULT"
         }
     }

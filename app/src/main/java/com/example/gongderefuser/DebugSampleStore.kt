@@ -114,6 +114,8 @@ object DebugSampleStore {
                     appendLine(regionText.sameDropoffText)
                     appendLine("===== MERCHANT =====")
                     appendLine(regionText.merchantText)
+                    appendLine("===== MERCHANT_ADDRESS_BLOCK =====")
+                    appendLine(regionText.merchantAddressBlockText)
                     appendLine("===== ADDRESS =====")
                     appendLine(regionText.addressText)
                 },
@@ -232,6 +234,7 @@ object DebugSampleStore {
                 sameDropoffText = regionText.sameDropoffText,
                 merchantText = regionText.merchantText,
                 merchantWideText = regionText.merchantWideText,
+                merchantAddressBlockText = regionText.merchantAddressBlockText,
                 addressText = regionText.addressText,
                 addressWideText = regionText.addressWideText,
                 addressLowerText = regionText.addressLowerText
@@ -280,6 +283,7 @@ object DebugSampleStore {
         appendLine("tripRect=${formatRect(info.tripRect)}")
         appendLine("merchantRect=${formatRect(info.merchantRect)}")
         appendLine("addressRect=${formatRect(info.addressRect)}")
+        appendLine("merchantAddressBlockRect=${formatRect(info.merchantAddressBlockRect)}")
         appendLine("addressWideRect=${formatRect(info.addressWideRect)}")
     }
 

@@ -294,6 +294,7 @@ class ScreenCaptureService : Service() {
                 sameDropoffText = regionText.sameDropoffText,
                 merchantText = regionText.merchantText,
                 merchantWideText = regionText.merchantWideText,
+                merchantAddressBlockText = regionText.merchantAddressBlockText,
                 addressText = regionText.addressText,
                 addressWideText = regionText.addressWideText,
                 addressLowerText = regionText.addressLowerText

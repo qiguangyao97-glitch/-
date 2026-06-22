@@ -276,6 +276,7 @@ class OcrCalibrationView(context: Context) : View(context) {
             "closeButton" -> drawCenteredText(canvas, "X", rect, color, 32f)
             "merchant" -> drawOneTwoLineTemplate(canvas, rect, color, "商家")
             "address", "addressWide" -> drawOneTwoLineTemplate(canvas, rect, color, "地址")
+            "merchantAddressBlock" -> drawMerchantAddressBlockTemplate(canvas, rect, color)
             "pickupAnchor" -> {
                 fillPaint.color = withAlpha(color, 220)
                 canvas.drawCircle(rect.centerX(), rect.centerY(), (rect.height() * 0.32f).coerceAtLeast(7f), fillPaint)
@@ -305,6 +306,16 @@ class OcrCalibrationView(context: Context) : View(context) {
         drawMiniLabel(canvas, bottomLabel, rect.left + padding, splitY + padding, color)
         labelPaint.typeface = android.graphics.Typeface.DEFAULT
         labelPaint.textSize = 28f
+    }
+
+    private fun drawMerchantAddressBlockTemplate(canvas: Canvas, rect: RectF, color: Int) {
+        strokePaint.color = color
+        strokePaint.strokeWidth = 2.5f
+        for (index in 1..3) {
+            val y = rect.top + rect.height() * index / 4f
+            canvas.drawLine(rect.left, y, rect.right, y, strokePaint)
+        }
+        drawMiniLabel(canvas, "商家地址總文字區 4行+底部容錯", rect.left + 7f, rect.top + 7f, color)
     }
 
     private fun drawMiniLabel(canvas: Canvas, text: String, left: Float, top: Float, color: Int) {
@@ -349,6 +360,7 @@ class OcrCalibrationView(context: Context) : View(context) {
             "type" -> listOf("type", "price")
             "merchant" -> listOf("merchant")
             "address" -> listOf("address")
+            "merchantAddressBlock" -> listOf("merchantAddressBlock")
             "addressWide" -> listOf("addressWide")
             "pickupAnchor" -> listOf("pickupCircleSearch", "pickupAnchor")
             "pickupCircleSearch" -> listOf("pickupCircleSearch", "pickupAnchor")
@@ -359,7 +371,8 @@ class OcrCalibrationView(context: Context) : View(context) {
     }
 
     private fun isSelectableProxy(name: String): Boolean {
-        return name in OcrCalibrationStore.editableRegionNames
+        return name in OcrCalibrationStore.editableRegionNames ||
+            name in OcrCalibrationStore.advancedRegionNames
     }
 
     private fun isResizeLocked(name: String): Boolean {
@@ -403,6 +416,7 @@ class OcrCalibrationView(context: Context) : View(context) {
             "trip" -> Color.rgb(255, 214, 10)
             "sameDropoff" -> Color.rgb(48, 209, 88)
             "merchant", "merchantWide" -> Color.rgb(52, 199, 89)
+            "merchantAddressBlock" -> Color.rgb(0, 122, 255)
             "address", "addressWide", "addressLower" -> Color.rgb(255, 59, 48)
             else -> Color.rgb(90, 200, 250)
         }

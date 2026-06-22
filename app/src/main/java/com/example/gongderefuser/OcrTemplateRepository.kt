@@ -52,10 +52,10 @@ object OcrTemplateRepository {
             }
             if (missing.isNotEmpty()) {
                 ActiveTemplate(
-                    regions = OcrCalibrationStore.defaultRegions(),
-                    source = Source.DEFAULT,
+                    regions = loaded,
+                    source = Source.USER_SAVED,
                     hasUserSavedTemplate = true,
-                    fallbackReason = "MISSING_FIELDS:${missing.joinToString(",")}"
+                    fallbackReason = "MISSING_FIELDS_FILLED_DEFAULT:${missing.joinToString(",")}"
                 )
             } else {
                 ActiveTemplate(
@@ -119,6 +119,7 @@ object OcrTemplateRepository {
             "merchantShort=${format(topHalf(merchantLong))}",
             "addressLong=${format(addressLong)}",
             "addressShort=${format(topHalf(addressLong))}",
+            "merchantAddressBlock=${format(regions["merchantAddressBlock"])}",
             "sameDropoffRect=${format(regions["sameDropoff"])}"
         ).joinToString(" ")
     }
