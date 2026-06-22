@@ -293,7 +293,14 @@ object OcrHelper {
         val cornerRatio: Float,
         val outerDarkRatio: Float,
         val ringScore: Float,
-        val candidateScore: Int
+        val candidateScore: Int,
+        val centerWhiteRatio: Float,
+        val centerBlackThinLineRatio: Float,
+        val centerBlackIsThinLine: Boolean,
+        val hollowIconScore: Int,
+        val sourceRectWidth: Int,
+        val sourceRectHeight: Int,
+        val fromSplitComponent: Boolean
     )
 
     private data class CandidateDebug(
@@ -668,7 +675,7 @@ object OcrHelper {
                 candidateScore = scoreAnchorCandidate(rawCandidate, fixedLineX, expectedSize)
             )
             val sizeRejectReason = anchorSizeRejectReason(candidate, lineHeight, expectCircle)
-            val shapeRejectReason = anchorShapeRejectReason(candidate)
+            val shapeRejectReason = anchorShapeRejectReason(candidate, lineHeight)
             when {
                 sizeRejectReason != null -> {
                     rejectedBySize += 1
@@ -769,7 +776,13 @@ object OcrHelper {
         return candidates
     }
 
-    private fun shapeCandidateFromRect(bitmap: Bitmap, rect: Rect, knownDarkPixels: Int? = null): ShapeCandidate {
+    private fun shapeCandidateFromRect(
+        bitmap: Bitmap,
+        rect: Rect,
+        knownDarkPixels: Int? = null,
+        sourceRect: Rect = rect,
+        fromSplitComponent: Boolean = false
+    ): ShapeCandidate {
         val darkPixels = knownDarkPixels ?: countAnchorDarkPixels(bitmap, rect)
         val area = rect.width().coerceAtLeast(1) * rect.height().coerceAtLeast(1)
         val aspect = rect.width().toFloat() / rect.height().toFloat().coerceAtLeast(1f)
@@ -778,6 +791,16 @@ object OcrHelper {
         val edgeRatio = edgeDarkRatio(bitmap, rect, darkPixels)
         val outerRatio = outerDarkRatio(bitmap, rect, centerRatio)
         val ring = (outerRatio - centerRatio).coerceAtLeast(0f)
+        val centerWhiteRatio = 1f - centerRatio
+        val thinLineRatio = centerBlackThinLineRatio(bitmap, rect)
+        val centerBlackIsThinLine = centerRatio > 0.25f && thinLineRatio <= 0.35f
+        val hollowIconScore = hollowIconScore(
+            centerWhiteRatio = centerWhiteRatio,
+            outerDarkRatio = outerRatio,
+            ringScore = ring,
+            centerDarkRatio = centerRatio,
+            centerBlackIsThinLine = centerBlackIsThinLine
+        )
         val roundness = minOf(aspect, 1f / aspect.coerceAtLeast(0.001f)).coerceIn(0f, 1f)
         val circularity = (roundness * (0.45f + edgeRatio * 0.55f)).coerceIn(0f, 1f)
         val rectangularity = (roundness * (0.35f + edgeRatio * 0.65f)).coerceIn(0f, 1f)
@@ -786,8 +809,9 @@ object OcrHelper {
             rect = rect,
             aspectRatio = aspect,
             fillRatio = fill,
-            ringScore = ring,
+            hollowIconScore = hollowIconScore,
             edgePixelRatio = edgeRatio,
+            fromSplitComponent = fromSplitComponent,
             fixedLineX = rect.centerX(),
             expectedSize = rect.width().coerceAtLeast(rect.height())
         )
@@ -806,7 +830,14 @@ object OcrHelper {
             cornerRatio = cornerDarkRatio(bitmap, rect),
             outerDarkRatio = outerRatio,
             ringScore = ring,
-            candidateScore = candidateScore
+            candidateScore = candidateScore,
+            centerWhiteRatio = centerWhiteRatio,
+            centerBlackThinLineRatio = thinLineRatio,
+            centerBlackIsThinLine = centerBlackIsThinLine,
+            hollowIconScore = hollowIconScore,
+            sourceRectWidth = sourceRect.width(),
+            sourceRectHeight = sourceRect.height(),
+            fromSplitComponent = fromSplitComponent
         )
     }
 
@@ -832,7 +863,9 @@ object OcrHelper {
                     centerY + window / 2
                 )
                 val dark = countAnchorDarkPixels(bitmap, slice)
-                if (dark >= 3) local.add(shapeCandidateFromRect(bitmap, slice, dark))
+                if (dark >= 3) {
+                    local.add(shapeCandidateFromRect(bitmap, slice, dark, sourceRect = rect, fromSplitComponent = true))
+                }
                 top += step
             }
         } else {
@@ -847,7 +880,9 @@ object OcrHelper {
                     rect.centerY() + window / 2
                 )
                 val dark = countAnchorDarkPixels(bitmap, slice)
-                if (dark >= 3) local.add(shapeCandidateFromRect(bitmap, slice, dark))
+                if (dark >= 3) {
+                    local.add(shapeCandidateFromRect(bitmap, slice, dark, sourceRect = rect, fromSplitComponent = true))
+                }
                 left += step
             }
         }
@@ -927,6 +962,43 @@ object OcrHelper {
         return countAnchorDarkPixels(bitmap, safe).toFloat() / total.toFloat()
     }
 
+    private fun centerBlackThinLineRatio(bitmap: Bitmap, rect: Rect): Float {
+        val centerWidth = (rect.width() * 0.5f).toInt().coerceAtLeast(1)
+        val centerHeight = (rect.height() * 0.5f).toInt().coerceAtLeast(1)
+        val center = rect(
+            bitmap,
+            rect.centerX() - centerWidth / 2,
+            rect.centerY() - centerHeight / 2,
+            rect.centerX() - centerWidth / 2 + centerWidth,
+            rect.centerY() - centerHeight / 2 + centerHeight
+        )
+        val columnHasDark = BooleanArray(center.width().coerceAtLeast(1))
+        var localX = 0
+        while (localX < center.width()) {
+            val x = center.left + localX
+            var y = center.top
+            while (y < center.bottom) {
+                if (isAnchorDarkPixel(bitmap.getPixel(x, y))) {
+                    columnHasDark[localX] = true
+                    break
+                }
+                y += 1
+            }
+            localX += 1
+        }
+        var maxRun = 0
+        var currentRun = 0
+        columnHasDark.forEach { hasDark ->
+            if (hasDark) {
+                currentRun += 1
+                maxRun = maxOf(maxRun, currentRun)
+            } else {
+                currentRun = 0
+            }
+        }
+        return maxRun.toFloat() / center.width().coerceAtLeast(1).toFloat()
+    }
+
     private fun outerDarkRatio(bitmap: Bitmap, rect: Rect, centerRatio: Float): Float {
         val centerWidth = (rect.width() * 0.5f).toInt().coerceAtLeast(1)
         val centerHeight = (rect.height() * 0.5f).toInt().coerceAtLeast(1)
@@ -949,6 +1021,21 @@ object OcrHelper {
         return (lineHeight * 0.36f).toInt().coerceAtLeast(8)
     }
 
+    private fun hollowIconScore(
+        centerWhiteRatio: Float,
+        outerDarkRatio: Float,
+        ringScore: Float,
+        centerDarkRatio: Float,
+        centerBlackIsThinLine: Boolean
+    ): Int {
+        val centerWhiteScore = (centerWhiteRatio * 100f).toInt()
+        val outerScore = (outerDarkRatio * 120f).toInt()
+        val ringScoreInt = (ringScore * 160f).toInt()
+        val thinLineBonus = if (centerBlackIsThinLine) 25 else 0
+        val centerPenalty = if (centerDarkRatio > 0.55f && !centerBlackIsThinLine) -80 else 0
+        return outerScore + centerWhiteScore + ringScoreInt + thinLineBonus + centerPenalty
+    }
+
     private fun anchorSizeRejectReason(candidate: ShapeCandidate, lineHeight: Int, expectCircle: Boolean): String? {
         val minAnchorSize = maxOf(8, (lineHeight * 0.12f).toInt())
         val maxAnchorSize = (lineHeight * 0.8f).toInt().coerceAtLeast(minAnchorSize)
@@ -961,11 +1048,16 @@ object OcrHelper {
         }
     }
 
-    private fun anchorShapeRejectReason(candidate: ShapeCandidate): String? {
+    private fun anchorShapeRejectReason(candidate: ShapeCandidate, lineHeight: Int): String? {
+        val sourceAspect = candidate.sourceRectWidth.toFloat() / candidate.sourceRectHeight.coerceAtLeast(1).toFloat()
+        val expectedSize = expectedAnchorSize(lineHeight)
+        val actualSize = (candidate.rect.width() + candidate.rect.height()) / 2
         return when {
             candidate.aspectRatio !in 0.6f..1.6f -> "ASPECT_RATIO_OUT_OF_RANGE"
             candidate.fillRatio < 0.03f -> "FILL_RATIO_TOO_LOW"
             candidate.fillRatio > 0.75f -> "FILL_RATIO_TOO_HIGH"
+            candidate.fromSplitComponent && (sourceAspect < 0.35f || sourceAspect > 2.8f) -> "SPLIT_FROM_ELONGATED_LINE"
+            actualSize > expectedSize * 1.7f -> "ANCHOR_SIZE_TOO_FAR_FROM_EXPECTED"
             else -> null
         }
     }
@@ -980,8 +1072,9 @@ object OcrHelper {
             rect = candidate.rect,
             aspectRatio = candidate.aspectRatio,
             fillRatio = candidate.fillRatio,
-            ringScore = candidate.ringScore,
+            hollowIconScore = candidate.hollowIconScore,
             edgePixelRatio = candidate.edgePixelRatio,
+            fromSplitComponent = candidate.fromSplitComponent,
             fixedLineX = fixedLineX,
             expectedSize = expectedSize
         )
@@ -992,23 +1085,24 @@ object OcrHelper {
         rect: Rect,
         aspectRatio: Float,
         fillRatio: Float,
-        ringScore: Float,
+        hollowIconScore: Int,
         edgePixelRatio: Float,
+        fromSplitComponent: Boolean,
         fixedLineX: Int,
         expectedSize: Int
     ): Int {
         val actualSize = (rect.width() + rect.height()) / 2
-        val sizeScore = 100 - kotlin.math.abs(actualSize - expectedSize) * 3
+        val sizeScore = 160 - kotlin.math.abs(actualSize - expectedSize) * 8
         val aspectScore = 100 - (kotlin.math.abs(1f - aspectRatio) * 100f).toInt()
         val xScore = 100 - kotlin.math.abs(centerX - fixedLineX) * 4
-        val ringScoreInt = (ringScore * 160f).toInt()
         val fillScore = when {
-            fillRatio in 0.08f..0.35f -> 80
-            fillRatio in 0.04f..0.50f -> 40
-            else -> -40
+            fillRatio in 0.08f..0.35f -> 60
+            fillRatio in 0.04f..0.50f -> 30
+            else -> -60
         }
-        val edgeScore = (edgePixelRatio * 40f).toInt()
-        return sizeScore + aspectScore + xScore + ringScoreInt + fillScore + edgeScore
+        val splitPenalty = if (fromSplitComponent) -120 else 0
+        val edgeScore = (edgePixelRatio * 20f).toInt()
+        return sizeScore + aspectScore + xScore + fillScore + hollowIconScore + splitPenalty + edgeScore
     }
 
     private fun detectAnchorConflict(anchor: DeliveryAnchor?, lineHeight: Int): AnchorConflict {
@@ -1049,9 +1143,18 @@ object OcrHelper {
                 appendLine("aspectRatio=${fmt(c.aspectRatio)}")
                 appendLine("fillRatio=${fmt(c.fillRatio)}")
                 appendLine("centerDarkRatio=${fmt(c.centerDarkRatio)}")
+                appendLine("centerWhiteRatio=${fmt(c.centerWhiteRatio)}")
+                appendLine("centerBlackThinLineRatio=${fmt(c.centerBlackThinLineRatio)}")
+                appendLine("centerBlackIsThinLine=${c.centerBlackIsThinLine}")
                 appendLine("outerDarkRatio=${fmt(c.outerDarkRatio)}")
                 appendLine("ringScore=${fmt(c.ringScore)}")
+                appendLine("hollowIconScore=${c.hollowIconScore}")
                 appendLine("candidateScore=${c.candidateScore}")
+                appendLine("fromSplitComponent=${c.fromSplitComponent}")
+                appendLine("sourceRectWidth=${c.sourceRectWidth}")
+                appendLine("sourceRectHeight=${c.sourceRectHeight}")
+                val sourceAspect = c.sourceRectWidth.toFloat() / c.sourceRectHeight.coerceAtLeast(1).toFloat()
+                appendLine("sourceAspect=${fmt(sourceAspect)}")
                 appendLine("edgePixelRatio=${fmt(c.edgePixelRatio)}")
                 appendLine("circularity=${fmt(c.circularity)}")
                 appendLine("rectangularity=${fmt(c.rectangularity)}")
