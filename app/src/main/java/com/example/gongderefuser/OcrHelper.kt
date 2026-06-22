@@ -102,8 +102,11 @@ object OcrHelper {
             OcrTemplateRepository.templateSummary(activeTemplate.regions)
         )
         val closeSearchRect = closeSearchRect(context, bitmap)
-        logOcrRegionUsage(context, "closeSearch", true, closeSearchRect, 0, "closeSearch")
+        logOcrRegionUsage(context, "closeSearch", true, false, closeSearchRect, 0, "closeSearch")
         val closeButton = findCloseButton(context, bitmap, closeSearchRect)
+        closeButton?.let {
+            logOcrRegionUsage(context, "closeButton", true, false, it.rect, it.deltaY, "closeButton")
+        }
         val anchorDebugInfo = buildAnchorDebugInfo(context, bitmap, closeButton)
         val upperRegions = buildUpperRegions(context, bitmap, closeButton)
         val hasAnchoredCard = upperRegions != null
@@ -404,11 +407,11 @@ object OcrHelper {
             ?: rect(bitmap, 0.12f, 0.64f, 0.94f, 0.74f)
         val sameDropoffRect = calibratedPixelRect(context, bitmap, "sameDropoff")
             ?: rect(bitmap, 0.16f, 0.82f, 0.92f, 0.88f)
-        logOcrRegionUsage(context, "card", true, card, close.deltaY, "card")
-        logOcrRegionUsage(context, "type", true, typeRect, close.deltaY, "type")
-        logOcrRegionUsage(context, "price", true, priceRect, close.deltaY, "price")
-        logOcrRegionUsage(context, "trip", true, tripRect, close.deltaY, "trip")
-        logOcrRegionUsage(context, "sameDropoff", true, sameDropoffRect, 0, "sameDropoff")
+        logOcrRegionUsage(context, "card", true, false, card, close.deltaY, "card")
+        logOcrRegionUsage(context, "type", true, false, typeRect, close.deltaY, "type")
+        logOcrRegionUsage(context, "price", true, false, priceRect, close.deltaY, "price")
+        logOcrRegionUsage(context, "trip", true, false, tripRect, close.deltaY, "trip")
+        logOcrRegionUsage(context, "sameDropoff", true, false, sameDropoffRect, 0, "sameDropoff")
 
         return listOf(
             RegionCrop("card", card, blankBitmap()),
@@ -441,6 +444,18 @@ object OcrHelper {
         val basePickup = calibratedPixelRect(context, bitmap, "pickupAnchor", lowerShiftY)
         val baseDropoff = calibratedPixelRect(context, bitmap, "dropoffAnchor", lowerShiftY)
         val anchorProbe = findSeparatedDeliveryAnchor(context, bitmap, lowerShiftY, lineHeight)
+        anchorProbe.pickupSearchRect?.let {
+            logOcrRegionUsage(context, "pickupCircleSearch", false, true, it, lowerShiftY, "pickupCircleSearch")
+        }
+        anchorProbe.dropoffSearchRect?.let {
+            logOcrRegionUsage(context, "dropoffSquareSearch", false, true, it, lowerShiftY, "dropoffSquareSearch")
+        }
+        basePickup?.let {
+            logOcrRegionUsage(context, "pickupAnchor", false, true, it, lowerShiftY, "pickupAnchor")
+        }
+        baseDropoff?.let {
+            logOcrRegionUsage(context, "dropoffAnchor", false, true, it, lowerShiftY, "dropoffAnchor")
+        }
         val anchor = anchorProbe.anchor
         val conflict = detectAnchorConflict(anchor, lineHeight)
         val decision = decideLayoutFromGeometry(
@@ -469,9 +484,9 @@ object OcrHelper {
             merchantLong = merchantLong,
             addressLong = addressLong
         )
-        logOcrRegionUsage(context, "merchant", true, merchantRect, lowerTotalShiftY, "merchant")
-        logOcrRegionUsage(context, "address", true, addressRect, lowerTotalShiftY, "address")
-        logOcrRegionUsage(context, "merchantAddressBlock", true, merchantAddressBlockRect, lowerTotalShiftY, "merchantAddressBlock")
+        logOcrRegionUsage(context, "merchant", false, true, merchantRect, lowerTotalShiftY, "merchant")
+        logOcrRegionUsage(context, "address", false, true, addressRect, lowerTotalShiftY, "address")
+        logOcrRegionUsage(context, "merchantAddressBlock", true, false, merchantAddressBlockRect, lowerTotalShiftY, "merchantAddressBlock")
         val debugInfo = AnchorDebugInfo(
             anchorSource = if (decision.fallbackUsed) "GEOMETRY_FALLBACK_M2_A2" else "GEOMETRY_PICKUP_DROPOFF",
             pickupDetected = anchorProbe.pickupDetection.detected,
@@ -571,6 +586,7 @@ object OcrHelper {
         context: Context,
         regionName: String,
         usedByMainFlow: Boolean,
+        legacy: Boolean,
         rect: Rect,
         shiftY: Int,
         cropName: String
@@ -579,7 +595,7 @@ object OcrHelper {
         DiagnosticLogStore.append(
             context,
             "OCR_REGION_USAGE",
-            "regionName=$regionName usedByMainFlow=$usedByMainFlow source=$source rect=${rect.left},${rect.top},${rect.right},${rect.bottom} shiftY=$shiftY cropName=$cropName"
+            "regionName=$regionName usedByMainFlow=$usedByMainFlow legacy=$legacy source=$source rect=${rect.left},${rect.top},${rect.right},${rect.bottom} shiftY=$shiftY cropName=$cropName"
         )
     }
 

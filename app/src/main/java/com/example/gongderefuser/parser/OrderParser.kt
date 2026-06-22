@@ -144,8 +144,8 @@ object OrderParser {
                 merchantStatus = initialMerchantStatus,
                 addressStatus = initialAddressStatus
             )
-            val storeName = blockFallback.merchant.ifBlank { rawMerchant }
-            val address = blockFallback.address.ifBlank { rawAddress }
+            val storeName = if (blockFallback.used) blockFallback.merchant else rawMerchant
+            val address = if (blockFallback.used) blockFallback.address else rawAddress
             val merchantStatus = if (storeName.isNotBlank()) "OK" else "PARSE_FAILED"
             val addressStatus = if (address.isNotBlank()) "OK" else "PARSE_FAILED"
             val sameDropoffMatched = matchesSameDropoff(sameDropoffText)
@@ -185,7 +185,7 @@ object OrderParser {
                 isTargetOffer = isTargetOffer,
                 isAddOnOrder = isAddOnOrder,
                 address = address,
-                addressSource = "ADDRESS_DIRECT",
+                addressSource = if (blockFallback.used) "MERCHANT_ADDRESS_BLOCK" else "ADDRESS_DIRECT",
                 storeName = storeName,
                 priceStatus = fieldStatus(priceText, price > 0),
                 tripStatus = fieldStatus(tripText, minutes > 0 && distance > 0.0),
@@ -257,18 +257,13 @@ object OrderParser {
             merchantStatus = merchantStatus,
             addressStatus = addressStatus
         )
-        val blockAddressLooksBetter = blockAddress.isNotBlank() &&
-            addressScore(blockAddress.lines().firstOrNull().orEmpty()) >= 3 &&
-            !looksLikeAddressForBlock(addressText)
-        val shouldUse = blockAddress.isNotBlank() &&
-            blockMerchant.isNotBlank() &&
-            (reason.isNotBlank() || blockAddressLooksBetter)
+        val shouldUse = blockAddress.isNotBlank() && blockMerchant.isNotBlank()
         return MerchantAddressBlockFallback(
             merchant = if (shouldUse) blockMerchant else "",
             address = if (shouldUse) blockAddress else "",
             used = shouldUse,
             reason = when {
-                shouldUse -> reason.ifBlank { "BLOCK_ADDRESS_LOOKS_BETTER" }
+                shouldUse -> "MERCHANT_ADDRESS_BLOCK_PRIMARY" + reason.takeIf { it.isNotBlank() }?.let { ":$it" }.orEmpty()
                 addressStartIndex == null -> "NO_ADDRESS_START"
                 blockMerchant.isBlank() -> "NO_BLOCK_MERCHANT"
                 blockAddress.isBlank() -> "NO_BLOCK_ADDRESS"
@@ -304,7 +299,7 @@ object OrderParser {
         val trimmed = line.trim()
         if (trimmed.length < 2) return true
         if (trimmed.matches(Regex("^[0-9]+$"))) return true
-        return listOf("外送", "獨享", "独享", "總計", "总计", "分鐘", "分钟", "公里", "NT", "$", "建議", "建议")
+        return listOf("外送", "獨享", "独享", "總計", "总计", "分鐘", "分钟", "公里", "金額", "金额", "NT", "$", "建議", "建议")
             .any { trimmed.contains(it, ignoreCase = true) }
     }
 

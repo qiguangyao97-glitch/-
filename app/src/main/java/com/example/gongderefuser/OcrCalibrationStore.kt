@@ -7,33 +7,34 @@ object OcrCalibrationStore {
     private const val CLOSE_BUTTON_WIDTH = 0.0575f
     private const val CLOSE_BUTTON_HEIGHT = 0.0257f
 
-    val regionNames = listOf(
+    val mainFlowRegionNames = listOf(
         "card",
         "closeSearch",
         "closeButton",
+        "type",
         "price",
         "trip",
-        "type",
-        "merchant",
-        "address",
-        "merchantAddressBlock",
-        "addressWide",
         "sameDropoff",
-        "pickupCircleSearch",
-        "dropoffSquareSearch",
-        "pickupAnchor",
-        "dropoffAnchor"
+        "merchantAddressBlock"
     )
 
-    val editableRegionNames = listOf(
-        "closeButton",
-        "price",
-        "trip",
+    val legacyRegionNames = listOf(
         "merchant",
         "address",
-        "merchantAddressBlock",
-        "sameDropoff"
+        "addressWide",
+        "pickupAnchor",
+        "dropoffAnchor",
+        "pickupCircleSearch",
+        "dropoffSquareSearch",
+        "deliveryAnchorSearch",
+        "deliveryAnchor",
+        "pickupAnchorShifted",
+        "dropoffAnchorShifted"
     )
+
+    val regionNames = mainFlowRegionNames + legacyRegionNames
+
+    val editableRegionNames = mainFlowRegionNames
 
     val advancedRegionNames = listOf(
         "pickupAnchor",
@@ -41,6 +42,15 @@ object OcrCalibrationStore {
         "pickupCircleSearch",
         "dropoffSquareSearch"
     )
+
+    val debugRegionNames = advancedRegionNames + listOf(
+        "merchant",
+        "address",
+        "addressWide",
+        "deliveryAnchorSearch"
+    )
+
+    private fun withLegacyPrefix(label: String): String = "舊版/診斷：$label"
 
     fun displayName(name: String): String {
         if (name.startsWith("pickupCandidate#") || name.startsWith("dropoffCandidate#")) return name
@@ -51,19 +61,19 @@ object OcrCalibrationStore {
         if (name.startsWith("dropoffCandidateRejectedByShape")) return "dropoff候選 rejectedByShape"
         if (name.startsWith("dropoffCandidateRejectedBySize")) return "dropoff候選 rejectedBySize"
         return when (name) {
-            "card" -> "卡片參考框"
-            "closeSearch" -> "關閉按鈕搜尋框"
-            "closeButton" -> "關閉按鈕模板"
-            "price" -> "金額模板"
-            "trip" -> "時間距離模板"
-            "type" -> "訂單類型模板"
-            "merchant" -> "商家一/兩行模板"
-            "address" -> "地址一/兩行模板"
-            "merchantAddressBlock" -> "商家地址總文字區"
-            "addressWide" -> "地址兩行參考（已停用）"
-            "sameDropoff" -> "同地點配送"
-            "pickupCircleSearch" -> "取餐圓圈搜尋框"
-            "dropoffSquareSearch" -> "送達方塊搜尋框"
+            "card" -> "卡片範圍"
+            "closeSearch" -> "關閉按鈕搜索區"
+            "closeButton" -> "關閉按鈕"
+            "price" -> "金額"
+            "trip" -> "時間距離"
+            "type" -> "類型"
+            "merchant" -> withLegacyPrefix("商家小框")
+            "address" -> withLegacyPrefix("地址小框")
+            "merchantAddressBlock" -> "商家地址四行總文字區"
+            "addressWide" -> withLegacyPrefix("地址兩行參考")
+            "sameDropoff" -> "同地點配送文字區"
+            "pickupCircleSearch" -> withLegacyPrefix("Pickup 搜索區")
+            "dropoffSquareSearch" -> withLegacyPrefix("Dropoff 搜索區")
             "pickupSearchRect" -> "取餐搜尋區"
             "dropoffSearchRect" -> "送達搜尋區"
             "pickupDetectedRect" -> "取餐圓圈命中"
@@ -74,9 +84,9 @@ object OcrCalibrationStore {
             "dropoffSquareSearchActual" -> "送達方塊搜尋實際框"
             "pickupAnchorActual" -> "取餐圓圈實際框"
             "dropoffAnchorActual" -> "送達方塊實際框"
-            "pickupAnchor" -> "取餐定位"
-            "dropoffAnchor" -> "送達定位"
-            "deliveryAnchorSearch" -> "定位搜尋框（已停用）"
+            "pickupAnchor" -> withLegacyPrefix("Pickup Anchor")
+            "dropoffAnchor" -> withLegacyPrefix("Dropoff Anchor")
+            "deliveryAnchorSearch" -> withLegacyPrefix("定位搜尋框")
             "cardActual" -> "卡片實際檢測框"
             "closeButtonDetected" -> "關閉按鈕實際檢測"
             "typeActual" -> "訂單類型實際框"
@@ -92,7 +102,7 @@ object OcrCalibrationStore {
             "pickupAnchorShiftedReference" -> "取餐偏移参考框"
             "dropoffAnchorShiftedReference" -> "送達偏移参考框"
             "actionButton" -> "按鈕定位"
-            "deliveryAnchor" -> "取送定位"
+            "deliveryAnchor" -> withLegacyPrefix("取送定位")
             else -> name
         }
     }

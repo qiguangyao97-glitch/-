@@ -275,26 +275,28 @@ class MainActivity : AppCompatActivity() {
         layout.addView(statusCard)
 
         val actionRow = createCardRow()
-        val uploadCard = createActionCard(
-            title = "截圖分析",
-            detail = "",
-            accentColor = COLOR_TEXT_PRIMARY,
-            showDot = false
-        ).apply {
-            setOnClickListener {
-                if (!ensureActivationForMonitoring()) return@setOnClickListener
-                setAnalyzing(true, "請選擇訂單截圖", "從相簿選擇訂單截圖後，我會立即進行 OCR 分析。")
-                pickOrderImage.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
+        if (OcrDebugConfig.OCR_DEBUG_TOOLS_ENABLED) {
+            val uploadCard = createActionCard(
+                title = "截圖分析",
+                detail = "",
+                accentColor = COLOR_TEXT_PRIMARY,
+                showDot = false
+            ).apply {
+                setOnClickListener {
+                    if (!ensureActivationForMonitoring()) return@setOnClickListener
+                    setAnalyzing(true, "請選擇訂單截圖", "從相簿選擇訂單截圖後，我會立即進行 OCR 分析。")
+                    pickOrderImage.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }
             }
+            actionRow.addView(uploadCard, rowItemParams(rightMargin = dp(7)))
         }
-        actionRow.addView(uploadCard, rowItemParams(rightMargin = dp(7)))
         actionRow.addView(
             createActionCard("手動計算", "", COLOR_WARNING, showDot = false).apply {
                 setOnClickListener { showManualCalculator() }
             },
-            rowItemParams(leftMargin = dp(7))
+            rowItemParams(leftMargin = if (OcrDebugConfig.OCR_DEBUG_TOOLS_ENABLED) dp(7) else 0)
         )
         layout.addView(actionRow)
         layout.addView(createRecentOrderCard())
@@ -1884,27 +1886,29 @@ class MainActivity : AppCompatActivity() {
             setLineSpacing(0f, 1.12f)
             setPadding(0, dp(8), 0, dp(12))
         })
-        card.addView(createActionCard(
-            title = "OCR 校准",
-            detail = "選擇截圖產生區域框圖",
-            accentColor = COLOR_ACCENT
-        ).apply {
-            setOnClickListener { showOcrCalibration(guided = true) }
-        })
-        card.addView(createActionCard(
-            title = "上一張失敗 OCR 截圖",
-            detail = if (OcrFailureDebugStore.latestFailure(this) != null) "查看帶框截圖" else "目前無記錄",
-            accentColor = COLOR_WARNING
-        ).apply {
-            setOnClickListener { showLastFailedOcrScreenshot() }
-        })
-        card.addView(createActionCard(
-            title = "上一張 OCR 截圖",
-            detail = if (OcrFailureDebugStore.latestOcr(this) != null) "查看帶框截圖" else "目前無記錄",
-            accentColor = COLOR_ACCENT
-        ).apply {
-            setOnClickListener { showLatestOcrScreenshot() }
-        })
+        if (OcrDebugConfig.OCR_DEBUG_TOOLS_ENABLED) {
+            card.addView(createActionCard(
+                title = "OCR 校准",
+                detail = "選擇截圖產生區域框圖",
+                accentColor = COLOR_ACCENT
+            ).apply {
+                setOnClickListener { showOcrCalibration(guided = true) }
+            })
+            card.addView(createActionCard(
+                title = "上一張失敗 OCR 截圖",
+                detail = if (OcrFailureDebugStore.latestFailure(this) != null) "查看帶框截圖" else "目前無記錄",
+                accentColor = COLOR_WARNING
+            ).apply {
+                setOnClickListener { showLastFailedOcrScreenshot() }
+            })
+            card.addView(createActionCard(
+                title = "上一張 OCR 截圖",
+                detail = if (OcrFailureDebugStore.latestOcr(this) != null) "查看帶框截圖" else "目前無記錄",
+                accentColor = COLOR_ACCENT
+            ).apply {
+                setOnClickListener { showLatestOcrScreenshot() }
+            })
+        }
         if (isDebugBuild()) {
             card.addView(createSettingsToggleRow(
                 title = "記錄無障礙事件日誌",
@@ -2074,6 +2078,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showOcrCalibration(guided: Boolean = false) {
+        if (!OcrDebugConfig.OCR_DEBUG_TOOLS_ENABLED) {
+            Toast.makeText(this, "OCR 調試工具已關閉", Toast.LENGTH_SHORT).show()
+            showAppSettings()
+            return
+        }
         currentScreen = Screen.OcrCalibration
         calibrationGuidedMode = guided
         if (calibrationGuideIndex !in OCR_CALIBRATION_GUIDE_ORDER.indices) {
@@ -2217,38 +2226,52 @@ class MainActivity : AppCompatActivity() {
         })
 
         toolbar.addView(TextView(this).apply {
-            text = "高級 Anchor 診斷"
-            textSize = 12f
-            typeface = Typeface.DEFAULT_BOLD
+            text = "商家與地址現在使用一個四行總文字區識別，不需要分別調整商家一行、地址一行或地址兩行。"
+            textSize = 13f
             setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.12f)
         }, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            bottomMargin = dp(4)
-        })
-
-        val advancedPicker = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-        }
-        val advancedRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-        OcrCalibrationStore.advancedRegionNames.forEachIndexed { index, name ->
-            advancedRow.addView(createCalibrationRegionButton(name), LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                rightMargin = if (index == OcrCalibrationStore.advancedRegionNames.lastIndex) 0 else dp(8)
-            })
-        }
-        advancedPicker.addView(advancedRow)
-        toolbar.addView(advancedPicker, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             bottomMargin = dp(8)
         })
+
+        if (OcrDebugConfig.SHOW_LEGACY_OCR_REGION_PICKER) {
+            toolbar.addView(TextView(this).apply {
+                text = "高級 Anchor 診斷"
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_TEXT_SECONDARY)
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(4)
+            })
+
+            val advancedPicker = HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+            }
+            val advancedRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            OcrCalibrationStore.debugRegionNames.forEachIndexed { index, name ->
+                advancedRow.addView(createCalibrationRegionButton(name), LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    rightMargin = if (index == OcrCalibrationStore.debugRegionNames.lastIndex) 0 else dp(8)
+                })
+            }
+            advancedPicker.addView(advancedRow)
+            toolbar.addView(advancedPicker, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(8)
+            })
+        }
 
         if (calibrationGuidedMode) {
             toolbar.addView(createCalibrationGuideRow(), LinearLayout.LayoutParams(

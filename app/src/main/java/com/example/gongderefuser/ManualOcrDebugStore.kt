@@ -31,7 +31,11 @@ object ManualOcrDebugStore {
             File(dir, "$name.jpg").outputStream().use { output ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 88, output)
             }
-            val regionFile = saveRegionOverlay(dir, "$name-regions.jpg", bitmap, regionText.debugRegions)
+            val regionFile = if (OcrDebugConfig.OCR_DEBUG_TOOLS_ENABLED) {
+                saveRegionOverlay(dir, "$name-regions.jpg", bitmap, regionText.debugRegions)
+            } else {
+                null
+            }
             val textFile = File(dir, "$name.txt")
             textFile.writeText(
                 buildString {
