@@ -632,8 +632,7 @@ class MyAccessibilityService : AccessibilityService() {
             logObservation("ORDER_UPDATED", orderDetails(validOrder))
             mainHandler.post {
                 logPopupShowOrReplace(analysis, newOrderLabel)
-                showAnalysisOverlayInternal(analysis, playTone = false)
-                currentOverlayOrderLabel = newOrderLabel
+                replaceAnalysisOverlayInternal(analysis, newOrderLabel, playTone = false)
             }
             return true
         }
@@ -672,9 +671,8 @@ class MyAccessibilityService : AccessibilityService() {
         mainHandler.post {
             val newOrderLabel = orderLabel(validOrder)
             logPopupShowOrReplace(analysis, newOrderLabel)
-            showAnalysisOverlayInternal(analysis)
+            replaceAnalysisOverlayInternal(analysis, newOrderLabel)
             logOrderLatency(eventElapsedMs(), ocrSuccessElapsedMs, ocrSuccessAttempt)
-            currentOverlayOrderLabel = newOrderLabel
         }
         Log.i("ORDER_ANALYSIS_FINISH", "shown=true signature=$signature")
         DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=true signature=$signature")
@@ -1541,6 +1539,15 @@ class MyAccessibilityService : AccessibilityService() {
     private fun showStatusOverlayInternal() {
         clearCollapseTimer()
         hideOverlay()
+    }
+
+    private fun replaceAnalysisOverlayInternal(
+        analysis: AnalysisResult,
+        orderLabel: String,
+        playTone: Boolean = true
+    ) {
+        showAnalysisOverlayInternal(analysis, playTone)
+        currentOverlayOrderLabel = orderLabel
     }
 
     private fun showAnalysisOverlayInternal(analysis: AnalysisResult, playTone: Boolean = true) {
