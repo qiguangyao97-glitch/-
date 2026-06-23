@@ -25,6 +25,7 @@ object ManualOcrDebugStore {
         order: OrderData?,
         source: String
     ): String {
+        if (!AppSettings.isDebugSamplesEnabled(context)) return ""
         return runCatching {
             val dir = DebugFileDirs.resolve(context, "manual_ocr_debug")
             val name = "${formatter.format(Date())}-${source}-${order?.price?.let { "${it}元" } ?: "no-order"}"

@@ -16,6 +16,7 @@ object OrderCaptureStore {
         bitmap: Bitmap,
         analysis: OrderAnalyzer.AnalysisResult
     ): String {
+        if (!AppSettings.isDebugSamplesEnabled(context)) return ""
         return runCatching {
             val dir = DebugFileDirs.resolve(context, "order_captures")
             val merchant = analysis.storeName

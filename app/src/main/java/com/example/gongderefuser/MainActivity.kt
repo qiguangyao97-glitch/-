@@ -2324,7 +2324,9 @@ class MainActivity : AppCompatActivity() {
     private fun loadLastCalibrationBitmapIfNeeded() {
         if (calibrationBitmap != null) return
         val savedFile = lastCalibrationImageFile()
-        if (savedFile.exists()) {
+        if (!AppSettings.isDebugSamplesEnabled(this)) {
+            savedFile.delete()
+        } else if (savedFile.exists()) {
             BitmapFactory.decodeFile(savedFile.absolutePath)?.let { bitmap ->
                 calibrationBitmap = bitmap
                 calibrationSavedPath = savedFile.absolutePath
@@ -2337,6 +2339,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveLastCalibrationBitmap(bitmap: Bitmap): String {
+        if (!AppSettings.isDebugSamplesEnabled(this)) return ""
         val file = lastCalibrationImageFile()
         return runCatching {
             file.parentFile?.mkdirs()
@@ -3306,12 +3309,24 @@ class MainActivity : AppCompatActivity() {
                 ) else null
                 val savedPath = ManualOcrDebugStore.save(this, bitmap, regionText, order, "calibration")
                 val calibrationImagePath = saveLastCalibrationBitmap(bitmap)
-                calibrationBitmap = null
-                calibrationSavedPath = calibrationImagePath
+                if (AppSettings.isDebugSamplesEnabled(this)) {
+                    calibrationBitmap = null
+                    calibrationSavedPath = calibrationImagePath
+                } else {
+                    calibrationBitmap = bitmap
+                    calibrationSavedPath = "問題診斷模式關閉，未儲存圖片"
+                }
                 setAnalyzing(false)
+                val message = if (!AppSettings.isDebugSamplesEnabled(this)) {
+                    "已完成 OCR 校準分析，診斷模式關閉未儲存圖片"
+                } else if (savedPath.isBlank() || calibrationImagePath.isBlank()) {
+                    "OCR 校準圖儲存失敗"
+                } else {
+                    "已儲存 OCR 校準圖"
+                }
                 Toast.makeText(
                     this,
-                    if (savedPath.isBlank() || calibrationImagePath.isBlank()) "OCR 校準圖儲存失敗" else "已儲存 OCR 校準圖",
+                    message,
                     Toast.LENGTH_LONG
                 ).show()
                 showOcrCalibration(guided = calibrationGuidedMode)

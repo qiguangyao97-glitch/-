@@ -1093,6 +1093,7 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun saveOcrAttemptScreenshot(bitmap: Bitmap, isSecondCheck: Boolean) {
+        if (!AppSettings.isDebugSamplesEnabled(this)) return
         val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (!isDebuggable) return
         val attempt = currentOcrAttemptNumber.coerceAtLeast(1)
