@@ -23,6 +23,7 @@ object DiagnosticLogStore {
         "MAIN_NAV_PAGE_BYPASS",
         "MAIN_NAV_PAGE_CHECK",
         "MONITORING",
+        "NEW_ORDER_REPLACES_OVERLAY",
         "OCR_ATTEMPT",
         "OCR_FAIL",
         "OCR_FAIL_FINAL",

@@ -674,11 +674,15 @@ class MyAccessibilityService : AccessibilityService() {
         val coreSignatureAgeMs = now - lastCoreOrderTimestamp
         if (
             lastCoreOrderSignature == coreSignature &&
-            coreSignatureAgeMs in 0..DUPLICATE_CORE_ORDER_WINDOW_MS
+            coreSignatureAgeMs in 0..DUPLICATE_ORDER_WINDOW_MS
         ) {
-            val message = "signature=$coreSignature ageMs=$coreSignatureAgeMs reason=SAME_CORE_ORDER"
-            Log.i("DUPLICATE_ORDER_OBSERVED", message)
-            DiagnosticLogStore.append(this, "DUPLICATE_ORDER_OBSERVED", message)
+            val message = "signature=$coreSignature ageMs=$coreSignatureAgeMs " +
+                    "money=${validOrder.price} distance=${validOrder.distance} minutes=${validOrder.minutes}"
+            Log.i("DUPLICATE_ORDER_SUPPRESSED", message)
+            DiagnosticLogStore.append(this, "DUPLICATE_ORDER_SUPPRESSED", message)
+            logOrderAnalysisFinish(shown = false, order = validOrder, analysis = null, reason = "DUPLICATE_ORDER")
+            logCurrentSessionDecision("DUPLICATE", "DUPLICATE_ORDER")
+            return true
         }
         if (isSecondCheck) {
             DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckRunning=true")
@@ -703,6 +707,13 @@ class MyAccessibilityService : AccessibilityService() {
             val message = "signature=$signature ageMs=${now - lastShownOrderTime} reason=DUPLICATE_RESULT"
             Log.i("DUPLICATE_ORDER_OBSERVED", message)
             DiagnosticLogStore.append(this, "DUPLICATE_ORDER_OBSERVED", message)
+        }
+        if (lastCoreOrderSignature.isNotBlank() && coreSignature != lastCoreOrderSignature) {
+            DiagnosticLogStore.append(
+                this,
+                "NEW_ORDER_REPLACES_OVERLAY",
+                "oldSignature=$lastCoreOrderSignature newSignature=$coreSignature ageMs=$coreSignatureAgeMs"
+            )
         }
         if (!currentSessionOcrSuccessStructureLogged) {
             logEventStructure("OCR_SUCCESS", lastEventStructureSnapshot)
@@ -1762,8 +1773,7 @@ class MyAccessibilityService : AccessibilityService() {
         return listOf(
             order.price,
             order.minutes,
-            normalizedDistanceForSignature(order.distance),
-            order.deliveryCount
+            normalizedDistanceForSignature(order.distance)
         ).joinToString("|")
     }
 
@@ -2483,7 +2493,7 @@ class MyAccessibilityService : AccessibilityService() {
         private const val MAX_DETECTIONS_PER_POPUP_CANDIDATE = 5
         private const val POPUP_CANDIDATE_WINDOW_MS = 2_000L
         private const val MIN_SCREENSHOT_INTERVAL_MS = 1_000L
-        private const val DUPLICATE_CORE_ORDER_WINDOW_MS = 10_000L
+        private const val DUPLICATE_ORDER_WINDOW_MS = 10_000L
         private const val POPUP_STRUCTURE_SCAN_MIN_INTERVAL_MS = 800L
         private const val POPUP_CANDIDATE_LOG_MIN_INTERVAL_MS = 3_000L
         private const val POPUP_STRUCTURE_SCAN_NODE_LIMIT = 140

@@ -12,7 +12,7 @@ object ActivationLocalStore {
     private const val KEY_LAST_CHECK_MILLIS = "last_check_millis"
 
     fun isActivationRequired(context: Context): Boolean {
-        return !context.applicationContext.packageName.endsWith(".beta")
+        return true
     }
 
     fun saveActivation(
