@@ -71,6 +71,12 @@ object DiagnosticLogStore {
 
     fun append(context: Context, tag: String, message: String): File? {
         if (tag !in persistedTags) return null
+        if (!AppSettings.isAccessibilityLogEnabled(context)) {
+            val displayTime = formatter.format(Date())
+            lastAttemptTime = displayTime
+            lastWriteSummary = "日誌開關關閉，未寫入"
+            return null
+        }
 
         val now = Date()
         val displayTime = formatter.format(now)

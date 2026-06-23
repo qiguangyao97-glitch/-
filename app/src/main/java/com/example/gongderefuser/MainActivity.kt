@@ -1918,7 +1918,13 @@ class MainActivity : AppCompatActivity() {
                     val file = DiagnosticLogStore.writeSelfTest(this, "accessibility_log_toggle_enabled_$enabled")
                     Toast.makeText(
                         this,
-                        if (file != null) "日誌已寫入：${file.name}" else "日誌寫入失敗",
+                        if (!enabled) {
+                            "日誌已關閉"
+                        } else if (file != null) {
+                            "日誌已寫入：${file.name}"
+                        } else {
+                            "日誌寫入失敗"
+                        },
                         Toast.LENGTH_SHORT
                     ).show()
                     showDebugSettings()
