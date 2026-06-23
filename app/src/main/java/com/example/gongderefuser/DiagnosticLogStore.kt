@@ -22,6 +22,7 @@ object DiagnosticLogStore {
         "MONITORING",
         "OCR_ATTEMPT",
         "OCR_FAIL",
+        "OCR_FAIL_FINAL",
         "OCR_FAILED",
         "OCR_FINISH",
         "OCR_MONEY_INVALID",
@@ -58,6 +59,7 @@ object DiagnosticLogStore {
         "SCREENSHOT_FAILURE_DETAIL",
         "SECOND_CHECK",
         "SESSION_DECISION",
+        "SESSION_END",
         "SERVICE",
         "TRIGGER_GATE_BYPASS",
         "WINDOW_DEBUG"
