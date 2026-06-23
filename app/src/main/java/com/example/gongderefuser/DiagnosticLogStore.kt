@@ -65,6 +65,7 @@ object DiagnosticLogStore {
         "SESSION_DECISION",
         "SESSION_END",
         "SERVICE",
+        "TRIGGER_GATE_DECISION",
         "TRIGGER_GATE_BYPASS",
         "UBER_EVENT_FORCED_TO_OCR",
         "PENDING_UBER_EVENT_CLEARED",

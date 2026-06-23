@@ -59,6 +59,9 @@ class MyAccessibilityService : AccessibilityService() {
     private var isDetectionScheduled: Boolean = false
     private var pendingDetectionAfterCurrent: Boolean = false
     private var pendingUberEvent: Boolean = false
+    private var nextUberEventId: Long = 0L
+    private var pendingUberEventId: Long = 0L
+    private var pendingUberEventTimestamp: Long = 0L
     private var currentBurstDetectCount: Int = 0
     private var lastDetectionEventTime: Long = 0L
     private var lastScreenshotRequestTime: Long = 0L
@@ -77,8 +80,15 @@ class MyAccessibilityService : AccessibilityService() {
     private var currentSessionPackageName: String = ""
     private var currentSessionClassName: String = ""
     private var currentSessionTriggerReason: String = ""
+    private var currentSessionTriggerEventId: Long = 0L
     private var currentSessionNoOrderStructureLogged: Boolean = false
     private var currentSessionOcrSuccessStructureLogged: Boolean = false
+    private var currentOcrAttemptScreenshotSaved: Boolean = false
+    private var currentOcrAttemptScreenshotPath: String = ""
+    private var currentSessionLastValidationReason: String = ""
+    private var currentSessionLastHadMoney: Boolean = false
+    private var currentSessionLastHadDistance: Boolean = false
+    private var currentSessionLastHadMinutes: Boolean = false
     private var lastEventStructureSnapshot: EventStructureSnapshot? = null
 
     override fun onServiceConnected() {
@@ -101,6 +111,7 @@ class MyAccessibilityService : AccessibilityService() {
             logTargetClickEvent(event, packageName)
         }
         val now = System.currentTimeMillis()
+        val eventId = ++nextUberEventId
 
         if (AppSettings.isAccessibilityLogEnabled(this)) {
             Log.d(
@@ -112,17 +123,16 @@ class MyAccessibilityService : AccessibilityService() {
         lastEventStructureSnapshot = buildEventStructureSnapshot(event, packageName)
         logEventSourceBounds(event, packageName)
 
-        Log.i("ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
-        DiagnosticLogStore.append(this, "ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
+        logOrderEventReceived(event, eventId, now)
         logUberWindowDebug(event, packageName, "AFTER_ORDER_EVENT_RECEIVED")
         val popupScan = logPopupStructureScan(event, packageName, now)
         resetStaleSessionIfNeeded(now)
-        scheduleEventDrivenCapture(event, now, popupScan)
+        scheduleEventDrivenCapture(event, now, popupScan, eventId)
     }
 
-    private fun scheduleEventDrivenCapture(event: AccessibilityEvent, now: Long, popupScan: PopupStructureScan?) {
+    private fun scheduleEventDrivenCapture(event: AccessibilityEvent, now: Long, popupScan: PopupStructureScan?, eventId: Long) {
         val triggerDecision = forcedUberTriggerDecision(popupScan)
-        logUberEventForcedToOcr(event, triggerDecision.reason)
+        logUberEventForcedToOcr(event, eventId, triggerDecision.reason)
         logOrderTriggerCandidate(event, triggerDecision)
         if (now - lastDetectionEventTime > DETECTION_BURST_RESET_MS) {
             currentBurstDetectCount = 0
@@ -131,7 +141,8 @@ class MyAccessibilityService : AccessibilityService() {
         lastDetectionEventTime = now
 
         if (isDetectionScheduled || isTakingScreenshot || isProcessingOrder || isOrderDetectionSessionActive) {
-            markPendingUberEvent("SESSION_BUSY")
+            logTriggerGateDecision(event, eventId, "BYPASS", "SESSION_BUSY_PENDING", popupScan)
+            markPendingUberEvent(eventId, now, "SESSION_BUSY")
             logSessionDecision(event, "SESSION_ALREADY_RUNNING", triggerDecision.reason)
             logObservation(
                 "ORDER_DETECTION_WAIT",
@@ -139,16 +150,18 @@ class MyAccessibilityService : AccessibilityService() {
             )
             return
         }
-        startOrderDetectionSession(now, event, triggerDecision)
+        logTriggerGateDecision(event, eventId, "BYPASS", triggerDecision.reason, popupScan)
+        startOrderDetectionSession(now, event, triggerDecision, eventId)
     }
 
     private fun startOrderDetectionSession(
         now: Long,
         event: AccessibilityEvent,
-        triggerDecision: TriggerDecision
+        triggerDecision: TriggerDecision,
+        triggerEventId: Long
     ) {
         if (isOrderDetectionSessionActive) {
-            markPendingUberEvent("SESSION_ACTIVE")
+            markPendingUberEvent(triggerEventId, now, "SESSION_ACTIVE")
             logObservation("ORDER_DETECTION_WAIT", "pendingAfterCurrent=true reason=SESSION_ACTIVE")
             logSessionDecision(event, "SESSION_ALREADY_RUNNING", "SESSION_ACTIVE")
             return
@@ -167,10 +180,14 @@ class MyAccessibilityService : AccessibilityService() {
         currentSessionPackageName = event.packageName?.toString().orEmpty()
         currentSessionClassName = event.className?.toString().orEmpty()
         currentSessionTriggerReason = triggerDecision.reason
+        currentSessionTriggerEventId = triggerEventId
+        resetCurrentSessionValidationState()
         DiagnosticLogStore.append(
             this,
             "ORDER_SESSION_START",
-            "sessionId=$orderDetectionSessionId reason=${triggerDecision.reason} eventType=$currentSessionEventType packageName=$currentSessionPackageName className=$currentSessionClassName"
+            "sessionId=$orderDetectionSessionId triggerEventId=$triggerEventId reason=${triggerDecision.reason} " +
+                    "startTimestamp=$now isFromPending=false eventType=$currentSessionEventType " +
+                    "packageName=$currentSessionPackageName className=$currentSessionClassName"
         )
         logSessionDecision(event, "START_SESSION", triggerDecision.reason)
         armSessionTimeout(orderDetectionSessionId)
@@ -183,7 +200,8 @@ class MyAccessibilityService : AccessibilityService() {
             DiagnosticLogStore.append(
                 this,
                 "PENDING_UBER_EVENT_RECEIVED",
-                "currentSessionId=$orderDetectionSessionId reason=PENDING_PROCESS_BUSY"
+                "currentSessionId=$orderDetectionSessionId eventId=$pendingUberEventId reason=PENDING_PROCESS_BUSY " +
+                        "isDetectionScheduled=$isDetectionScheduled isTakingScreenshot=$isTakingScreenshot isProcessingOrder=$isProcessingOrder"
             )
             return
         }
@@ -199,10 +217,14 @@ class MyAccessibilityService : AccessibilityService() {
         currentSessionPackageName = "com.ubercab.driver"
         currentSessionClassName = "PENDING"
         currentSessionTriggerReason = reason
+        currentSessionTriggerEventId = pendingUberEventId
+        resetCurrentSessionValidationState()
         DiagnosticLogStore.append(
             this,
             "ORDER_SESSION_START",
-            "sessionId=$orderDetectionSessionId reason=$reason eventType=$currentSessionEventType packageName=$currentSessionPackageName className=$currentSessionClassName"
+            "sessionId=$orderDetectionSessionId triggerEventId=$currentSessionTriggerEventId reason=$reason " +
+                    "startTimestamp=$now isFromPending=true eventType=$currentSessionEventType " +
+                    "packageName=$currentSessionPackageName className=$currentSessionClassName"
         )
         logCurrentSessionDecision("START_SESSION", reason)
         armSessionTimeout(orderDetectionSessionId)
@@ -245,6 +267,7 @@ class MyAccessibilityService : AccessibilityService() {
         lastScreenshotRequestTime = now
         currentOcrAttemptNumber = sessionAttemptNumber.coerceAtLeast(1)
         currentOcrAttemptElapsedMs = eventElapsedMs(now)
+        prepareOcrAttemptScreenshotMetadata()
         logOcrAttempt(currentOcrAttemptNumber, currentOcrAttemptElapsedMs)
 
         Log.d("TARGET_TRIGGER", "set capture flag")
@@ -414,7 +437,8 @@ class MyAccessibilityService : AccessibilityService() {
                     hasAnchoredCard = regionText.hasAnchoredCard,
                     textLength = regionText.fullText.length,
                     cropWidth = cropRect?.width() ?: 0,
-                    cropHeight = cropRect?.height() ?: 0
+                    cropHeight = cropRect?.height() ?: 0,
+                    rawTextHash = regionText.fullText.hashCode().toString()
                 )
                 if (!isSecondCheck) {
                     DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
@@ -472,7 +496,8 @@ class MyAccessibilityService : AccessibilityService() {
                 scheduleNextSessionCapture()
                 return
             }
-            logOcrFinalFail(currentOcrAttemptNumber, eventElapsedMs(), "MAX_ATTEMPTS_REACHED")
+            val finalReason = currentSessionLastValidationReason.ifBlank { "MAX_ATTEMPTS_REACHED" }
+            logOcrFinalFail(currentOcrAttemptNumber, eventElapsedMs(), finalReason)
             logObservation(
                 "ORDER_DETECTION_WAIT",
                 "state=WAITING reason=OCR_FAIL failures=$orderDetectionSessionFailureCount"
@@ -541,9 +566,17 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun endOrderDetectionSession(reason: String) {
         val endedSessionId = orderDetectionSessionId
+        val durationMs = eventElapsedMs()
+        val hadPending = pendingUberEvent
+        val nextAction = if (hadPending) "PROCESS_PENDING" else "IDLE"
         if (isOrderDetectionSessionActive) {
             DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason sessionId=$orderDetectionSessionId")
-            DiagnosticLogStore.append(this, "SESSION_END", "reason=$reason sessionId=$orderDetectionSessionId")
+            DiagnosticLogStore.append(
+                this,
+                "SESSION_END",
+                "sessionId=$orderDetectionSessionId reason=$reason durationMs=$durationMs " +
+                        "hadPendingUberEvent=$hadPending nextAction=$nextAction"
+            )
         }
         clearSessionTimeout()
         pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
@@ -561,6 +594,9 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun resetAnalysisSession(reason: String) {
         val sessionId = orderDetectionSessionId
+        val durationMs = eventElapsedMs()
+        val hadPending = pendingUberEvent
+        val nextAction = if (hadPending) "PROCESS_PENDING" else "IDLE"
         DiagnosticLogStore.append(this, "ORDER_SESSION_FORCE_RESET", "reason=$reason sessionId=$sessionId")
         Log.i("ORDER_SESSION_FORCE_RESET", "reason=$reason sessionId=$sessionId")
         clearSessionTimeout()
@@ -581,7 +617,12 @@ class MyAccessibilityService : AccessibilityService() {
         pendingDetectionAfterCurrent = false
         orderDetectionSessionId += 1
         DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason sessionId=$sessionId")
-        DiagnosticLogStore.append(this, "SESSION_END", "reason=$reason sessionId=$sessionId")
+        DiagnosticLogStore.append(
+            this,
+            "SESSION_END",
+            "sessionId=$sessionId reason=$reason durationMs=$durationMs " +
+                    "hadPendingUberEvent=$hadPending nextAction=$nextAction"
+        )
         processPendingUberEventIfNeeded(sessionId)
     }
 
@@ -593,7 +634,8 @@ class MyAccessibilityService : AccessibilityService() {
         hasAnchoredCard: Boolean = true,
         textLength: Int = 0,
         cropWidth: Int = 0,
-        cropHeight: Int = 0
+        cropHeight: Int = 0,
+        rawTextHash: String = ""
     ): Boolean {
         val gate = OrderResultGate.evaluate(order, hasAnchoredCard = hasAnchoredCard, tripText = tripText)
         Log.i("ORDER_POPUP_VALIDATION", gate.debugLog)
@@ -609,8 +651,7 @@ class MyAccessibilityService : AccessibilityService() {
             logOcrFail(currentOcrAttemptNumber, eventElapsedMs(), finalSkipReason)
             Log.d("ORDER_ANALYSIS", "invalid order ignored $finalSkipReason")
             DiagnosticLogStore.append(this, "CAPTURE", "skipResultReason=$finalSkipReason")
-            Log.i("ORDER_ANALYSIS_FINISH", "shown=false reason=$finalSkipReason")
-            DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=false reason=$finalSkipReason")
+            logOrderAnalysisFinish(shown = false, order = order, analysis = null, reason = finalSkipReason)
             if (finalSkipReason == "OCR_MONEY_INVALID") {
                 Log.i("OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
                 DiagnosticLogStore.append(this, "OCR_MONEY_INVALID", "price=${order?.price ?: 0} status=${order?.priceStatus ?: "MISSING"}")
@@ -667,7 +708,7 @@ class MyAccessibilityService : AccessibilityService() {
             logEventStructure("OCR_SUCCESS", lastEventStructureSnapshot)
             currentSessionOcrSuccessStructureLogged = true
         }
-        logOcrSuccess(ocrSuccessAttempt, ocrSuccessElapsedMs)
+        logOcrSuccess(ocrSuccessAttempt, ocrSuccessElapsedMs, validOrder, rawTextHash)
         if (lastShownOrderSignature.isNotBlank() && signature != lastShownOrderSignature) {
             logObservation(
                 "ORDER_REPLACED",
@@ -693,8 +734,7 @@ class MyAccessibilityService : AccessibilityService() {
             replaceAnalysisOverlayInternal(analysis, newOrderLabel)
             logOrderLatency(eventElapsedMs(), ocrSuccessElapsedMs, ocrSuccessAttempt)
         }
-        Log.i("ORDER_ANALYSIS_FINISH", "shown=true signature=$signature")
-        DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=true signature=$signature")
+        logOrderAnalysisFinish(shown = true, order = validOrder, analysis = analysis, reason = "VALID_ORDER")
         return true
     }
 
@@ -826,6 +866,38 @@ class MyAccessibilityService : AccessibilityService() {
         )
     }
 
+    private fun logOrderEventReceived(event: AccessibilityEvent, eventId: Long, timestamp: Long) {
+        val root = rootInActiveWindow
+        val source = runCatching { event.source }.getOrNull()
+        val rootPackage = root?.packageName?.toString().orEmpty()
+        val message = "eventId=$eventId timestamp=$timestamp eventPackage=${event.packageName?.toString().orEmpty()} " +
+                "rootPackage=$rootPackage eventType=${eventTypeName(event.eventType)} " +
+                "eventClass=${event.className?.toString().orEmpty()} sourceClass=${source?.className?.toString().orEmpty()} " +
+                "windowId=${source?.windowId ?: root?.windowId ?: -1} " +
+                "isBusy=${isDetectionScheduled || isTakingScreenshot || isProcessingOrder || isOrderDetectionSessionActive} " +
+                "currentSessionId=$orderDetectionSessionId"
+        Log.i("ORDER_EVENT_RECEIVED", message)
+        DiagnosticLogStore.append(this, "ORDER_EVENT_RECEIVED", message)
+    }
+
+    private fun logTriggerGateDecision(
+        event: AccessibilityEvent,
+        eventId: Long,
+        decision: String,
+        reason: String,
+        scan: PopupStructureScan?
+    ) {
+        val rootPackage = rootInActiveWindow?.packageName?.toString().orEmpty()
+        DiagnosticLogStore.append(
+            this,
+            "TRIGGER_GATE_DECISION",
+            "eventId=$eventId decision=$decision reason=$reason " +
+                    "eventPackage=${event.packageName?.toString().orEmpty()} rootPackage=$rootPackage " +
+                    "scanSummary=${scan?.featureSummary().orEmpty()} " +
+                    "matchedRule=${scan?.mainNavMatchedRule.orEmpty()} matchedText=${scan?.mainNavMatchedText.orEmpty()}"
+        )
+    }
+
     private fun logCurrentSessionDecision(decision: String, reason: String) {
         DiagnosticLogStore.append(
             this,
@@ -859,43 +931,47 @@ class MyAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun logUberEventForcedToOcr(event: AccessibilityEvent, reason: String) {
+    private fun logUberEventForcedToOcr(event: AccessibilityEvent, eventId: Long, reason: String) {
         val root = rootInActiveWindow
         DiagnosticLogStore.append(
             this,
             "UBER_EVENT_FORCED_TO_OCR",
-            "eventPackage=${event.packageName?.toString().orEmpty()} " +
+            "eventId=$eventId eventPackage=${event.packageName?.toString().orEmpty()} " +
                     "rootPackage=${root?.packageName?.toString().orEmpty()} " +
                     "eventType=${eventTypeName(event.eventType)} " +
                     "sourceClass=${event.className?.toString().orEmpty()} reason=$reason"
         )
     }
 
-    private fun markPendingUberEvent(reason: String) {
+    private fun markPendingUberEvent(eventId: Long, timestamp: Long, reason: String) {
         pendingUberEvent = true
+        pendingUberEventId = eventId
+        pendingUberEventTimestamp = timestamp
         DiagnosticLogStore.append(
             this,
             "PENDING_UBER_EVENT_RECEIVED",
-            "currentSessionId=$orderDetectionSessionId reason=$reason"
+            "currentSessionId=$orderDetectionSessionId eventId=$eventId reason=$reason " +
+                    "isDetectionScheduled=$isDetectionScheduled isTakingScreenshot=$isTakingScreenshot isProcessingOrder=$isProcessingOrder"
         )
     }
 
     private fun processPendingUberEventIfNeeded(previousSessionId: Long) {
         if (!pendingUberEvent) return
+        val pendingAgeMs = (System.currentTimeMillis() - pendingUberEventTimestamp).coerceAtLeast(0L)
         pendingUberEvent = false
         DiagnosticLogStore.append(
             this,
             "PENDING_UBER_EVENT_PROCESS",
-            "previousSessionId=$previousSessionId reason=SESSION_END_PROCESS_PENDING"
+            "previousSessionId=$previousSessionId newSessionReason=PENDING_UBER_EVENT pendingAgeMs=$pendingAgeMs"
         )
         DiagnosticLogStore.append(
             this,
             "PENDING_UBER_EVENT_CLEARED",
-            "previousSessionId=$previousSessionId"
+            "reason=PROCESS_PENDING previousSessionId=$previousSessionId"
         )
         startPendingOrderDetectionSession(
             now = System.currentTimeMillis(),
-            reason = "PENDING_UBER_EVENT_PROCESS"
+            reason = "PENDING_UBER_EVENT"
         )
     }
 
@@ -905,13 +981,29 @@ class MyAccessibilityService : AccessibilityService() {
         hasAnchoredCard: Boolean,
         reason: String
     ) {
+        currentSessionLastValidationReason = reason
+        currentSessionLastHadMoney = (order?.price ?: 0) > 0
+        currentSessionLastHadDistance = (order?.distance ?: 0.0) > 0.0
+        currentSessionLastHadMinutes = (order?.minutes ?: 0) > 0
+        orderDetectionSessionLastHadAnchor = hasAnchoredCard
         DiagnosticLogStore.append(
             this,
             "ORDER_VALIDATION_RESULT",
-            "sessionId=$orderDetectionSessionId isValidOrder=$isValidOrder " +
+            "sessionId=$orderDetectionSessionId attempt=$currentOcrAttemptNumber isValidOrder=$isValidOrder " +
                     "money=${order?.price ?: 0} distance=${order?.distance ?: 0.0} " +
-                    "minutes=${order?.minutes ?: 0} anchorDetected=$hasAnchoredCard reason=$reason"
+                    "minutes=${order?.minutes ?: 0} anchorDetected=$hasAnchoredCard " +
+                    "merchantDetected=${!order?.storeName.isNullOrBlank()} addressDetected=${!order?.address.isNullOrBlank()} " +
+                    "reason=$reason"
         )
+    }
+
+    private fun resetCurrentSessionValidationState() {
+        currentOcrAttemptScreenshotSaved = false
+        currentOcrAttemptScreenshotPath = ""
+        currentSessionLastValidationReason = ""
+        currentSessionLastHadMoney = false
+        currentSessionLastHadDistance = false
+        currentSessionLastHadMinutes = false
     }
 
     private fun logMainNavPageCheck(event: AccessibilityEvent, scan: PopupStructureScan) {
@@ -1158,14 +1250,26 @@ class MyAccessibilityService : AccessibilityService() {
         DiagnosticLogStore.add(this, "WINDOW_DEBUG", message)
     }
 
+    private fun prepareOcrAttemptScreenshotMetadata() {
+        val shouldSave = AppSettings.isDebugSamplesEnabled(this) &&
+                (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        currentOcrAttemptScreenshotSaved = shouldSave
+        currentOcrAttemptScreenshotPath = if (shouldSave) {
+            val attempt = currentOcrAttemptNumber.coerceAtLeast(1)
+            val fileName = "ocr-attempt-session-${orderDetectionSessionId}-attempt-$attempt-${System.currentTimeMillis()}.png"
+            DebugFileDirs.resolveAppScoped(this, "debug_samples").resolve(fileName).absolutePath
+        } else {
+            ""
+        }
+    }
+
     private fun saveOcrAttemptScreenshot(bitmap: Bitmap, isSecondCheck: Boolean) {
-        if (!AppSettings.isDebugSamplesEnabled(this)) return
+        if (!currentOcrAttemptScreenshotSaved || currentOcrAttemptScreenshotPath.isBlank()) return
         val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (!isDebuggable) return
         val attempt = currentOcrAttemptNumber.coerceAtLeast(1)
         val elapsedMs = currentOcrAttemptElapsedMs
-        val fileName = "ocr-attempt-session-${orderDetectionSessionId}-attempt-$attempt-${System.currentTimeMillis()}.png"
-        val targetFile = DebugFileDirs.resolveAppScoped(this, "debug_samples").resolve(fileName)
+        val targetFile = java.io.File(currentOcrAttemptScreenshotPath)
         runCatching {
             targetFile.parentFile?.mkdirs()
             FileOutputStream(targetFile).use { output ->
@@ -1175,14 +1279,14 @@ class MyAccessibilityService : AccessibilityService() {
                 this,
                 "OCR_SCREENSHOT_SAVED",
                 "sessionId=$orderDetectionSessionId attempt=$attempt elapsedMs=$elapsedMs " +
-                        "secondCheck=$isSecondCheck fileName=$fileName size=${bitmap.width}x${bitmap.height}"
+                        "secondCheck=$isSecondCheck fileName=${targetFile.name} size=${bitmap.width}x${bitmap.height}"
             )
         }.onFailure { throwable ->
             DiagnosticLogStore.append(
                 this,
                 "OCR_SCREENSHOT_SAVED",
                 "sessionId=$orderDetectionSessionId attempt=$attempt elapsedMs=$elapsedMs " +
-                        "secondCheck=$isSecondCheck fileName=$fileName size=${bitmap.width}x${bitmap.height} " +
+                        "secondCheck=$isSecondCheck fileName=${targetFile.name} size=${bitmap.width}x${bitmap.height} " +
                         "saveSuccess=false error=${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}"
             )
         }
@@ -1573,11 +1677,23 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun logOcrAttempt(attempt: Int, elapsedMs: Long) {
-        logObservation("OCR_ATTEMPT", "attempt=$attempt elapsedMs=$elapsedMs")
+        val rootPackage = rootInActiveWindow?.packageName?.toString().orEmpty()
+        logObservation(
+            "OCR_ATTEMPT",
+            "sessionId=$orderDetectionSessionId attempt=$attempt elapsedMs=$elapsedMs " +
+                    "screenshotSaved=$currentOcrAttemptScreenshotSaved screenshotPath=$currentOcrAttemptScreenshotPath " +
+                    "rootPackageAtCapture=$rootPackage foregroundPackageAtCapture=$rootPackage"
+        )
     }
 
-    private fun logOcrSuccess(attempt: Int, elapsedMs: Long) {
-        logObservation("OCR_SUCCESS", "attempt=$attempt elapsedMs=$elapsedMs")
+    private fun logOcrSuccess(attempt: Int, elapsedMs: Long, order: OrderData, rawTextHash: String) {
+        logObservation(
+            "OCR_SUCCESS",
+            "sessionId=$orderDetectionSessionId attempt=$attempt money=${order.price} " +
+                    "distance=${order.distance} minutes=${order.minutes} " +
+                    "merchant=${sanitizeForLog(order.storeName, 80)} address=${sanitizeForLog(order.address, 120)} " +
+                    "rawTextHash=$rawTextHash elapsedMs=$elapsedMs"
+        )
     }
 
     private fun logOcrFail(attempt: Int, elapsedMs: Long, reason: String) {
@@ -1585,7 +1701,12 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun logOcrFinalFail(attempt: Int, elapsedMs: Long, reason: String) {
-        logObservation("OCR_FAIL_FINAL", "attempt=$attempt elapsedMs=$elapsedMs reason=$reason")
+        logObservation(
+            "OCR_FAIL_FINAL",
+            "sessionId=$orderDetectionSessionId lastAttempt=$attempt reason=$reason elapsedMs=$elapsedMs " +
+                    "hadAnchor=$orderDetectionSessionLastHadAnchor hadMoney=$currentSessionLastHadMoney " +
+                    "hadDistance=$currentSessionLastHadDistance hadMinutes=$currentSessionLastHadMinutes"
+        )
     }
 
     private fun logOrderLatency(eventToPopupMs: Long, eventToOcrSuccessMs: Long, ocrAttempt: Int) {
@@ -1606,11 +1727,27 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun logPopupShowOrReplace(analysis: AnalysisResult, newOrderLabel: String) {
         val oldOrderLabel = currentOverlayOrderLabel
+        val isReplacing = overlayView != null
+        val details = "sessionId=$orderDetectionSessionId money=${analysis.price} distance=${analysis.distance} " +
+                "minutes=${analysis.minutes} score=${analysis.score} isReplacingExistingOverlay=$isReplacing"
+        logObservation("POPUP_SHOW", "$details recommendation=${analysis.recommendation}")
         if (overlayView != null && oldOrderLabel.isNotBlank() && oldOrderLabel != newOrderLabel) {
-            logObservation("POPUP_REPLACE", "oldOrder=$oldOrderLabel newOrder=$newOrderLabel")
-        } else {
-            logObservation("POPUP_SHOW", "score=${analysis.score} recommendation=${analysis.recommendation}")
+            logObservation("POPUP_REPLACE", "$details oldOrder=$oldOrderLabel newOrder=$newOrderLabel")
         }
+    }
+
+    private fun logOrderAnalysisFinish(
+        shown: Boolean,
+        order: OrderData?,
+        analysis: AnalysisResult?,
+        reason: String
+    ) {
+        val score = analysis?.score ?: 0
+        val message = "sessionId=$orderDetectionSessionId shown=$shown " +
+                "money=${order?.price ?: 0} distance=${order?.distance ?: 0.0} " +
+                "minutes=${order?.minutes ?: 0} score=$score reason=$reason"
+        Log.i("ORDER_ANALYSIS_FINISH", message)
+        DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", message)
     }
 
     private fun orderDetails(order: OrderData): String {
