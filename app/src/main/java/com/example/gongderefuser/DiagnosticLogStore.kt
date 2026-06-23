@@ -16,6 +16,7 @@ object DiagnosticLogStore {
         "A11Y_SCREENSHOT",
         "CAPTURE",
         "DIAGNOSTIC_LOG_SELF_TEST",
+        "DUPLICATE_ORDER_OBSERVED",
         "DUPLICATE_ORDER_SUPPRESSED",
         "EVENT_SOURCE_BOUNDS",
         "EVENT_STRUCTURE",
@@ -44,6 +45,7 @@ object DiagnosticLogStore {
         "ORDER_EVENT_RECEIVED",
         "ORDER_LATENCY",
         "ORDER_POPUP_VALIDATION",
+        "ORDER_VALIDATION_RESULT",
         "ORDER_REPLACED",
         "ORDER_SESSION_END",
         "ORDER_SESSION_FORCE_RESET",
@@ -64,6 +66,10 @@ object DiagnosticLogStore {
         "SESSION_END",
         "SERVICE",
         "TRIGGER_GATE_BYPASS",
+        "UBER_EVENT_FORCED_TO_OCR",
+        "PENDING_UBER_EVENT_CLEARED",
+        "PENDING_UBER_EVENT_PROCESS",
+        "PENDING_UBER_EVENT_RECEIVED",
         "WINDOW_DEBUG"
     )
     @Volatile
