@@ -752,6 +752,13 @@ class MyAccessibilityService : AccessibilityService() {
             return popupTriggerDecision(false, "OPPORTUNITY_PAGE", scan)
         }
         if (scan.isMainNavPage) {
+            logMainNavPageCheck(event, scan)
+            if (event.packageName?.toString() == "com.ubercab.driver") {
+                popupCandidateUntilTime = now + POPUP_CANDIDATE_WINDOW_MS
+                logMainNavPageBypass(event)
+                logTriggerGateBypass("MAIN_NAV_PAGE_UBER_EVENT_DIRECT_OCR", scan)
+                return popupTriggerDecision(true, "MAIN_NAV_PAGE_BYPASS_OCR", scan)
+            }
             return popupTriggerDecision(false, "MAIN_NAV_PAGE", scan)
         }
         if (scan.isLikelyBlockingPopup) {
@@ -813,6 +820,32 @@ class MyAccessibilityService : AccessibilityService() {
         val message = "reason=$reason score=${scan.score} likelyBlockingPopup=${scan.isLikelyBlockingPopup} features=${scan.featureSummary()} samples=${scan.samples.joinToString(" | ")}"
         Log.i("TRIGGER_GATE_BYPASS", message)
         DiagnosticLogStore.append(this, "TRIGGER_GATE_BYPASS", message)
+    }
+
+    private fun logMainNavPageCheck(event: AccessibilityEvent, scan: PopupStructureScan) {
+        val root = rootInActiveWindow
+        val source = runCatching { event.source }.getOrNull()
+        DiagnosticLogStore.append(
+            this,
+            "MAIN_NAV_PAGE_CHECK",
+            "eventPackage=${event.packageName?.toString().orEmpty()} " +
+                    "rootPackage=${root?.packageName?.toString().orEmpty()} " +
+                    "matchedText=${scan.mainNavMatchedText} matchedRule=${scan.mainNavMatchedRule} " +
+                    "windowClass=${root?.className?.toString().orEmpty()} " +
+                    "windowId=${source?.windowId ?: root?.windowId ?: -1} " +
+                    "sourceClass=${source?.className?.toString().orEmpty()}"
+        )
+    }
+
+    private fun logMainNavPageBypass(event: AccessibilityEvent) {
+        val root = rootInActiveWindow
+        DiagnosticLogStore.append(
+            this,
+            "MAIN_NAV_PAGE_BYPASS",
+            "eventPackage=${event.packageName?.toString().orEmpty()} " +
+                    "rootPackage=${root?.packageName?.toString().orEmpty()} " +
+                    "reason=UBER_EVENT_MAIN_NAV_PAGE_DIRECT_OCR"
+        )
     }
 
     private fun logTargetClickEvent(event: AccessibilityEvent, packageName: String) {
@@ -1115,6 +1148,8 @@ class MyAccessibilityService : AccessibilityService() {
         var hasTripFare = false
         var hasMenuNav = false
         var hasSettingsNav = false
+        var mainNavMatchedText = ""
+        var mainNavMatchedRule = ""
 
         queue.add(root)
         while (queue.isNotEmpty() && nodeCount < POPUP_STRUCTURE_SCAN_NODE_LIMIT) {
@@ -1159,6 +1194,12 @@ class MyAccessibilityService : AccessibilityService() {
                     onMenuNav = { hasMenuNav = true },
                     onSettingsNav = { hasSettingsNav = true }
                 )
+                if (mainNavMatchedRule.isBlank()) {
+                    mainNavMatch(combined)?.let { match ->
+                        mainNavMatchedText = match.first
+                        mainNavMatchedRule = match.second
+                    }
+                }
                 if (samples.size < POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT) {
                     val rect = Rect()
                     runCatching { node.getBoundsInScreen(rect) }
@@ -1214,6 +1255,8 @@ class MyAccessibilityService : AccessibilityService() {
             hasTripFare = hasTripFare,
             hasMenuNav = hasMenuNav,
             hasSettingsNav = hasSettingsNav,
+            mainNavMatchedText = mainNavMatchedText,
+            mainNavMatchedRule = mainNavMatchedRule,
             score = score,
             isLikelyBlockingPopup = isLikelyBlockingPopup
         )
@@ -1263,6 +1306,21 @@ class MyAccessibilityService : AccessibilityService() {
         if (normalized.contains("行程費用") || normalized.contains("行程费用")) onTripFare()
         if (normalized == "選單" || normalized == "菜单" || normalized.equals("menu", ignoreCase = true)) onMenuNav()
         if (normalized == "設定" || normalized == "设置" || normalized.equals("settings", ignoreCase = true)) onSettingsNav()
+    }
+
+    private fun mainNavMatch(value: String): Pair<String, String>? {
+        val normalized = value.replace(" ", "")
+        return when {
+            normalized == "首頁" || normalized.equals("home", ignoreCase = true) -> value to "HOME_NAV"
+            normalized == "探索" || normalized.equals("explore", ignoreCase = true) -> value to "EXPLORE_NAV"
+            normalized == "收件匣" || normalized.equals("inbox", ignoreCase = true) -> value to "INBOX_NAV"
+            normalized.contains("行程費用") || normalized.contains("行程费用") -> value to "TRIP_FARE_NAV"
+            normalized == "選單" || normalized == "菜单" || normalized.equals("menu", ignoreCase = true) -> value to "MENU_NAV"
+            normalized == "設定" || normalized == "设置" || normalized.equals("settings", ignoreCase = true) -> value to "SETTINGS_NAV"
+            else -> null
+        }?.let { match ->
+            sanitizeForLog(match.first, 60) to match.second
+        }
     }
 
     private fun sanitizeForLog(value: String, maxLength: Int): String {
@@ -1341,6 +1399,8 @@ class MyAccessibilityService : AccessibilityService() {
         val hasTripFare: Boolean,
         val hasMenuNav: Boolean,
         val hasSettingsNav: Boolean,
+        val mainNavMatchedText: String,
+        val mainNavMatchedRule: String,
         val score: Int,
         val isLikelyBlockingPopup: Boolean
     ) {
@@ -1407,7 +1467,8 @@ class MyAccessibilityService : AccessibilityService() {
             return "money=$hasMoney minute=$hasMinute distance=$hasDistance total=$hasTotal delivery=$hasDelivery food=$hasFoodDelivery " +
                     "accept=$hasAcceptAction match=$hasMatchAction close=$hasCloseAction " +
                     "coreOrderFeatures=$coreOrderFeatureCount opportunityScore=$opportunityScore opportunity=$hasOpportunityTitle extraEarn=$hasExtraEarn completeTrips=$hasCompleteTrips startTime=$hasStartTime reward=$hasReward " +
-                    "mainNavScore=$mainNavScore home=$hasHomeNav explore=$hasExploreNav inbox=$hasInboxNav tripFare=$hasTripFare menu=$hasMenuNav settings=$hasSettingsNav classes=$topClasses"
+                    "mainNavScore=$mainNavScore mainNavRule=$mainNavMatchedRule mainNavText=$mainNavMatchedText " +
+                    "home=$hasHomeNav explore=$hasExploreNav inbox=$hasInboxNav tripFare=$hasTripFare menu=$hasMenuNav settings=$hasSettingsNav classes=$topClasses"
         }
     }
 

@@ -19,6 +19,8 @@ object DiagnosticLogStore {
         "DUPLICATE_ORDER_SUPPRESSED",
         "EVENT_SOURCE_BOUNDS",
         "EVENT_STRUCTURE",
+        "MAIN_NAV_PAGE_BYPASS",
+        "MAIN_NAV_PAGE_CHECK",
         "MONITORING",
         "OCR_ATTEMPT",
         "OCR_FAIL",
