@@ -1536,9 +1536,6 @@ class MainActivity : AppCompatActivity() {
                 },
                 SettingsEntry("OCR", "OCR 引擎狀態", "正常") {
                     showDebugSettings()
-                },
-                SettingsEntry("框", "失敗 OCR 截圖", if (OcrFailureDebugStore.latestFailure(this) != null) "有記錄" else "無記錄") {
-                    showLastFailedOcrScreenshot()
                 }
             )
         ))
@@ -1893,20 +1890,6 @@ class MainActivity : AppCompatActivity() {
                 accentColor = COLOR_ACCENT
             ).apply {
                 setOnClickListener { showOcrCalibration(guided = true) }
-            })
-            card.addView(createActionCard(
-                title = "上一張失敗 OCR 截圖",
-                detail = if (OcrFailureDebugStore.latestFailure(this) != null) "查看帶框截圖" else "目前無記錄",
-                accentColor = COLOR_WARNING
-            ).apply {
-                setOnClickListener { showLastFailedOcrScreenshot() }
-            })
-            card.addView(createActionCard(
-                title = "上一張 OCR 截圖",
-                detail = if (OcrFailureDebugStore.latestOcr(this) != null) "查看帶框截圖" else "目前無記錄",
-                accentColor = COLOR_ACCENT
-            ).apply {
-                setOnClickListener { showLatestOcrScreenshot() }
             })
         }
         if (isDebugBuild()) {
