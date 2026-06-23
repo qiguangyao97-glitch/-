@@ -33,6 +33,7 @@ import com.example.gongderefuser.analyzer.OrderAnalyzer.AnalysisResult
 import com.example.gongderefuser.analyzer.RuleSettings
 import com.example.gongderefuser.model.OrderData
 import com.example.gongderefuser.parser.OrderParser
+import java.io.FileOutputStream
 import java.util.ArrayDeque
 
 class MyAccessibilityService : AccessibilityService() {
@@ -112,6 +113,7 @@ class MyAccessibilityService : AccessibilityService() {
         }
         lastTargetEventSummary = "type=${event.eventType} class=${event.className} time=$now"
         lastEventStructureSnapshot = buildEventStructureSnapshot(event, packageName)
+        logEventSourceBounds(event, packageName)
 
         Log.i("ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
         DiagnosticLogStore.append(this, "ORDER_EVENT_RECEIVED", "type=${event.eventType} class=${event.className} time=$now")
@@ -125,6 +127,7 @@ class MyAccessibilityService : AccessibilityService() {
         val triggerDecision = shouldTriggerOrderDetection(event, now, popupScan)
         if (!triggerDecision.shouldTrigger) {
             logOrderTriggerRejected(event, triggerDecision, popupScan)
+            logSessionDecision(event, "REJECTED", triggerDecision.reason)
             logObservation(
                 "ORDER_DETECTION_WAIT",
                 "ignoredEvent reason=${triggerDecision.reason} type=${eventTypeName(event.eventType)} class=${event.className}"
@@ -140,6 +143,7 @@ class MyAccessibilityService : AccessibilityService() {
 
         if (isDetectionScheduled || isTakingScreenshot || isProcessingOrder) {
             pendingDetectionAfterCurrent = true
+            logSessionDecision(event, "SESSION_ALREADY_RUNNING", triggerDecision.reason)
             logObservation(
                 "ORDER_DETECTION_WAIT",
                 "pendingAfterCurrent=true reason=${triggerDecision.reason} count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
@@ -148,6 +152,7 @@ class MyAccessibilityService : AccessibilityService() {
         }
         if (currentBurstDetectCount >= maxDetectionsForCurrentWindow()) {
             logOrderTriggerRejected(event, triggerDecision.copy(reason = "BURST_LIMIT_${triggerDecision.reason}"), popupScan)
+            logSessionDecision(event, "IGNORED", "BURST_LIMIT_${triggerDecision.reason}")
             logObservation(
                 "ORDER_DETECTION_WAIT",
                 "skipBurstLimit count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
@@ -165,6 +170,7 @@ class MyAccessibilityService : AccessibilityService() {
         if (isOrderDetectionSessionActive) {
             pendingDetectionAfterCurrent = true
             logObservation("ORDER_DETECTION_WAIT", "pendingAfterCurrent=true reason=SESSION_ACTIVE")
+            logSessionDecision(event, "SESSION_ALREADY_RUNNING", "SESSION_ACTIVE")
             return
         }
         logEventStructure("BEFORE_SESSION_START", buildEventStructureSnapshot(event, event.packageName?.toString().orEmpty()))
@@ -187,6 +193,7 @@ class MyAccessibilityService : AccessibilityService() {
             "ORDER_SESSION_START",
             "sessionId=$orderDetectionSessionId reason=${triggerDecision.reason} eventType=$currentSessionEventType packageName=$currentSessionPackageName className=$currentSessionClassName"
         )
+        logSessionDecision(event, "START_SESSION", triggerDecision.reason)
         armSessionTimeout(orderDetectionSessionId)
         scheduleNextSessionCapture()
     }
@@ -355,6 +362,7 @@ class MyAccessibilityService : AccessibilityService() {
         val ocrStartMs = System.currentTimeMillis()
         armOcrTimeout()
         DiagnosticLogStore.append(this, "CAPTURE", "process source=accessibility ${bitmap.width}x${bitmap.height}")
+        saveOcrAttemptScreenshot(bitmap, isSecondCheck)
         logObservation("OCR_START", "source=accessibility width=${bitmap.width} height=${bitmap.height} secondCheck=$isSecondCheck")
         OcrHelper.runOrderRegions(this, bitmap) { regionText ->
             runCatching {
@@ -627,6 +635,7 @@ class MyAccessibilityService : AccessibilityService() {
             val message = "signature=$coreSignature ageMs=$coreSignatureAgeMs reason=SAME_CORE_ORDER"
             Log.i("DUPLICATE_ORDER_SUPPRESSED", message)
             DiagnosticLogStore.append(this, "DUPLICATE_ORDER_SUPPRESSED", message)
+            logCurrentSessionDecision("DUPLICATE", "SAME_CORE_ORDER")
             return true
         }
         if (isSecondCheck) {
@@ -654,6 +663,7 @@ class MyAccessibilityService : AccessibilityService() {
             DiagnosticLogStore.append(this, "CAPTURE", "skipResultReason=DUPLICATE_RESULT")
             Log.i("ORDER_ANALYSIS_FINISH", "shown=false reason=DUPLICATE_RESULT")
             DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", "shown=false reason=DUPLICATE_RESULT")
+            logCurrentSessionDecision("DUPLICATE", "DUPLICATE_RESULT")
             return false
         }
         if (!currentSessionOcrSuccessStructureLogged) {
@@ -840,6 +850,24 @@ class MyAccessibilityService : AccessibilityService() {
         DiagnosticLogStore.append(this, tag, message)
     }
 
+    private fun logSessionDecision(event: AccessibilityEvent, decision: String, reason: String) {
+        DiagnosticLogStore.append(
+            this,
+            "SESSION_DECISION",
+            "eventType=${eventTypeName(event.eventType)} className=${event.className?.toString().orEmpty()} " +
+                    "decision=$decision reason=$reason sessionId=$orderDetectionSessionId"
+        )
+    }
+
+    private fun logCurrentSessionDecision(decision: String, reason: String) {
+        DiagnosticLogStore.append(
+            this,
+            "SESSION_DECISION",
+            "eventType=$currentSessionEventType className=$currentSessionClassName " +
+                    "decision=$decision reason=$reason sessionId=$orderDetectionSessionId"
+        )
+    }
+
     private fun logTriggerGateBypass(reason: String, scan: PopupStructureScan) {
         val message = "reason=$reason score=${scan.score} likelyBlockingPopup=${scan.isLikelyBlockingPopup} features=${scan.featureSummary()} samples=${scan.samples.joinToString(" | ")}"
         Log.i("TRIGGER_GATE_BYPASS", message)
@@ -1008,6 +1036,33 @@ class MyAccessibilityService : AccessibilityService() {
         )
     }
 
+    private fun logEventSourceBounds(event: AccessibilityEvent, packageName: String) {
+        if (packageName != "com.ubercab.driver") return
+        val source = runCatching { event.source }.getOrNull()
+        val parent = runCatching { source?.parent }.getOrNull()
+        val root = rootInActiveWindow
+        val sourceBounds = Rect()
+        val parentBounds = Rect()
+        source?.let { runCatching { it.getBoundsInScreen(sourceBounds) } }
+        parent?.let { runCatching { it.getBoundsInScreen(parentBounds) } }
+        DiagnosticLogStore.append(
+            this,
+            "EVENT_SOURCE_BOUNDS",
+            "eventType=${eventTypeName(event.eventType)} className=${event.className?.toString().orEmpty()} " +
+                    "packageName=$packageName windowId=${source?.windowId ?: root?.windowId ?: -1} " +
+                    "rootPackage=${root?.packageName?.toString().orEmpty()} " +
+                    "sourceBounds=${formatRectForLog(sourceBounds, source != null)} " +
+                    "parentBounds=${formatRectForLog(parentBounds, parent != null)} " +
+                    "parentClass=${parent?.className?.toString().orEmpty()} " +
+                    "childCount=${source?.childCount ?: -1} clickable=${source?.isClickable ?: false} " +
+                    "focusable=${source?.isFocusable ?: false} visibleToUser=${source?.isVisibleToUser ?: false}"
+        )
+    }
+
+    private fun formatRectForLog(rect: Rect, available: Boolean): String {
+        return if (available) rect.toShortString() else "[]"
+    }
+
     private fun logUberWindowDebug(event: AccessibilityEvent, packageName: String, stage: String) {
         val activeRoot = rootInActiveWindow
         val currentWindows = runCatching { windows.orEmpty() }.getOrDefault(emptyList())
@@ -1035,6 +1090,35 @@ class MyAccessibilityService : AccessibilityService() {
     private fun logWindowDebug(message: String) {
         Log.d("WINDOW_DEBUG", message)
         DiagnosticLogStore.add(this, "WINDOW_DEBUG", message)
+    }
+
+    private fun saveOcrAttemptScreenshot(bitmap: Bitmap, isSecondCheck: Boolean) {
+        val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!isDebuggable) return
+        val attempt = currentOcrAttemptNumber.coerceAtLeast(1)
+        val elapsedMs = currentOcrAttemptElapsedMs
+        val fileName = "ocr-attempt-session-${orderDetectionSessionId}-attempt-$attempt-${System.currentTimeMillis()}.png"
+        val targetFile = DebugFileDirs.resolveAppScoped(this, "debug_samples").resolve(fileName)
+        runCatching {
+            targetFile.parentFile?.mkdirs()
+            FileOutputStream(targetFile).use { output ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+            }
+            DiagnosticLogStore.append(
+                this,
+                "OCR_SCREENSHOT_SAVED",
+                "sessionId=$orderDetectionSessionId attempt=$attempt elapsedMs=$elapsedMs " +
+                        "secondCheck=$isSecondCheck fileName=$fileName size=${bitmap.width}x${bitmap.height}"
+            )
+        }.onFailure { throwable ->
+            DiagnosticLogStore.append(
+                this,
+                "OCR_SCREENSHOT_SAVED",
+                "sessionId=$orderDetectionSessionId attempt=$attempt elapsedMs=$elapsedMs " +
+                        "secondCheck=$isSecondCheck fileName=$fileName size=${bitmap.width}x${bitmap.height} " +
+                        "saveSuccess=false error=${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}"
+            )
+        }
     }
 
     private fun windowTypeName(type: Int): String {
