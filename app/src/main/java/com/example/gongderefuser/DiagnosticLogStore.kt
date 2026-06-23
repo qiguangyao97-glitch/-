@@ -7,9 +7,19 @@ import java.util.Date
 import java.util.Locale
 
 object DiagnosticLogStore {
+    private const val DEBUG_MODE = false
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
     private val hourlyFileNameFormatter = SimpleDateFormat("yyyyMMdd-HH", Locale.US)
-    private val persistedTags = setOf(
+    private val releasePersistedTags = setOf(
+        "APP_ERROR",
+        "DUPLICATE_ORDER_SUPPRESSED",
+        "OCR_FAIL_FINAL",
+        "OCR_SUCCESS",
+        "ORDER_ANALYSIS_FINISH",
+        "POPUP_SHOW",
+        "SESSION_END"
+    )
+    private val debugPersistedTags = setOf(
         "ACCESSIBILITY",
         "ACTIVATION",
         "A11Y_CLICK",
@@ -74,6 +84,11 @@ object DiagnosticLogStore {
         "PENDING_UBER_EVENT_RECEIVED",
         "WINDOW_DEBUG"
     )
+    private val persistedTags = if (DEBUG_MODE) {
+        debugPersistedTags + releasePersistedTags
+    } else {
+        releasePersistedTags
+    }
     @Volatile
     private var lastWriteSummary: String = "尚未寫入"
     @Volatile

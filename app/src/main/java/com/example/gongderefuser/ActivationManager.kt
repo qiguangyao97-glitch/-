@@ -22,7 +22,8 @@ data class ActivationResult(
 
 object ActivationManager {
     private const val TAG = "ACTIVATION"
-    private const val COLLECTION = "activation_codes"
+    private const val DEFAULT_COLLECTION = "activation_codes"
+    private const val THIRTY_DAY_COLLECTION = "activation_codes_30days"
     private const val DEFAULT_DURATION_DAYS = 7L
     private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
 
@@ -59,7 +60,7 @@ object ActivationManager {
         }
 
         val firestore = FirebaseFirestore.getInstance()
-        val docRef = firestore.collection(COLLECTION).document(code)
+        val docRef = firestore.collection(collectionForCode(code)).document(code)
         val snapshot = try {
             docRef.get().awaitTask()
         } catch (throwable: Throwable) {
@@ -182,6 +183,10 @@ object ActivationManager {
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             packageInfo.versionName ?: "unknown"
         }.getOrDefault("unknown")
+    }
+
+    private fun collectionForCode(code: String): String {
+        return if (code.startsWith("30D-")) THIRTY_DAY_COLLECTION else DEFAULT_COLLECTION
     }
 
     private inline fun Long.ifZero(defaultValue: () -> Long): Long {

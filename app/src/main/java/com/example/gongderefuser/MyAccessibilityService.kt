@@ -674,7 +674,8 @@ class MyAccessibilityService : AccessibilityService() {
         val coreSignatureAgeMs = now - lastCoreOrderTimestamp
         if (
             lastCoreOrderSignature == coreSignature &&
-            coreSignatureAgeMs in 0..DUPLICATE_ORDER_WINDOW_MS
+            coreSignatureAgeMs >= 0 &&
+            coreSignatureAgeMs < DUPLICATE_ORDER_WINDOW_MS
         ) {
             val message = "signature=$coreSignature ageMs=$coreSignatureAgeMs " +
                     "money=${validOrder.price} distance=${validOrder.distance} minutes=${validOrder.minutes}"
@@ -1756,7 +1757,9 @@ class MyAccessibilityService : AccessibilityService() {
         val score = analysis?.score ?: 0
         val message = "sessionId=$orderDetectionSessionId shown=$shown " +
                 "money=${order?.price ?: 0} distance=${order?.distance ?: 0.0} " +
-                "minutes=${order?.minutes ?: 0} score=$score reason=$reason"
+                "minutes=${order?.minutes ?: 0} merchant=${sanitizeForLog(order?.storeName.orEmpty(), 80)} " +
+                "address=${sanitizeForLog(order?.address.orEmpty(), 120)} score=$score " +
+                "hourlyRate=${analysis?.effectiveHourly ?: 0.0} moneyPerKm=${analysis?.yuanPerKm ?: 0.0} reason=$reason"
         Log.i("ORDER_ANALYSIS_FINISH", message)
         DiagnosticLogStore.append(this, "ORDER_ANALYSIS_FINISH", message)
     }
@@ -2493,7 +2496,7 @@ class MyAccessibilityService : AccessibilityService() {
         private const val MAX_DETECTIONS_PER_POPUP_CANDIDATE = 5
         private const val POPUP_CANDIDATE_WINDOW_MS = 2_000L
         private const val MIN_SCREENSHOT_INTERVAL_MS = 1_000L
-        private const val DUPLICATE_ORDER_WINDOW_MS = 10_000L
+        private const val DUPLICATE_ORDER_WINDOW_MS = 25_000L
         private const val POPUP_STRUCTURE_SCAN_MIN_INTERVAL_MS = 800L
         private const val POPUP_CANDIDATE_LOG_MIN_INTERVAL_MS = 3_000L
         private const val POPUP_STRUCTURE_SCAN_NODE_LIMIT = 140

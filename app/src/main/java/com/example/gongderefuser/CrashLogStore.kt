@@ -12,6 +12,11 @@ object CrashLogStore {
     private val formatter = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US)
 
     fun save(context: Context, label: String, throwable: Throwable) {
+        DiagnosticLogStore.append(
+            context,
+            "APP_ERROR",
+            "label=$label error=${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}"
+        )
         runCatching {
             val dir = DebugFileDirs.resolve(context, "crash_logs")
             val stack = StringWriter().also { writer ->
