@@ -113,12 +113,19 @@ class MyAccessibilityService : AccessibilityService() {
     private var currentOrderActionRegions: OrderActionRegions? = null
     private var pendingAcceptConfirmation: OrderActionRegions? = null
     private var acceptConfirmationTimeoutRunnable: Runnable? = null
+    private var lastDeliveryLifecycleTextHash: Int = 0
+    private var lastDeliveryLifecycleScanAt: Long = 0L
 
     private data class OrderActionRegions(
         val sessionId: Long,
         val recordTimestamp: Long,
         val orderSignature: String,
         val merchantName: String,
+        val address: String,
+        val price: Int,
+        val minutes: Int,
+        val distance: Double,
+        val deliveryCount: Int,
         val acceptRect: Rect?,
         val closeRect: Rect?,
         val capturedAt: Long
@@ -157,6 +164,7 @@ class MyAccessibilityService : AccessibilityService() {
             logTargetClickEvent(event, packageName)
         }
         observePostAcceptState(event)
+        observeDeliveryLifecycle(event)
         val now = System.currentTimeMillis()
         val eventId = ++nextUberEventId
 
@@ -2123,6 +2131,11 @@ class MyAccessibilityService : AccessibilityService() {
             recordTimestamp = recordTimestamp,
             orderSignature = coreSignature,
             merchantName = order.storeName,
+            address = order.address,
+            price = order.price,
+            minutes = order.minutes,
+            distance = order.distance,
+            deliveryCount = order.deliveryCount,
             acceptRect = actionButtonRect?.let(::Rect),
             closeRect = closeButtonRect?.let(::Rect),
             capturedAt = timestamp
@@ -2485,6 +2498,25 @@ class MyAccessibilityService : AccessibilityService() {
         val acceptedAt = System.currentTimeMillis()
         if (confirmedByClick) {
             OrderHistory.markAccepted(this, regions.recordTimestamp, acceptedAt)
+            val sessionResult = DeliverySessionStore.addAcceptedOpportunity(
+                context = this,
+                recordTimestamp = regions.recordTimestamp,
+                acceptedAt = acceptedAt,
+                orderSignature = regions.orderSignature,
+                price = regions.price,
+                minutes = regions.minutes,
+                distance = regions.distance,
+                merchant = regions.merchantName,
+                address = regions.address,
+                deliveryCount = regions.deliveryCount
+            )
+            logDeliverySessionResult(
+                tag = "DELIVERY_SESSION_ACCEPTED",
+                result = sessionResult,
+                "timestamp=$acceptedAt orderSignature=${regions.orderSignature} recordTimestamp=${regions.recordTimestamp} " +
+                        "price=${regions.price} minutes=${regions.minutes} distance=${regions.distance} " +
+                        "deliveryCount=${regions.deliveryCount} merchant=${sanitizeForLog(regions.merchantName, 80)}"
+            )
             pendingAcceptConfirmation = null
             clearAcceptConfirmationTimeout()
         }
@@ -2519,6 +2551,126 @@ class MyAccessibilityService : AccessibilityService() {
         if (hasTripMetrics && hasEta) return "ETA"
         if (hasTripMetrics && merchantMatched) return "MERCHANT_NAME"
         return ""
+    }
+
+    private fun observeDeliveryLifecycle(event: AccessibilityEvent) {
+        val eventPackage = event.packageName?.toString().orEmpty()
+        val rootPackage = rootInActiveWindow?.packageName?.toString().orEmpty()
+        if (eventPackage != "com.ubercab.driver" && rootPackage != "com.ubercab.driver") return
+        val now = System.currentTimeMillis()
+        val snapshot = collectUberTextSnapshot(event)
+        val normalized = snapshot.replace(" ", "").replace("\n", "")
+        if (normalized.isBlank()) return
+        val textHash = normalized.hashCode()
+        if (textHash == lastDeliveryLifecycleTextHash && now - lastDeliveryLifecycleScanAt < DELIVERY_LIFECYCLE_SCAN_MIN_INTERVAL_MS) {
+            return
+        }
+        lastDeliveryLifecycleTextHash = textHash
+        lastDeliveryLifecycleScanAt = now
+
+        val pickupFlowCandidate = normalized.contains("確認訂單") || normalized.contains("确认订单")
+        val pickupSlideCandidate = normalized.contains("完成取件")
+        val pickupCompleted = normalized.contains("繼續前往下一個停靠點") ||
+                normalized.contains("继续前往下一个停靠点")
+        if (pickupFlowCandidate) {
+            DiagnosticLogStore.append(
+                this,
+                "PICKUP_FLOW_CANDIDATE",
+                "timestamp=$now matchedText=確認訂單 eventType=${eventTypeName(event.eventType)} text=${sanitizeForLog(snapshot, 160)}"
+            )
+        }
+        if (pickupSlideCandidate) {
+            DiagnosticLogStore.append(
+                this,
+                "PICKUP_SLIDE_CANDIDATE",
+                "timestamp=$now matchedText=完成取件 eventType=${eventTypeName(event.eventType)} text=${sanitizeForLog(snapshot, 160)}"
+            )
+        }
+        if (pickupCompleted) {
+            val result = DeliverySessionStore.markPickupCompleted(this, now)
+            logDeliverySessionResult(
+                tag = "PICKUP_COMPLETED",
+                result = result,
+                "timestamp=$now matchedText=繼續前往下一個停靠點"
+            )
+        }
+
+        val deliveryFlow = deliveryCandidateFlow(normalized)
+        if (deliveryFlow.isNotBlank()) {
+            val result = DeliverySessionStore.markDeliveryCandidate(this, deliveryFlow, now)
+            logDeliverySessionResult(
+                tag = "DELIVERY_FLOW_CANDIDATE",
+                result = result,
+                "timestamp=$now flow=$deliveryFlow matchedText=${deliveryMatchedText(deliveryFlow)} " +
+                        "eventType=${eventTypeName(event.eventType)} text=${sanitizeForLog(snapshot, 160)}"
+            )
+            return
+        }
+
+        val activeCandidate = DeliverySessionStore.activeDeliveryCandidate(this, now) ?: return
+        val hasPostDeliveryState = hasPostDeliveryState(normalized)
+        if (hasPostDeliveryState && now - activeCandidate.second >= DELIVERY_COMPLETION_CONFIRM_MIN_DELAY_MS) {
+            val result = DeliverySessionStore.markDeliveryCompleted(this, now)
+            result.completedRecordTimestamps.forEach { recordTimestamp ->
+                OrderHistory.markCompleted(this, recordTimestamp, now)
+            }
+            logDeliverySessionResult(
+                tag = "DELIVERY_COMPLETED",
+                result = result,
+                "timestamp=$now flow=${activeCandidate.first} confirmReason=LEFT_COMPLETION_FLOW"
+            )
+            if (result.status == "COMPLETED" && result.changed) {
+                logDeliverySessionResult(
+                    tag = "DELIVERY_SESSION_COMPLETED",
+                    result = result,
+                    "timestamp=$now completedAt=$now status=COMPLETED"
+                )
+            }
+        }
+    }
+
+    private fun deliveryCandidateFlow(normalized: String): String {
+        return when {
+            normalized.contains("確認送達") || normalized.contains("确认送达") -> "NORMAL_CONFIRM"
+            normalized.contains("完成配送") -> "NORMAL_COMPLETE"
+            normalized.contains("拍攝相片") || normalized.contains("拍摄相片") ||
+                    normalized.contains("拍照") -> "PHOTO"
+            normalized.contains("提交") -> "PHOTO_SUBMIT"
+            normalized.contains("PIN") || normalized.contains("pin") -> "PIN"
+            else -> ""
+        }
+    }
+
+    private fun deliveryMatchedText(flow: String): String {
+        return when (flow) {
+            "NORMAL_CONFIRM" -> "確認送達"
+            "NORMAL_COMPLETE" -> "完成配送"
+            "PHOTO" -> "拍攝相片"
+            "PHOTO_SUBMIT" -> "提交"
+            "PIN" -> "PIN"
+            else -> ""
+        }
+    }
+
+    private fun hasPostDeliveryState(normalized: String): Boolean {
+        val hasTripMetrics = normalized.contains("分鐘") && normalized.contains("公里")
+        return normalized.contains("搜尋地點") ||
+                normalized.contains("行程規劃表") ||
+                normalized.contains("大綱") ||
+                normalized.contains("尋找行程") ||
+                normalized.contains("首頁") ||
+                hasTripMetrics
+    }
+
+    private fun logDeliverySessionResult(tag: String, result: DeliverySessionStore.Result, prefix: String) {
+        DiagnosticLogStore.append(
+            this,
+            tag,
+            "$prefix sessionId=${result.sessionId} changed=${result.changed} status=${result.status} " +
+                    "reason=${result.reason} expectedDeliveryCount=${result.expectedDeliveryCount} " +
+                    "completedPickupCount=${result.completedPickupCount} " +
+                    "completedDeliveryCount=${result.completedDeliveryCount} opportunityCount=${result.opportunityCount}"
+        )
     }
 
     private fun postAcceptGreenIconHint(): Boolean {
@@ -3318,6 +3470,8 @@ class MyAccessibilityService : AccessibilityService() {
         private const val ORDER_ACCEPT_CONFIRMATION_TIMEOUT_MS = 20_000L
         private const val ACCEPT_STATE_NODE_LIMIT = 120
         private const val ACCEPT_STATE_TEXT_LIMIT = 900
+        private const val DELIVERY_LIFECYCLE_SCAN_MIN_INTERVAL_MS = 800L
+        private const val DELIVERY_COMPLETION_CONFIRM_MIN_DELAY_MS = 1_500L
         private val NON_ORDER_TRIGGER_REASONS = setOf(
             "OPPORTUNITY_PAGE",
             "MAIN_NAV_PAGE"
