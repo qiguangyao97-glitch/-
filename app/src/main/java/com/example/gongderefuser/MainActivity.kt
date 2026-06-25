@@ -175,6 +175,16 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        DiagnosticLogStore.append(this, "APP_START", "screen=MainActivity package=$packageName")
+        runCatching {
+            startMainUi()
+        }.onFailure { throwable ->
+            handleMainUiStartupFailure(throwable)
+        }
+    }
+
+    private fun startMainUi() {
+        DiagnosticLogStore.append(this, "MAIN_UI_START", "stage=start currentScreen=$currentScreen")
         ActivationLocalStore.clearActivationIfNeeded(this)
         if (shouldShowInitialSetup()) {
             showInitialSetup()
@@ -188,6 +198,7 @@ class MainActivity : AppCompatActivity() {
         if (currentScreen == Screen.Home && ::statusTitleText.isInitialized) {
             updateMonitoringUi()
         }
+        DiagnosticLogStore.append(this, "MAIN_UI_START", "stage=finish currentScreen=$currentScreen")
     }
 
     override fun onResume() {
@@ -427,6 +438,101 @@ class MainActivity : AppCompatActivity() {
         layout.addView(card)
 
         setBaseContent(layout)
+    }
+
+    private fun handleMainUiStartupFailure(throwable: Throwable) {
+        val message = "${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}"
+        Log.e("MAIN_UI_ERROR", "startup failed", throwable)
+        DiagnosticLogStore.append(this, "MAIN_UI_ERROR", "stage=onCreate error=$message")
+        CrashLogStore.save(this, "main_ui_startup", throwable)
+        showStartupRecoveryScreen(message)
+    }
+
+    private fun showStartupRecoveryScreen(errorMessage: String) {
+        DiagnosticLogStore.append(this, "MAIN_UI_RECOVERY_SHOWN", "error=$errorMessage")
+        currentScreen = Screen.SettingsDetail
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(28), dp(18), dp(28))
+            setBackgroundColor(COLOR_BACKGROUND)
+        }
+        layout.addView(TextView(this).apply {
+            text = "啟動修復"
+            textSize = 26f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT_PRIMARY)
+        })
+        layout.addView(TextView(this).apply {
+            text = "APP 啟動畫面建立失敗。通常是本地記錄、模板或監控狀態資料異常造成。你可以先嘗試重新載入首頁；如果仍失敗，再清除對應資料。啟用碼會保留。"
+            textSize = 14f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            setLineSpacing(0f, 1.16f)
+            setPadding(0, dp(8), 0, dp(14))
+        })
+
+        val errorCard = createCard().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        errorCard.addView(TextView(this).apply {
+            text = "錯誤：$errorMessage"
+            textSize = 13f
+            setTextColor(COLOR_DANGER)
+            setLineSpacing(0f, 1.12f)
+        })
+        layout.addView(errorCard)
+
+        layout.addView(createButton(primary = true).apply {
+            text = "重新載入首頁"
+            setOnClickListener {
+                logStartupRecoveryAction("RETRY_HOME")
+                runCatching { showHome() }.onFailure(::handleMainUiStartupFailure)
+            }
+        })
+        layout.addView(createButton(primary = false).apply {
+            text = "清除訂單記錄後重試"
+            setOnClickListener {
+                logStartupRecoveryAction("CLEAR_ORDER_HISTORY")
+                OrderHistory.clear(this@MainActivity)
+                runCatching { showHome() }.onFailure(::handleMainUiStartupFailure)
+            }
+        })
+        layout.addView(createButton(primary = false).apply {
+            text = "重置 OCR 模板後重試"
+            setOnClickListener {
+                logStartupRecoveryAction("RESET_OCR_TEMPLATE")
+                OcrCalibrationStore.reset(this@MainActivity)
+                runCatching { showHome() }.onFailure(::handleMainUiStartupFailure)
+            }
+        })
+        layout.addView(createButton(primary = false).apply {
+            text = "關閉監控狀態後重試"
+            setOnClickListener {
+                logStartupRecoveryAction("DISABLE_MONITORING")
+                MonitoringState.setEnabled(this@MainActivity, false)
+                runCatching { showHome() }.onFailure(::handleMainUiStartupFailure)
+            }
+        })
+        layout.addView(createButton(primary = false).apply {
+            text = "清除訂單記錄、OCR 模板、監控狀態"
+            setOnClickListener {
+                logStartupRecoveryAction("CLEAR_ALL_RECOVERY_DATA")
+                OrderHistory.clear(this@MainActivity)
+                OcrCalibrationStore.reset(this@MainActivity)
+                MonitoringState.setEnabled(this@MainActivity, false)
+                runCatching { showHome() }.onFailure(::handleMainUiStartupFailure)
+            }
+        })
+
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(COLOR_BACKGROUND)
+            addView(layout)
+        }
+        setContentView(scroll)
+    }
+
+    private fun logStartupRecoveryAction(action: String) {
+        DiagnosticLogStore.append(this, "MAIN_UI_RECOVERY_ACTION", "action=$action")
     }
 
     private fun enableMonitoringFromInitialSetup() {
