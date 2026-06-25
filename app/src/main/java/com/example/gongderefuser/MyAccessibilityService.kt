@@ -1,8 +1,6 @@
 package com.example.gongderefuser
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.AccessibilityService.GestureResultCallback
-import android.accessibilityservice.GestureDescription
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.Notification
@@ -12,7 +10,6 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Typeface
@@ -551,6 +548,7 @@ class MyAccessibilityService : AccessibilityService() {
             }
             val finalReason = currentSessionLastValidationReason.ifBlank { "MAX_ATTEMPTS_REACHED" }
             logOcrFinalFail(currentOcrAttemptNumber, eventElapsedMs(), finalReason)
+            hideActiveOfferOverlayIfPopupGone(finalReason)
             logObservation(
                 "ORDER_DETECTION_WAIT",
                 "state=WAITING reason=OCR_FAIL failures=$orderDetectionSessionFailureCount"
@@ -835,6 +833,7 @@ class MyAccessibilityService : AccessibilityService() {
                 currentShownOrderSignature = ""
                 secondCheckSignature = ""
                 lastPendingOrder = null
+                clearOrderActionTracking("ORDER_LOST_$reason")
                 mainHandler.post {
                     logObservation("POPUP_HIDE", "reason=ORDER_LOST")
                     hideOverlay()
@@ -856,6 +855,7 @@ class MyAccessibilityService : AccessibilityService() {
         currentShownOrderSignature = ""
         secondCheckSignature = ""
         lastPendingOrder = null
+        clearOrderActionTracking("ORDER_LOST_$reason")
         mainHandler.post {
             logObservation("POPUP_HIDE", "reason=ORDER_LOST")
             hideOverlay()
@@ -2451,15 +2451,20 @@ class MyAccessibilityService : AccessibilityService() {
                 pendingAcceptConfirmation = null
                 clearAcceptConfirmationTimeout()
             }
+            clearOrderActionTracking("USER_CLOSE_INTENT")
+            mainHandler.post {
+                logObservation("POPUP_HIDE", "reason=USER_CLOSE_INTENT")
+                hideOverlay()
+            }
         }
         DiagnosticLogStore.append(
             this,
             "ORDER_ACTION_REGION_CLICK",
             "timestamp=$now sessionId=${regions.sessionId} action=$action orderSignature=${regions.orderSignature} " +
                     "recordTimestamp=${regions.recordTimestamp} x=${rawX.toInt()} y=${rawY.toInt()} " +
-                    "acceptRect=${regions.acceptRect?.toShortString().orEmpty()} closeRect=${regions.closeRect?.toShortString().orEmpty()}"
+                    "acceptRect=${regions.acceptRect?.toShortString().orEmpty()} closeRect=${regions.closeRect?.toShortString().orEmpty()} " +
+                    "intercepted=true forwarded=false userMustTapAgain=true"
         )
-        forwardTapToUber(rawX, rawY, action, regions)
     }
 
     private fun observePostAcceptState(event: AccessibilityEvent) {
@@ -2600,44 +2605,6 @@ class MyAccessibilityService : AccessibilityService() {
         acceptConfirmationTimeoutRunnable = null
     }
 
-    private fun forwardTapToUber(rawX: Float, rawY: Float, action: String, regions: OrderActionRegions) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-            DiagnosticLogStore.append(
-                this,
-                "ORDER_ACTION_REGION_FORWARD",
-                "sessionId=${regions.sessionId} action=$action forwarded=false reason=API_BELOW_N"
-            )
-            return
-        }
-        val path = Path().apply { moveTo(rawX, rawY) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, 80L))
-            .build()
-        val callback = object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                DiagnosticLogStore.append(
-                    this@MyAccessibilityService,
-                    "ORDER_ACTION_REGION_FORWARD",
-                    "sessionId=${regions.sessionId} action=$action forwarded=true result=COMPLETED"
-                )
-            }
-
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                DiagnosticLogStore.append(
-                    this@MyAccessibilityService,
-                    "ORDER_ACTION_REGION_FORWARD",
-                    "sessionId=${regions.sessionId} action=$action forwarded=false result=CANCELLED"
-                )
-            }
-        }
-        val dispatched = dispatchGesture(gesture, callback, mainHandler)
-        DiagnosticLogStore.append(
-            this,
-            "ORDER_ACTION_REGION_FORWARD",
-            "sessionId=${regions.sessionId} action=$action dispatched=$dispatched x=${rawX.toInt()} y=${rawY.toInt()}"
-        )
-    }
-
     private fun removeOrderActionTouchOverlays() {
         val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val hadAccept = actionAcceptOverlay != null
@@ -2653,6 +2620,28 @@ class MyAccessibilityService : AccessibilityService() {
                 "ORDER_ACTION_REGIONS_CLEARED",
                 "hadAccept=$hadAccept hadClose=$hadClose currentSignature=${currentOrderActionRegions?.orderSignature.orEmpty()}"
             )
+        }
+    }
+
+    private fun clearOrderActionTracking(reason: String) {
+        clearAcceptConfirmationTimeout()
+        pendingAcceptConfirmation = null
+        currentOrderActionRegions = null
+        removeOrderActionTouchOverlays()
+        DiagnosticLogStore.append(this, "ORDER_ACTION_REGIONS_CLEARED", "reason=$reason")
+    }
+
+    private fun hideActiveOfferOverlayIfPopupGone(reason: String) {
+        if (reason != "NO_ORDER_CARD" && reason != "ALL_CORE_FIELDS_EMPTY") return
+        if (currentOrderActionRegions == null && overlayView == null) return
+        clearOrderActionTracking("FINAL_$reason")
+        lastShownOrderSignature = ""
+        currentShownOrderSignature = ""
+        secondCheckSignature = ""
+        lastPendingOrder = null
+        mainHandler.post {
+            logObservation("POPUP_HIDE", "reason=FINAL_$reason")
+            hideOverlay()
         }
     }
 
