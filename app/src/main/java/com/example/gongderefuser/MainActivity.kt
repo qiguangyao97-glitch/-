@@ -99,7 +99,14 @@ class MainActivity : AppCompatActivity() {
         ScreenshotHistory
     }
 
+    private enum class RecordFilter {
+        ALL,
+        ACCEPTED,
+        MISSED
+    }
+
     private var currentScreen = Screen.Home
+    private var currentRecordFilter = RecordFilter.ALL
     private var hasPromptedAccessibility = false
     private var soundTestExpanded = false
     private var debugInfoExpanded = false
@@ -620,6 +627,10 @@ class MainActivity : AppCompatActivity() {
         records: List<OrderHistory.Record>,
         subtitle: String
     ) {
+        val previousScreen = currentScreen
+        if (screen == Screen.RealtimeHistory && previousScreen != Screen.RealtimeHistory) {
+            currentRecordFilter = RecordFilter.ALL
+        }
         currentScreen = screen
         val layout = createBaseLayout()
         addSubHeader(layout, title, subtitle)
@@ -632,6 +643,8 @@ class MainActivity : AppCompatActivity() {
         records: List<OrderHistory.Record>,
         screen: Screen
     ): LinearLayout {
+        val filter = if (screen == Screen.RealtimeHistory) currentRecordFilter else RecordFilter.ALL
+        val visibleRecords = filterRecords(records, filter)
         val card = createCard().apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
@@ -658,7 +671,11 @@ class MainActivity : AppCompatActivity() {
             })
         }
         card.addView(header)
-        addRecordStats(card, records, includeAverage = true)
+        if (screen == Screen.RealtimeHistory) {
+            addRecordFilterButtons(card, records, filter, screen)
+        } else {
+            addRecordStats(card, records, includeAverage = true)
+        }
 
         if (records.isEmpty()) {
             card.addView(TextView(this).apply {
@@ -670,7 +687,21 @@ class MainActivity : AppCompatActivity() {
             return card
         }
 
-        records.forEachIndexed { index, record ->
+        if (visibleRecords.isEmpty()) {
+            card.addView(TextView(this).apply {
+                text = when (filter) {
+                    RecordFilter.ACCEPTED -> "沒有已接訂單。"
+                    RecordFilter.MISSED -> "沒有沒接訂單。"
+                    RecordFilter.ALL -> "還沒有記錄。"
+                }
+                textSize = 14f
+                setTextColor(COLOR_TEXT_SECONDARY)
+                setPadding(0, dp(14), 0, 0)
+            })
+            return card
+        }
+
+        visibleRecords.forEachIndexed { index, record ->
             card.addView(View(this).apply {
                 setBackgroundColor(0xFFE5E7EB.toInt())
             }, LinearLayout.LayoutParams(
@@ -3145,6 +3176,76 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(COLOR_TEXT_PRIMARY)
             })
         })
+    }
+
+    private fun addRecordFilterButtons(
+        parent: LinearLayout,
+        records: List<OrderHistory.Record>,
+        selectedFilter: RecordFilter,
+        screen: Screen
+    ) {
+        val acceptedCount = records.count { it.acceptedAt > 0L }
+        val missedCount = records.size - acceptedCount
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(14), 0, dp(6))
+        }
+        row.addView(
+            createRecordFilterButton("總數（${records.size} 單）", selectedFilter == RecordFilter.ALL) {
+                currentRecordFilter = RecordFilter.ALL
+                refreshRecordDetail(screen)
+            },
+            LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(6) }
+        )
+        row.addView(
+            createRecordFilterButton("已接（$acceptedCount 單）", selectedFilter == RecordFilter.ACCEPTED) {
+                currentRecordFilter = RecordFilter.ACCEPTED
+                refreshRecordDetail(screen)
+            },
+            LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                leftMargin = dp(3)
+                rightMargin = dp(3)
+            }
+        )
+        row.addView(
+            createRecordFilterButton("沒接（$missedCount 單）", selectedFilter == RecordFilter.MISSED) {
+                currentRecordFilter = RecordFilter.MISSED
+                refreshRecordDetail(screen)
+            },
+            LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) }
+        )
+        parent.addView(row)
+    }
+
+    private fun createRecordFilterButton(
+        textValue: String,
+        selected: Boolean,
+        onClick: () -> Unit
+    ): TextView {
+        return TextView(this).apply {
+            text = textValue
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            maxLines = 1
+            setTextColor(Color.WHITE)
+            background = roundedFill(
+                if (selected) COLOR_SUCCESS else Color.rgb(34, 197, 94),
+                14f
+            )
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun filterRecords(records: List<OrderHistory.Record>, filter: RecordFilter): List<OrderHistory.Record> {
+        return when (filter) {
+            RecordFilter.ALL -> records
+            RecordFilter.ACCEPTED -> records.filter { it.acceptedAt > 0L }
+            RecordFilter.MISSED -> records.filter { it.acceptedAt <= 0L }
+        }
     }
 
     private fun addRecordStats(
