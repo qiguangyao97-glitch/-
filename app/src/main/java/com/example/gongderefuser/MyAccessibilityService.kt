@@ -115,6 +115,9 @@ class MyAccessibilityService : AccessibilityService() {
     private var acceptConfirmationTimeoutRunnable: Runnable? = null
     private var lastDeliveryLifecycleTextHash: Int = 0
     private var lastDeliveryLifecycleScanAt: Long = 0L
+    private var activeSoundPlayer: MediaPlayer? = null
+    private var activeSoundOrderSignature: String = ""
+    private var activeSoundSessionId: Long = 0L
 
     private data class OrderActionRegions(
         val sessionId: Long,
@@ -2303,6 +2306,7 @@ class MyAccessibilityService : AccessibilityService() {
         pendingUberEventCount = 0
         currentBurstDetectCount = 0
         hideOverlay()
+        stopActiveAnalysisTone("SERVICE_DESTROY")
         stopForegroundCompat()
         if (activeService === this) {
             activeService = null
@@ -2843,15 +2847,21 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun playAnalysisTone(analysis: AnalysisResult, orderSignature: String = "") {
         val timestamp = System.currentTimeMillis()
+        val soundSessionId = orderDetectionSessionId
+        val soundAlreadyPlaying = activeSoundPlayer != null
         DiagnosticLogStore.append(
             this,
             "SOUND_PLAY_REQUEST",
-            "timestamp=$timestamp sessionId=$orderDetectionSessionId orderSignature=$orderSignature " +
+            "timestamp=$timestamp sessionId=$soundSessionId orderSignature=$orderSignature " +
                     "currentShownOrderSignature=$currentShownOrderSignature isDuplicate=false popupAction=SHOW " +
                     "soundAction=REQUEST popupShown=true duplicate=false reason=POPUP_SHOWN " +
-                    "soundAlreadyPlaying=false soundStopped=false replacePopup=false"
+                    "soundAlreadyPlaying=$soundAlreadyPlaying soundStopped=false replacePopup=false"
         )
         if (!AppSettings.isSoundEnabled(this)) return
+
+        if (soundAlreadyPlaying) {
+            stopActiveAnalysisTone("NEW_ORDER_REPLACE", replacementOrderSignature = orderSignature)
+        }
 
         val soundRes = when (analysis.recommendation) {
             "掙他娘的" -> R.raw.sound_level_4
@@ -2872,31 +2882,74 @@ class MyAccessibilityService : AccessibilityService() {
             player.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
             descriptor.close()
             player.setOnCompletionListener { mediaPlayer ->
+                val isCurrent = activeSoundPlayer === mediaPlayer
                 DiagnosticLogStore.append(
                     this,
                     "SOUND_PLAY_COMPLETE",
-                    "timestamp=${System.currentTimeMillis()} sessionId=$orderDetectionSessionId orderSignature=$orderSignature " +
+                    "timestamp=${System.currentTimeMillis()} sessionId=$soundSessionId orderSignature=$orderSignature " +
                             "currentShownOrderSignature=$currentShownOrderSignature isDuplicate=false popupAction=SHOW " +
                             "soundAction=COMPLETE popupShown=true duplicate=false reason=MEDIA_COMPLETE " +
-                            "soundAlreadyPlaying=false soundStopped=false replacePopup=false"
+                            "soundAlreadyPlaying=false soundStopped=false replacePopup=false isCurrent=$isCurrent"
                 )
+                if (isCurrent) {
+                    activeSoundPlayer = null
+                    activeSoundOrderSignature = ""
+                    activeSoundSessionId = 0L
+                }
                 mediaPlayer.release()
             }
             player.setOnErrorListener { mediaPlayer, _, _ ->
+                val isCurrent = activeSoundPlayer === mediaPlayer
+                DiagnosticLogStore.append(
+                    this,
+                    "SOUND_STOP_CALLED",
+                    "timestamp=${System.currentTimeMillis()} sessionId=$soundSessionId orderSignature=$orderSignature " +
+                            "currentShownOrderSignature=$currentShownOrderSignature soundAction=ERROR_RELEASE " +
+                            "reason=MEDIA_ERROR soundAlreadyPlaying=$isCurrent soundStopped=true replacePopup=false"
+                )
+                if (isCurrent) {
+                    activeSoundPlayer = null
+                    activeSoundOrderSignature = ""
+                    activeSoundSessionId = 0L
+                }
                 mediaPlayer.release()
                 true
             }
             player.prepare()
+            activeSoundPlayer = player
+            activeSoundOrderSignature = orderSignature
+            activeSoundSessionId = soundSessionId
             player.start()
             DiagnosticLogStore.append(
                 this,
                 "SOUND_PLAY_START",
-                "timestamp=${System.currentTimeMillis()} sessionId=$orderDetectionSessionId orderSignature=$orderSignature " +
+                "timestamp=${System.currentTimeMillis()} sessionId=$soundSessionId orderSignature=$orderSignature " +
                         "currentShownOrderSignature=$currentShownOrderSignature isDuplicate=false popupAction=SHOW " +
                         "soundAction=START popupShown=true duplicate=false reason=POPUP_SHOWN " +
                         "soundAlreadyPlaying=false soundStopped=false replacePopup=false"
             )
         }
+    }
+
+    private fun stopActiveAnalysisTone(reason: String, replacementOrderSignature: String = "") {
+        val player = activeSoundPlayer ?: return
+        val stoppedSignature = activeSoundOrderSignature
+        val stoppedSessionId = activeSoundSessionId
+        activeSoundPlayer = null
+        activeSoundOrderSignature = ""
+        activeSoundSessionId = 0L
+        DiagnosticLogStore.append(
+            this,
+            "SOUND_STOP_CALLED",
+            "timestamp=${System.currentTimeMillis()} sessionId=$stoppedSessionId orderSignature=$stoppedSignature " +
+                    "currentShownOrderSignature=$currentShownOrderSignature replacementOrderSignature=$replacementOrderSignature " +
+                    "soundAction=STOP_RELEASE reason=$reason soundAlreadyPlaying=true soundStopped=true " +
+                    "replacePopup=${reason == "NEW_ORDER_REPLACE"}"
+        )
+        runCatching {
+            if (player.isPlaying) player.stop()
+        }
+        runCatching { player.release() }
     }
 
     private fun syncForegroundNotification() {
