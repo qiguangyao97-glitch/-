@@ -2451,6 +2451,13 @@ class MyAccessibilityService : AccessibilityService() {
                 pendingAcceptConfirmation = null
                 clearAcceptConfirmationTimeout()
             }
+            OrderHistory.markRejected(this, regions.recordTimestamp, now)
+            DiagnosticLogStore.append(
+                this,
+                "ORDER_DECLINED_MARKED",
+                "timestamp=$now sessionId=${regions.sessionId} orderSignature=${regions.orderSignature} " +
+                        "recordTimestamp=${regions.recordTimestamp} rejectedAt=$now reason=CLOSE_REGION_CLICK"
+            )
             clearOrderActionTracking("USER_CLOSE_INTENT")
             mainHandler.post {
                 logObservation("POPUP_HIDE", "reason=USER_CLOSE_INTENT")

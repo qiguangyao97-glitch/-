@@ -890,12 +890,12 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, dp(4), 0, 0)
             })
         }
-        if (record.acceptedAt > 0L || record.completedAt > 0L) {
+        if (record.acceptedAt > 0L || record.completedAt > 0L || record.rejectedAt > 0L) {
             row.addView(TextView(this).apply {
                 text = buildOrderManualStatusText(record)
                 textSize = 12f
                 typeface = Typeface.DEFAULT_BOLD
-                setTextColor(COLOR_ACCENT)
+                setTextColor(if (record.rejectedAt > 0L && record.acceptedAt <= 0L) COLOR_DANGER else COLOR_ACCENT)
                 setPadding(0, dp(6), 0, 0)
             })
         }
@@ -905,8 +905,14 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(8), 0, 0)
         }
         val keyword = buildHistoryListKeyword(record)
+        val acceptButtonText = when {
+            record.acceptedAt > 0L -> "已接"
+            record.rejectedAt > 0L -> "沒接"
+            else -> "接受"
+        }
+        val acceptButtonColor = if (record.rejectedAt > 0L && record.acceptedAt <= 0L) COLOR_DANGER else COLOR_ACCENT
         actionRow.addView(
-            createSmallActionButton(if (record.acceptedAt > 0L) "已接" else "接受", COLOR_ACCENT) {
+            createSmallActionButton(acceptButtonText, acceptButtonColor) {
                 OrderHistory.markAccepted(this@MainActivity, record.timestamp)
                 onChanged()
             },
@@ -948,6 +954,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildOrderManualStatusText(record: OrderHistory.Record): String {
         return buildList {
+            if (record.rejectedAt > 0L && record.acceptedAt <= 0L) add("沒接：${record.rejectedTimeLabel()}")
             if (record.acceptedAt > 0L) add("已接：${record.acceptedTimeLabel()}")
             if (record.completedAt > 0L) add("已完成：${record.completedTimeLabel()}")
         }.joinToString("　")

@@ -35,7 +35,8 @@ object OrderHistory {
         val rewardPerTrip: Int = 0,
         val screenshotPath: String = "",
         val acceptedAt: Long = 0L,
-        val completedAt: Long = 0L
+        val completedAt: Long = 0L,
+        val rejectedAt: Long = 0L
     ) {
         fun timeLabel(): String {
             return SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(timestamp))
@@ -47,6 +48,10 @@ object OrderHistory {
 
         fun completedTimeLabel(): String {
             return formatOptionalTime(completedAt)
+        }
+
+        fun rejectedTimeLabel(): String {
+            return formatOptionalTime(rejectedAt)
         }
     }
 
@@ -136,7 +141,8 @@ object OrderHistory {
                             rewardPerTrip = item.optInt("rewardPerTrip"),
                             screenshotPath = item.optString("screenshotPath"),
                             acceptedAt = item.optLong("acceptedAt"),
-                            completedAt = item.optLong("completedAt")
+                            completedAt = item.optLong("completedAt"),
+                            rejectedAt = item.optLong("rejectedAt")
                         )
                     )
                 }
@@ -166,7 +172,10 @@ object OrderHistory {
             context,
             load(context).map { record ->
                 if (record.timestamp == timestamp) {
-                    record.copy(acceptedAt = if (record.acceptedAt > 0L) record.acceptedAt else acceptedAt)
+                    record.copy(
+                        acceptedAt = if (record.acceptedAt > 0L) record.acceptedAt else acceptedAt,
+                        rejectedAt = 0L
+                    )
                 } else {
                     record
                 }
@@ -181,8 +190,22 @@ object OrderHistory {
                 if (record.timestamp == timestamp) {
                     record.copy(
                         acceptedAt = if (record.acceptedAt > 0L) record.acceptedAt else completedAt,
-                        completedAt = if (record.completedAt > 0L) record.completedAt else completedAt
+                        completedAt = if (record.completedAt > 0L) record.completedAt else completedAt,
+                        rejectedAt = 0L
                     )
+                } else {
+                    record
+                }
+            }
+        )
+    }
+
+    fun markRejected(context: Context, timestamp: Long, rejectedAt: Long = System.currentTimeMillis()) {
+        save(
+            context,
+            load(context).map { record ->
+                if (record.timestamp == timestamp && record.acceptedAt <= 0L && record.completedAt <= 0L) {
+                    record.copy(rejectedAt = if (record.rejectedAt > 0L) record.rejectedAt else rejectedAt)
                 } else {
                     record
                 }
@@ -216,6 +239,7 @@ object OrderHistory {
                     .put("screenshotPath", record.screenshotPath)
                     .put("acceptedAt", record.acceptedAt)
                     .put("completedAt", record.completedAt)
+                    .put("rejectedAt", record.rejectedAt)
             )
         }
         prefs(context).edit().putString(KEY_RECORDS, array.toString()).apply()

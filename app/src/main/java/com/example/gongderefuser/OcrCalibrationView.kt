@@ -391,13 +391,13 @@ class OcrCalibrationView(context: Context) : View(context) {
     }
 
     private fun isHorizontalResizeLocked(name: String): Boolean {
-        if (name == "type" || name == "price") return false
+        if (name == "type" || name == "price" || name == "actionButton") return false
         return name in OcrCalibrationStore.editableRegionNames &&
             name !in setOf("pickupCircleSearch", "dropoffSquareSearch", "pickupAnchor", "dropoffAnchor")
     }
 
     private fun canMoveFreely(name: String): Boolean {
-        return name == "type" || name == "price"
+        return name == "type" || name == "price" || name == "actionButton"
     }
 
     private fun applyLinkedMove(name: String, dx: Float, dy: Float) {
