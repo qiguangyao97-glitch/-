@@ -2542,6 +2542,7 @@ class MainActivity : AppCompatActivity() {
             "card" -> "固定參考框：固定屏幕下半部大小，只作背景參考。"
             "closeSearch" -> "跟隨關閉按鈕模板：上下加大搜尋範圍，不單獨調整。"
             "closeButton" -> "關閉 X 放在小方塊正中心。"
+            "actionButton" -> "接受/配對按鈕定位：框住底部主要操作按鈕，用於判斷使用者是否點擊接單區域。"
             "price" -> "中心線放在金額和訂單數中心線。"
             "trip" -> "框住分鐘與公里區域，例如 12 分鐘、2.2 公里。"
             "type" -> "跟隨金額模板：與金額模板上下排並連動移動。"
@@ -4255,6 +4256,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_INITIAL_SETUP_DISMISSED = "initial_setup_dismissed"
         private val OCR_CALIBRATION_GUIDE_ORDER = listOf(
             "closeButton",
+            "actionButton",
             "price",
             "trip",
             "merchant",

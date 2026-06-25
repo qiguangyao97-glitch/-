@@ -1,6 +1,8 @@
 package com.example.gongderefuser
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityService.GestureResultCallback
+import android.accessibilityservice.GestureDescription
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.Notification
@@ -10,6 +12,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Typeface
@@ -108,6 +111,21 @@ class MyAccessibilityService : AccessibilityService() {
     private var lastMonitoringEnabledForWatchdog: Boolean = false
     private var watchdogRunnable: Runnable? = null
     private var suspectedDeadDialog: AlertDialog? = null
+    private var actionAcceptOverlay: View? = null
+    private var actionCloseOverlay: View? = null
+    private var currentOrderActionRegions: OrderActionRegions? = null
+    private var pendingAcceptConfirmation: OrderActionRegions? = null
+    private var acceptConfirmationTimeoutRunnable: Runnable? = null
+
+    private data class OrderActionRegions(
+        val sessionId: Long,
+        val recordTimestamp: Long,
+        val orderSignature: String,
+        val merchantName: String,
+        val acceptRect: Rect?,
+        val closeRect: Rect?,
+        val capturedAt: Long
+    )
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -141,6 +159,7 @@ class MyAccessibilityService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             logTargetClickEvent(event, packageName)
         }
+        observePostAcceptState(event)
         val now = System.currentTimeMillis()
         val eventId = ++nextUberEventId
 
@@ -470,7 +489,9 @@ class MyAccessibilityService : AccessibilityService() {
                     textLength = regionText.fullText.length,
                     cropWidth = cropRect?.width() ?: 0,
                     cropHeight = cropRect?.height() ?: 0,
-                    rawTextHash = regionText.fullText.hashCode().toString()
+                    rawTextHash = regionText.fullText.hashCode().toString(),
+                    actionButtonRect = regionText.anchorDebugInfo.actionButtonRect,
+                    closeButtonRect = regionText.anchorDebugInfo.closeButtonRect
                 )
                 if (!isSecondCheck) {
                     DebugSampleStore.saveCapture(this, bitmap, regionText, foundOrder)
@@ -681,7 +702,9 @@ class MyAccessibilityService : AccessibilityService() {
         textLength: Int = 0,
         cropWidth: Int = 0,
         cropHeight: Int = 0,
-        rawTextHash: String = ""
+        rawTextHash: String = "",
+        actionButtonRect: Rect? = null,
+        closeButtonRect: Rect? = null
     ): Boolean {
         val gate = OrderResultGate.evaluate(order, hasAnchoredCard = hasAnchoredCard, tripText = tripText)
         Log.i("ORDER_POPUP_VALIDATION", gate.debugLog)
@@ -774,10 +797,19 @@ class MyAccessibilityService : AccessibilityService() {
 
         lastPendingOrder = validOrder
         val analysis = OrderAnalyzer.analyzeResult(this, validOrder)
-        OrderHistory.add(this, analysis, "即時", "")
+        val recordTimestamp = OrderHistory.add(this, analysis, "即時", "")
 
         Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(this, validOrder))
-        handleReminderFlow(validOrder, analysis, signature, coreSignature, now)
+        handleReminderFlow(
+            order = validOrder,
+            analysis = analysis,
+            fullSignature = signature,
+            coreSignature = coreSignature,
+            timestamp = now,
+            recordTimestamp = recordTimestamp,
+            actionButtonRect = actionButtonRect,
+            closeButtonRect = closeButtonRect
+        )
         logOrderLatency(eventElapsedMs(), ocrSuccessElapsedMs, ocrSuccessAttempt)
         logOrderAnalysisFinish(shown = true, order = validOrder, analysis = analysis, reason = "VALID_ORDER")
         return true
@@ -1341,8 +1373,11 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun logTargetClickEvent(event: AccessibilityEvent, packageName: String) {
+        val source = runCatching { event.source }.getOrNull()
+        val sourceBounds = Rect()
+        source?.let { runCatching { it.getBoundsInScreen(sourceBounds) } }
         val viewId = runCatching {
-            event.source?.viewIdResourceName.orEmpty()
+            source?.viewIdResourceName.orEmpty()
         }.getOrDefault("")
         val message = buildString {
             append("eventType=")
@@ -1353,6 +1388,8 @@ class MyAccessibilityService : AccessibilityService() {
             append(event.className?.toString().orEmpty())
             append(" viewId=")
             append(viewId)
+            append(" sourceBounds=")
+            append(formatRectForLog(sourceBounds, source != null))
             append(" text=")
             append(formatEventText(event))
             append(" contentDescription=")
@@ -2029,7 +2066,10 @@ class MyAccessibilityService : AccessibilityService() {
         analysis: AnalysisResult,
         fullSignature: String,
         coreSignature: String,
-        timestamp: Long
+        timestamp: Long,
+        recordTimestamp: Long,
+        actionButtonRect: Rect?,
+        closeButtonRect: Rect?
     ) {
         val previousSignature = currentShownOrderSignature
         val replacePopup = previousSignature.isNotBlank() && previousSignature != coreSignature
@@ -2078,10 +2118,20 @@ class MyAccessibilityService : AccessibilityService() {
         lastCoreOrderSignature = coreSignature
         lastCoreOrderTimestamp = timestamp
         currentShownOrderSignature = coreSignature
+        currentOrderActionRegions = OrderActionRegions(
+            sessionId = orderDetectionSessionId,
+            recordTimestamp = recordTimestamp,
+            orderSignature = coreSignature,
+            merchantName = order.storeName,
+            acceptRect = actionButtonRect?.let(::Rect),
+            closeRect = closeButtonRect?.let(::Rect),
+            capturedAt = timestamp
+        )
         mainHandler.post {
             val newOrderLabel = orderLabel(order)
             logPopupShowOrReplace(analysis, newOrderLabel)
             replaceAnalysisOverlayInternal(analysis, newOrderLabel, playTone = true, orderSignature = coreSignature)
+            showOrderActionTouchOverlays(currentOrderActionRegions)
         }
     }
 
@@ -2298,6 +2348,333 @@ class MyAccessibilityService : AccessibilityService() {
         }.also {
             mainHandler.postDelayed(it, 30_000)
         }
+    }
+
+    private fun showOrderActionTouchOverlays(regions: OrderActionRegions?) {
+        removeOrderActionTouchOverlays()
+        val activeRegions = regions ?: return
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        if (activeRegions.acceptRect == null || activeRegions.closeRect == null) {
+            DiagnosticLogStore.append(
+                this,
+                "ORDER_ACTION_REGIONS_MISSING",
+                "sessionId=${activeRegions.sessionId} orderSignature=${activeRegions.orderSignature} " +
+                        "acceptRect=${activeRegions.acceptRect?.toShortString().orEmpty()} " +
+                        "closeRect=${activeRegions.closeRect?.toShortString().orEmpty()}"
+            )
+        }
+        activeRegions.acceptRect?.let { rect ->
+            addOrderActionTouchOverlay(
+                windowManager = windowManager,
+                rect = expandTouchRect(rect, horizontalPadding = dp(8), verticalPadding = dp(8)),
+                action = "ACCEPT",
+                regions = activeRegions
+            )?.let { actionAcceptOverlay = it }
+        }
+        activeRegions.closeRect?.let { rect ->
+            addOrderActionTouchOverlay(
+                windowManager = windowManager,
+                rect = expandTouchRect(rect, horizontalPadding = dp(24), verticalPadding = dp(24)),
+                action = "CLOSE",
+                regions = activeRegions
+            )?.let { actionCloseOverlay = it }
+        }
+        logOrderActionRegionState("ORDER_ACTION_REGIONS_ACTIVE", activeRegions)
+    }
+
+    private fun addOrderActionTouchOverlay(
+        windowManager: WindowManager,
+        rect: Rect,
+        action: String,
+        regions: OrderActionRegions
+    ): View? {
+        if (rect.width() <= 0 || rect.height() <= 0) return null
+        val view = FrameLayout(this).apply {
+            isClickable = true
+            setBackgroundColor(Color.TRANSPARENT)
+            setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_UP -> {
+                        val x = event.rawX
+                        val y = event.rawY
+                        handleOrderActionRegionClick(action, x, y, regions)
+                        true
+                    }
+                    MotionEvent.ACTION_DOWN, MotionEvent.ACTION_CANCEL -> true
+                    else -> true
+                }
+            }
+        }
+        val params = WindowManager.LayoutParams(
+            rect.width(),
+            rect.height(),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = rect.left
+            y = rect.top
+        }
+        return runCatching {
+            windowManager.addView(view, params)
+            DiagnosticLogStore.append(
+                this,
+                "ORDER_ACTION_REGION_OVERLAY_ADDED",
+                "sessionId=${regions.sessionId} action=$action rect=${rect.toShortString()} " +
+                        "orderSignature=${regions.orderSignature}"
+            )
+            view
+        }.onFailure {
+            DiagnosticLogStore.append(
+                this,
+                "ORDER_ACTION_REGION_ERROR",
+                "action=$action reason=ADD_OVERLAY_FAILED error=${it.javaClass.simpleName}:${it.message.orEmpty()}"
+            )
+        }.getOrNull()
+    }
+
+    private fun handleOrderActionRegionClick(
+        action: String,
+        rawX: Float,
+        rawY: Float,
+        regions: OrderActionRegions
+    ) {
+        removeOrderActionTouchOverlays()
+        val now = System.currentTimeMillis()
+        if (action == "ACCEPT") {
+            pendingAcceptConfirmation = regions
+            armAcceptConfirmationTimeout(regions)
+        } else if (action == "CLOSE") {
+            if (pendingAcceptConfirmation?.orderSignature == regions.orderSignature) {
+                pendingAcceptConfirmation = null
+                clearAcceptConfirmationTimeout()
+            }
+        }
+        DiagnosticLogStore.append(
+            this,
+            "ORDER_ACTION_REGION_CLICK",
+            "timestamp=$now sessionId=${regions.sessionId} action=$action orderSignature=${regions.orderSignature} " +
+                    "recordTimestamp=${regions.recordTimestamp} x=${rawX.toInt()} y=${rawY.toInt()} " +
+                    "acceptRect=${regions.acceptRect?.toShortString().orEmpty()} closeRect=${regions.closeRect?.toShortString().orEmpty()}"
+        )
+        forwardTapToUber(rawX, rawY, action, regions)
+    }
+
+    private fun observePostAcceptState(event: AccessibilityEvent) {
+        val regions = pendingAcceptConfirmation ?: currentOrderActionRegions ?: return
+        if (System.currentTimeMillis() - regions.capturedAt > ORDER_ACTION_OBSERVE_WINDOW_MS) return
+        val snapshot = collectUberTextSnapshot(event)
+        val signal = acceptedOrderStateSignal(snapshot, event, regions)
+        if (signal.isBlank()) return
+        val pending = pendingAcceptConfirmation
+        val confirmedByClick = pending?.orderSignature == regions.orderSignature
+        val acceptedAt = System.currentTimeMillis()
+        if (confirmedByClick) {
+            OrderHistory.markAccepted(this, regions.recordTimestamp, acceptedAt)
+            pendingAcceptConfirmation = null
+            clearAcceptConfirmationTimeout()
+        }
+        DiagnosticLogStore.append(
+            this,
+            if (confirmedByClick) "ORDER_ACCEPT_CONFIRMED" else "ORDER_ACCEPT_STATE_OBSERVED",
+            "sessionId=${regions.sessionId} orderSignature=${regions.orderSignature} " +
+                    "recordTimestamp=${regions.recordTimestamp} confirmedByClick=$confirmedByClick " +
+                    "historyUpdated=$confirmedByClick acceptedAt=${if (confirmedByClick) acceptedAt else 0L} " +
+                    "signal=$signal text=${sanitizeForLog(snapshot, 180)}"
+        )
+    }
+
+    private fun acceptedOrderStateSignal(text: String, event: AccessibilityEvent, regions: OrderActionRegions): String {
+        val normalized = text.replace(" ", "")
+        val hasTripMetrics = normalized.contains("分鐘") && normalized.contains("公里")
+        val hasFirstPickupTrip = normalized.contains("第一個取餐行程")
+        val hasEta = normalized.contains("預估抵達時間") || normalized.contains("预计抵达时间")
+        val merchantKey = merchantStateKey(regions.merchantName)
+        val merchantMatched = merchantKey.isNotBlank() && normalized.contains(merchantKey)
+        val greenIconHint = postAcceptGreenIconHint()
+        DiagnosticLogStore.append(
+            this,
+            "ORDER_ACCEPT_STATE_SCAN",
+            "sessionId=${regions.sessionId} eventType=${eventTypeName(event.eventType)} " +
+                    "orderSignature=${regions.orderSignature} hasTripMetrics=$hasTripMetrics greenIconHint=$greenIconHint " +
+                    "hasFirstPickupTrip=$hasFirstPickupTrip hasEta=$hasEta merchantMatched=$merchantMatched " +
+                    "text=${sanitizeForLog(text, 180)}"
+        )
+        if (hasTripMetrics && greenIconHint) return "TRIP_METRICS_WITH_GREEN_ICON_HINT"
+        if (hasTripMetrics && hasFirstPickupTrip) return "FIRST_PICKUP_TRIP"
+        if (hasTripMetrics && hasEta) return "ETA"
+        if (hasTripMetrics && merchantMatched) return "MERCHANT_NAME"
+        return ""
+    }
+
+    private fun postAcceptGreenIconHint(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val displayHeight = resources.displayMetrics.heightPixels
+        val centerX = resources.displayMetrics.widthPixels / 2
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var inspected = 0
+        while (queue.isNotEmpty() && inspected < ACCEPT_STATE_NODE_LIMIT) {
+            val node = queue.removeFirst()
+            inspected += 1
+            val rect = Rect()
+            runCatching { node.getBoundsInScreen(rect) }
+            val isBottomCenter = rect.centerY() > (displayHeight * 0.78f).toInt() &&
+                    rect.left < centerX &&
+                    rect.right > centerX
+            val text = listOfNotNull(
+                node.text?.toString(),
+                node.contentDescription?.toString()
+            ).joinToString(" ").replace(" ", "")
+            if (isBottomCenter && (text.contains("取餐") || text.contains("外送") || text.contains("行程") || text.contains("包"))) {
+                return true
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
+            }
+        }
+        return false
+    }
+
+    private fun merchantStateKey(merchantName: String): String {
+        val normalized = merchantName
+            .replace(" ", "")
+            .replace("\n", "")
+            .trim()
+        return normalized.takeIf { it.length >= 4 }?.take(8).orEmpty()
+    }
+
+    private fun collectUberTextSnapshot(event: AccessibilityEvent): String {
+        val parts = mutableListOf<String>()
+        var textLength = 0
+        fun addPart(value: String?) {
+            val clean = value?.takeIf { it.isNotBlank() } ?: return
+            if (textLength >= ACCEPT_STATE_TEXT_LIMIT) return
+            parts.add(clean)
+            textLength += clean.length + 1
+        }
+        event.text?.forEach { value ->
+            addPart(value?.toString())
+        }
+        addPart(event.contentDescription?.toString())
+        val root = rootInActiveWindow
+        if (root != null) {
+            val queue = ArrayDeque<AccessibilityNodeInfo>()
+            queue.add(root)
+            var nodeCount = 0
+            while (queue.isNotEmpty() && nodeCount < ACCEPT_STATE_NODE_LIMIT && textLength < ACCEPT_STATE_TEXT_LIMIT) {
+                val node = queue.removeFirst()
+                nodeCount += 1
+                addPart(node.text?.toString())
+                addPart(node.contentDescription?.toString())
+                for (index in 0 until node.childCount) {
+                    node.getChild(index)?.let(queue::add)
+                }
+            }
+        }
+        return parts.distinct().joinToString(" ")
+    }
+
+    private fun armAcceptConfirmationTimeout(regions: OrderActionRegions) {
+        clearAcceptConfirmationTimeout()
+        acceptConfirmationTimeoutRunnable = Runnable {
+            val pending = pendingAcceptConfirmation
+            if (pending?.orderSignature == regions.orderSignature) {
+                DiagnosticLogStore.append(
+                    this,
+                    "ORDER_ACCEPT_CONFIRMATION_TIMEOUT",
+                    "sessionId=${regions.sessionId} orderSignature=${regions.orderSignature} " +
+                            "recordTimestamp=${regions.recordTimestamp} timeoutMs=$ORDER_ACCEPT_CONFIRMATION_TIMEOUT_MS"
+                )
+                pendingAcceptConfirmation = null
+            }
+        }.also {
+            mainHandler.postDelayed(it, ORDER_ACCEPT_CONFIRMATION_TIMEOUT_MS)
+        }
+    }
+
+    private fun clearAcceptConfirmationTimeout() {
+        acceptConfirmationTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        acceptConfirmationTimeoutRunnable = null
+    }
+
+    private fun forwardTapToUber(rawX: Float, rawY: Float, action: String, regions: OrderActionRegions) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            DiagnosticLogStore.append(
+                this,
+                "ORDER_ACTION_REGION_FORWARD",
+                "sessionId=${regions.sessionId} action=$action forwarded=false reason=API_BELOW_N"
+            )
+            return
+        }
+        val path = Path().apply { moveTo(rawX, rawY) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 80L))
+            .build()
+        val callback = object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                DiagnosticLogStore.append(
+                    this@MyAccessibilityService,
+                    "ORDER_ACTION_REGION_FORWARD",
+                    "sessionId=${regions.sessionId} action=$action forwarded=true result=COMPLETED"
+                )
+            }
+
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                DiagnosticLogStore.append(
+                    this@MyAccessibilityService,
+                    "ORDER_ACTION_REGION_FORWARD",
+                    "sessionId=${regions.sessionId} action=$action forwarded=false result=CANCELLED"
+                )
+            }
+        }
+        val dispatched = dispatchGesture(gesture, callback, mainHandler)
+        DiagnosticLogStore.append(
+            this,
+            "ORDER_ACTION_REGION_FORWARD",
+            "sessionId=${regions.sessionId} action=$action dispatched=$dispatched x=${rawX.toInt()} y=${rawY.toInt()}"
+        )
+    }
+
+    private fun removeOrderActionTouchOverlays() {
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val hadAccept = actionAcceptOverlay != null
+        val hadClose = actionCloseOverlay != null
+        listOfNotNull(actionAcceptOverlay, actionCloseOverlay).forEach { view ->
+            runCatching { windowManager.removeView(view) }
+        }
+        actionAcceptOverlay = null
+        actionCloseOverlay = null
+        if (hadAccept || hadClose) {
+            DiagnosticLogStore.append(
+                this,
+                "ORDER_ACTION_REGIONS_CLEARED",
+                "hadAccept=$hadAccept hadClose=$hadClose currentSignature=${currentOrderActionRegions?.orderSignature.orEmpty()}"
+            )
+        }
+    }
+
+    private fun expandTouchRect(rect: Rect, horizontalPadding: Int, verticalPadding: Int): Rect {
+        val displayWidth = resources.displayMetrics.widthPixels
+        val displayHeight = resources.displayMetrics.heightPixels
+        return Rect(
+            (rect.left - horizontalPadding).coerceAtLeast(0),
+            (rect.top - verticalPadding).coerceAtLeast(0),
+            (rect.right + horizontalPadding).coerceAtMost(displayWidth),
+            (rect.bottom + verticalPadding).coerceAtMost(displayHeight)
+        )
+    }
+
+    private fun logOrderActionRegionState(tag: String, regions: OrderActionRegions) {
+        DiagnosticLogStore.append(
+            this,
+            tag,
+            "sessionId=${regions.sessionId} orderSignature=${regions.orderSignature} " +
+                    "recordTimestamp=${regions.recordTimestamp} acceptRect=${regions.acceptRect?.toShortString().orEmpty()} " +
+                    "closeRect=${regions.closeRect?.toShortString().orEmpty()} capturedAt=${regions.capturedAt}"
+        )
     }
 
     private fun playAnalysisTone(analysis: AnalysisResult, orderSignature: String = "") {
@@ -2809,6 +3186,7 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun hideOverlay() {
+        removeOrderActionTouchOverlays()
         val view = overlayView ?: return
         overlayView = null
         currentOverlayOrderLabel = ""
@@ -2940,6 +3318,10 @@ class MyAccessibilityService : AccessibilityService() {
         private const val ACCESSIBILITY_SUSPECTED_DEAD_TITLE = "功德拒絕器可能需要重啟無障礙"
         private const val ACCESSIBILITY_SUSPECTED_DEAD_MESSAGE =
             "無障礙開關仍開啟，但長時間沒有收到事件。請關閉後重新開啟無障礙服務。"
+        private const val ORDER_ACTION_OBSERVE_WINDOW_MS = 90_000L
+        private const val ORDER_ACCEPT_CONFIRMATION_TIMEOUT_MS = 20_000L
+        private const val ACCEPT_STATE_NODE_LIMIT = 120
+        private const val ACCEPT_STATE_TEXT_LIMIT = 900
         private val NON_ORDER_TRIGGER_REASONS = setOf(
             "OPPORTUNITY_PAGE",
             "MAIN_NAV_PAGE"

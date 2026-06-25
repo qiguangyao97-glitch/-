@@ -68,6 +68,7 @@ object OcrHelper {
         val dropoffSearchRect: Rect? = null,
         val cardRect: Rect? = null,
         val closeButtonRect: Rect? = null,
+        val actionButtonRect: Rect? = null,
         val priceRect: Rect? = null,
         val tripRect: Rect? = null,
         val merchantRect: Rect? = null,
@@ -535,6 +536,7 @@ object OcrHelper {
             dropoffSearchRect = anchorProbe.dropoffSearchRect ?: dropoffSquareSearchRect(context, bitmap, lowerShiftY),
             cardRect = card,
             closeButtonRect = close.rect,
+            actionButtonRect = calibratedPixelRect(context, bitmap, "actionButton", close.deltaY),
             priceRect = calibratedPixelRect(context, bitmap, "price", close.deltaY),
             tripRect = tripActualRect,
             merchantRect = merchantRect,
@@ -1581,7 +1583,8 @@ object OcrHelper {
                 closeShiftY = closeShiftY,
                 pickupAnchorRect = null,
                 dropoffAnchorRect = null,
-                closeButtonRect = closeButton?.rect
+                closeButtonRect = closeButton?.rect,
+                actionButtonRect = closeShiftY?.let { calibratedPixelRect(context, bitmap, "actionButton", it) }
             )
         }
         val closeOnlyCard = calibratedPixelRect(context, bitmap, "card", closeShiftY)
@@ -1599,6 +1602,7 @@ object OcrHelper {
             dropoffAnchorRect = null,
             cardRect = closeOnlyCard,
             closeButtonRect = closeButton.rect,
+            actionButtonRect = calibratedPixelRect(context, bitmap, "actionButton", closeShiftY),
             priceRect = calibratedPixelRect(context, bitmap, "price", closeShiftY),
             tripRect = calibratedPixelRect(context, bitmap, "trip", closeShiftY),
             merchantRect = widenedMerchantRect(context, bitmap, closeShiftY, closeOnlyLineHeight),

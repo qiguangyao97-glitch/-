@@ -55,12 +55,13 @@ object OrderHistory {
         analysis: OrderAnalyzer.AnalysisResult,
         source: String,
         screenshotPath: String = ""
-    ) {
+    ): Long {
+        val timestamp = System.currentTimeMillis()
         val records = load(context).toMutableList()
         records.add(
             0,
             Record(
-                timestamp = System.currentTimeMillis(),
+                timestamp = timestamp,
                 source = source,
                 storeName = analysis.storeName.ifBlank { "未識別商家" },
                 storeAddress = analysis.storeAddress,
@@ -82,6 +83,7 @@ object OrderHistory {
             )
         )
         save(context, records.take(MAX_RECORDS))
+        return timestamp
     }
 
     fun load(context: Context): List<Record> {

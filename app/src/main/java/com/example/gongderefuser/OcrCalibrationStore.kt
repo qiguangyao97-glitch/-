@@ -11,6 +11,7 @@ object OcrCalibrationStore {
         "card",
         "closeSearch",
         "closeButton",
+        "actionButton",
         "type",
         "price",
         "trip",
