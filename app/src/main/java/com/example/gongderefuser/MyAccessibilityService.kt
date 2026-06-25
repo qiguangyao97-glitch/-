@@ -54,6 +54,7 @@ class MyAccessibilityService : AccessibilityService() {
     private var lastShownOrderTime: Long = 0L
     private var lastCoreOrderSignature: String = ""
     private var lastCoreOrderTimestamp: Long = 0L
+    private var currentShownOrderSignature: String = ""
     private var lastOcrAttemptTime: Long = 0L
     private var screenshotTimeoutRunnable: Runnable? = null
     private var ocrTimeoutRunnable: Runnable? = null
@@ -69,6 +70,9 @@ class MyAccessibilityService : AccessibilityService() {
     private var nextUberEventId: Long = 0L
     private var pendingUberEventId: Long = 0L
     private var pendingUberEventTimestamp: Long = 0L
+    private var pendingUberEventCount: Int = 0
+    private var staleSessionCooldownUntil: Long = 0L
+    private var staleSessionCooldownRunnable: Runnable? = null
     private var currentBurstDetectCount: Int = 0
     private var lastDetectionEventTime: Long = 0L
     private var lastScreenshotRequestTime: Long = 0L
@@ -167,6 +171,13 @@ class MyAccessibilityService : AccessibilityService() {
         }
         lastDetectionEventTime = now
 
+        if (isInStaleSessionCooldown(now)) {
+            logTriggerGateDecision(event, eventId, "BYPASS", "STALE_SESSION_COOLDOWN_PENDING", popupScan)
+            markPendingUberEvent(eventId, now, "STALE_SESSION_COOLDOWN")
+            logSessionDecision(event, "SESSION_ALREADY_RUNNING", "STALE_SESSION_COOLDOWN")
+            return
+        }
+
         if (isDetectionScheduled || isTakingScreenshot || isProcessingOrder || isOrderDetectionSessionActive) {
             logTriggerGateDecision(event, eventId, "BYPASS", "SESSION_BUSY_PENDING", popupScan)
             markPendingUberEvent(eventId, now, "SESSION_BUSY")
@@ -223,13 +234,7 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun startPendingOrderDetectionSession(now: Long, reason: String) {
         if (isOrderDetectionSessionActive || isDetectionScheduled || isTakingScreenshot) {
-            pendingUberEvent = true
-            DiagnosticLogStore.append(
-                this,
-                "PENDING_UBER_EVENT_RECEIVED",
-                "currentSessionId=$orderDetectionSessionId eventId=$pendingUberEventId reason=PENDING_PROCESS_BUSY " +
-                        "isDetectionScheduled=$isDetectionScheduled isTakingScreenshot=$isTakingScreenshot isProcessingOrder=$isProcessingOrder"
-            )
+            markPendingUberEvent(pendingUberEventId, now, "PENDING_PROCESS_BUSY")
             return
         }
         isOrderDetectionSessionActive = true
@@ -594,8 +599,13 @@ class MyAccessibilityService : AccessibilityService() {
     private fun endOrderDetectionSession(reason: String) {
         val endedSessionId = orderDetectionSessionId
         val durationMs = eventElapsedMs()
+        val isStale = reason == "STALE_SESSION"
+        if (isStale) {
+            dropPendingAfterStale(endedSessionId, reason)
+            startStaleSessionCooldown(endedSessionId)
+        }
         val hadPending = pendingUberEvent
-        val nextAction = if (hadPending) "PROCESS_PENDING" else "IDLE"
+        val nextAction = if (hadPending && !isStale) "PROCESS_PENDING" else "IDLE"
         if (isOrderDetectionSessionActive) {
             DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason sessionId=$orderDetectionSessionId")
             DiagnosticLogStore.append(
@@ -616,14 +626,21 @@ class MyAccessibilityService : AccessibilityService() {
         currentSessionNoOrderStructureLogged = false
         currentSessionOcrSuccessStructureLogged = false
         pendingDetectionAfterCurrent = false
-        processPendingUberEventIfNeeded(endedSessionId)
+        if (!isStale) {
+            processPendingUberEventIfNeeded(endedSessionId)
+        }
     }
 
     private fun resetAnalysisSession(reason: String) {
         val sessionId = orderDetectionSessionId
         val durationMs = eventElapsedMs()
+        val isStale = reason == "STALE_SESSION"
+        if (isStale) {
+            dropPendingAfterStale(sessionId, reason)
+            startStaleSessionCooldown(sessionId)
+        }
         val hadPending = pendingUberEvent
-        val nextAction = if (hadPending) "PROCESS_PENDING" else "IDLE"
+        val nextAction = if (hadPending && !isStale) "PROCESS_PENDING" else "IDLE"
         DiagnosticLogStore.append(this, "ORDER_SESSION_FORCE_RESET", "reason=$reason sessionId=$sessionId")
         Log.i("ORDER_SESSION_FORCE_RESET", "reason=$reason sessionId=$sessionId")
         clearSessionTimeout()
@@ -650,7 +667,9 @@ class MyAccessibilityService : AccessibilityService() {
             "sessionId=$sessionId reason=$reason durationMs=$durationMs " +
                     "hadPendingUberEvent=$hadPending nextAction=$nextAction"
         )
-        processPendingUberEventIfNeeded(sessionId)
+        if (!isStale) {
+            processPendingUberEventIfNeeded(sessionId)
+        }
     }
 
     private fun handleAccessibilityOrder(
@@ -699,15 +718,22 @@ class MyAccessibilityService : AccessibilityService() {
         val ocrSuccessAttempt = currentOcrAttemptNumber
         val ocrSuccessElapsedMs = eventElapsedMs(now)
         val coreSignatureAgeMs = now - lastCoreOrderTimestamp
+        if (!currentSessionOcrSuccessStructureLogged) {
+            logEventStructure("OCR_SUCCESS", lastEventStructureSnapshot)
+            currentSessionOcrSuccessStructureLogged = true
+        }
+        logOcrSuccess(ocrSuccessAttempt, ocrSuccessElapsedMs, validOrder, rawTextHash)
         if (
-            lastCoreOrderSignature == coreSignature &&
+            currentShownOrderSignature == coreSignature &&
             coreSignatureAgeMs >= 0 &&
             coreSignatureAgeMs < DUPLICATE_ORDER_WINDOW_MS
         ) {
-            val message = "signature=$coreSignature ageMs=$coreSignatureAgeMs " +
-                    "money=${validOrder.price} distance=${validOrder.distance} minutes=${validOrder.minutes}"
+            val message = "timestamp=$now sessionId=$orderDetectionSessionId signature=$coreSignature ageMs=$coreSignatureAgeMs " +
+                    "money=${validOrder.price} distance=${validOrder.distance} minutes=${validOrder.minutes} " +
+                    "popupSuppressed=true soundSuppressed=true soundStopped=false replacePopup=false"
             Log.i("DUPLICATE_ORDER_SUPPRESSED", message)
             DiagnosticLogStore.append(this, "DUPLICATE_ORDER_SUPPRESSED", message)
+            logReminderFlowSuppressedDuplicate(coreSignature, now)
             logOrderAnalysisFinish(shown = false, order = validOrder, analysis = null, reason = "DUPLICATE_ORDER")
             logCurrentSessionDecision("DUPLICATE", "DUPLICATE_ORDER")
             return true
@@ -722,6 +748,7 @@ class MyAccessibilityService : AccessibilityService() {
             DiagnosticLogStore.append(this, "SECOND_CHECK", "secondCheckChanged=true")
             lastShownOrderSignature = signature
             lastShownOrderTime = now
+            currentShownOrderSignature = coreSignature
             secondCheckSignature = signature
             val newOrderLabel = orderLabel(validOrder)
             logObservation("ORDER_UPDATED", orderDetails(validOrder))
@@ -736,18 +763,6 @@ class MyAccessibilityService : AccessibilityService() {
             Log.i("DUPLICATE_ORDER_OBSERVED", message)
             DiagnosticLogStore.append(this, "DUPLICATE_ORDER_OBSERVED", message)
         }
-        if (lastCoreOrderSignature.isNotBlank() && coreSignature != lastCoreOrderSignature) {
-            DiagnosticLogStore.append(
-                this,
-                "NEW_ORDER_REPLACES_OVERLAY",
-                "oldSignature=$lastCoreOrderSignature newSignature=$coreSignature ageMs=$coreSignatureAgeMs"
-            )
-        }
-        if (!currentSessionOcrSuccessStructureLogged) {
-            logEventStructure("OCR_SUCCESS", lastEventStructureSnapshot)
-            currentSessionOcrSuccessStructureLogged = true
-        }
-        logOcrSuccess(ocrSuccessAttempt, ocrSuccessElapsedMs, validOrder, rawTextHash)
         if (lastShownOrderSignature.isNotBlank() && signature != lastShownOrderSignature) {
             logObservation(
                 "ORDER_REPLACED",
@@ -757,22 +772,13 @@ class MyAccessibilityService : AccessibilityService() {
             logObservation("ORDER_DETECTED", orderDetails(validOrder))
         }
 
-        lastShownOrderSignature = signature
-        lastShownOrderTime = now
-        lastCoreOrderSignature = coreSignature
-        lastCoreOrderTimestamp = now
-
         lastPendingOrder = validOrder
         val analysis = OrderAnalyzer.analyzeResult(this, validOrder)
         OrderHistory.add(this, analysis, "即時", "")
 
         Log.d("ORDER_ANALYSIS", OrderAnalyzer.analyze(this, validOrder))
-        mainHandler.post {
-            val newOrderLabel = orderLabel(validOrder)
-            logPopupShowOrReplace(analysis, newOrderLabel)
-            replaceAnalysisOverlayInternal(analysis, newOrderLabel)
-            logOrderLatency(eventElapsedMs(), ocrSuccessElapsedMs, ocrSuccessAttempt)
-        }
+        handleReminderFlow(validOrder, analysis, signature, coreSignature, now)
+        logOrderLatency(eventElapsedMs(), ocrSuccessElapsedMs, ocrSuccessAttempt)
         logOrderAnalysisFinish(shown = true, order = validOrder, analysis = analysis, reason = "VALID_ORDER")
         return true
     }
@@ -794,6 +800,7 @@ class MyAccessibilityService : AccessibilityService() {
                 DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason")
                 logObservation("ORDER_LOST", "reason=$reason")
                 lastShownOrderSignature = ""
+                currentShownOrderSignature = ""
                 secondCheckSignature = ""
                 lastPendingOrder = null
                 mainHandler.post {
@@ -814,6 +821,7 @@ class MyAccessibilityService : AccessibilityService() {
         }
         logObservation("ORDER_LOST", "reason=$reason")
         lastShownOrderSignature = ""
+        currentShownOrderSignature = ""
         secondCheckSignature = ""
         lastPendingOrder = null
         mainHandler.post {
@@ -983,6 +991,16 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun markPendingUberEvent(eventId: Long, timestamp: Long, reason: String) {
+        val wasPending = pendingUberEvent
+        pendingUberEventCount = if (wasPending) pendingUberEventCount + 1 else 1
+        if (wasPending) {
+            DiagnosticLogStore.append(
+                this,
+                "PENDING_EVENT_COALESCED",
+                "timestamp=$timestamp sessionId=$orderDetectionSessionId pendingCount=$pendingUberEventCount " +
+                        "latestPendingUberEvent=true reason=$reason cooldownMs=${remainingStaleCooldownMs(timestamp)} nextAction=KEEP_LATEST_ONLY"
+            )
+        }
         pendingUberEvent = true
         pendingUberEventId = eventId
         pendingUberEventTimestamp = timestamp
@@ -990,18 +1008,23 @@ class MyAccessibilityService : AccessibilityService() {
             this,
             "PENDING_UBER_EVENT_RECEIVED",
             "currentSessionId=$orderDetectionSessionId eventId=$eventId reason=$reason " +
-                    "isDetectionScheduled=$isDetectionScheduled isTakingScreenshot=$isTakingScreenshot isProcessingOrder=$isProcessingOrder"
+                    "isDetectionScheduled=$isDetectionScheduled isTakingScreenshot=$isTakingScreenshot isProcessingOrder=$isProcessingOrder " +
+                    "pendingCount=$pendingUberEventCount latestPendingUberEvent=true cooldownMs=${remainingStaleCooldownMs(timestamp)}"
         )
     }
 
     private fun processPendingUberEventIfNeeded(previousSessionId: Long) {
         if (!pendingUberEvent) return
+        if (isInStaleSessionCooldown()) return
         val pendingAgeMs = (System.currentTimeMillis() - pendingUberEventTimestamp).coerceAtLeast(0L)
         pendingUberEvent = false
+        val processedPendingCount = pendingUberEventCount
+        pendingUberEventCount = 0
         DiagnosticLogStore.append(
             this,
             "PENDING_UBER_EVENT_PROCESS",
-            "previousSessionId=$previousSessionId newSessionReason=PENDING_UBER_EVENT pendingAgeMs=$pendingAgeMs"
+            "previousSessionId=$previousSessionId newSessionReason=PENDING_UBER_EVENT pendingAgeMs=$pendingAgeMs " +
+                    "pendingCount=$processedPendingCount latestPendingUberEvent=false"
         )
         DiagnosticLogStore.append(
             this,
@@ -1012,6 +1035,59 @@ class MyAccessibilityService : AccessibilityService() {
             now = System.currentTimeMillis(),
             reason = "PENDING_UBER_EVENT"
         )
+    }
+
+    private fun dropPendingAfterStale(sessionId: Long, reason: String) {
+        if (!pendingUberEvent && pendingUberEventCount == 0) return
+        val now = System.currentTimeMillis()
+        DiagnosticLogStore.append(
+            this,
+            "PENDING_EVENT_DROPPED_AFTER_STALE",
+            "timestamp=$now sessionId=$sessionId pendingCount=$pendingUberEventCount " +
+                    "latestPendingUberEvent=$pendingUberEvent reason=$reason cooldownMs=$STALE_SESSION_COOLDOWN_MS nextAction=IDLE"
+        )
+        pendingUberEvent = false
+        pendingUberEventId = 0L
+        pendingUberEventTimestamp = 0L
+        pendingUberEventCount = 0
+        DiagnosticLogStore.append(
+            this,
+            "PENDING_UBER_EVENT_CLEARED",
+            "reason=$reason previousSessionId=$sessionId"
+        )
+    }
+
+    private fun startStaleSessionCooldown(sessionId: Long) {
+        val now = System.currentTimeMillis()
+        staleSessionCooldownUntil = now + STALE_SESSION_COOLDOWN_MS
+        staleSessionCooldownRunnable?.let(mainHandler::removeCallbacks)
+        DiagnosticLogStore.append(
+            this,
+            "SESSION_STALE_COOLDOWN_START",
+            "timestamp=$now sessionId=$sessionId pendingCount=$pendingUberEventCount " +
+                    "latestPendingUberEvent=$pendingUberEvent reason=STALE_SESSION cooldownMs=$STALE_SESSION_COOLDOWN_MS nextAction=WAIT_FOR_NEW_EVENT"
+        )
+        staleSessionCooldownRunnable = Runnable {
+            val endNow = System.currentTimeMillis()
+            staleSessionCooldownUntil = 0L
+            DiagnosticLogStore.append(
+                this,
+                "SESSION_STALE_COOLDOWN_END",
+                "timestamp=$endNow sessionId=$sessionId pendingCount=$pendingUberEventCount " +
+                        "latestPendingUberEvent=$pendingUberEvent reason=COOLDOWN_FINISHED cooldownMs=0 nextAction=${if (pendingUberEvent) "PROCESS_PENDING" else "IDLE"}"
+            )
+            processPendingUberEventIfNeeded(sessionId)
+        }.also {
+            mainHandler.postDelayed(it, STALE_SESSION_COOLDOWN_MS)
+        }
+    }
+
+    private fun isInStaleSessionCooldown(now: Long = System.currentTimeMillis()): Boolean {
+        return staleSessionCooldownUntil > now
+    }
+
+    private fun remainingStaleCooldownMs(now: Long = System.currentTimeMillis()): Long {
+        return (staleSessionCooldownUntil - now).coerceAtLeast(0L)
     }
 
     private fun logOrderValidationResult(
@@ -1948,6 +2024,102 @@ class MyAccessibilityService : AccessibilityService() {
         )
     }
 
+    private fun handleReminderFlow(
+        order: OrderData,
+        analysis: AnalysisResult,
+        fullSignature: String,
+        coreSignature: String,
+        timestamp: Long
+    ) {
+        val previousSignature = currentShownOrderSignature
+        val replacePopup = previousSignature.isNotBlank() && previousSignature != coreSignature
+        if (replacePopup) {
+            val ageMs = (timestamp - lastCoreOrderTimestamp).coerceAtLeast(0L)
+            DiagnosticLogStore.append(
+                this,
+                "NEW_ORDER_REPLACES_OVERLAY",
+                "oldSignature=$previousSignature newSignature=$coreSignature ageMs=$ageMs"
+            )
+            DiagnosticLogStore.append(
+                this,
+                "REMINDER_FLOW_REPLACE",
+                reminderFlowLogMessage(
+                    timestamp = timestamp,
+                    orderSignature = coreSignature,
+                    currentSignature = previousSignature,
+                    duplicate = false,
+                    popupAction = "REPLACE",
+                    soundAction = "PLAY_NEW",
+                    popupShown = true,
+                    reason = "NEW_ORDER",
+                    soundStopped = false,
+                    replacePopup = true
+                )
+            )
+        }
+        DiagnosticLogStore.append(
+            this,
+            "REMINDER_FLOW_START",
+            reminderFlowLogMessage(
+                timestamp = timestamp,
+                orderSignature = coreSignature,
+                currentSignature = previousSignature,
+                duplicate = false,
+                popupAction = if (replacePopup) "REPLACE" else "SHOW",
+                soundAction = "PLAY",
+                popupShown = true,
+                reason = "VALID_ORDER",
+                soundStopped = false,
+                replacePopup = replacePopup
+            )
+        )
+        lastShownOrderSignature = fullSignature
+        lastShownOrderTime = timestamp
+        lastCoreOrderSignature = coreSignature
+        lastCoreOrderTimestamp = timestamp
+        currentShownOrderSignature = coreSignature
+        mainHandler.post {
+            val newOrderLabel = orderLabel(order)
+            logPopupShowOrReplace(analysis, newOrderLabel)
+            replaceAnalysisOverlayInternal(analysis, newOrderLabel, playTone = true, orderSignature = coreSignature)
+        }
+    }
+
+    private fun logReminderFlowSuppressedDuplicate(orderSignature: String, timestamp: Long) {
+        val message = reminderFlowLogMessage(
+            timestamp = timestamp,
+            orderSignature = orderSignature,
+            currentSignature = currentShownOrderSignature,
+            duplicate = true,
+            popupAction = "SUPPRESS",
+            soundAction = "SKIP",
+            popupShown = false,
+            reason = "DUPLICATE_ORDER",
+            soundStopped = false,
+            replacePopup = false
+        )
+        DiagnosticLogStore.append(this, "REMINDER_FLOW_SUPPRESSED_DUPLICATE", message)
+        DiagnosticLogStore.append(this, "SOUND_PLAY_SKIPPED_DUPLICATE", message)
+    }
+
+    private fun reminderFlowLogMessage(
+        timestamp: Long,
+        orderSignature: String,
+        currentSignature: String,
+        duplicate: Boolean,
+        popupAction: String,
+        soundAction: String,
+        popupShown: Boolean,
+        reason: String,
+        soundStopped: Boolean,
+        replacePopup: Boolean
+    ): String {
+        return "timestamp=$timestamp sessionId=$orderDetectionSessionId orderSignature=$orderSignature " +
+                "currentShownOrderSignature=$currentSignature isDuplicate=$duplicate popupAction=$popupAction " +
+                "soundAction=$soundAction popupShown=$popupShown duplicate=$duplicate reason=$reason " +
+                "soundAlreadyPlaying=false soundStopped=$soundStopped replacePopup=$replacePopup"
+    }
+
     private fun eventElapsedMs(now: Long = System.currentTimeMillis()): Long {
         val start = orderDetectionSessionStartTime
         return if (start > 0L) {
@@ -2050,10 +2222,14 @@ class MyAccessibilityService : AccessibilityService() {
         clearCollapseTimer()
         pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
         pendingOrderEventRunnable = null
+        staleSessionCooldownRunnable?.let(mainHandler::removeCallbacks)
+        staleSessionCooldownRunnable = null
+        staleSessionCooldownUntil = 0L
         clearSessionTimeout()
         isDetectionScheduled = false
         pendingDetectionAfterCurrent = false
         pendingUberEvent = false
+        pendingUberEventCount = 0
         currentBurstDetectCount = 0
         hideOverlay()
         stopForegroundCompat()
@@ -2071,13 +2247,18 @@ class MyAccessibilityService : AccessibilityService() {
     private fun replaceAnalysisOverlayInternal(
         analysis: AnalysisResult,
         orderLabel: String,
-        playTone: Boolean = true
+        playTone: Boolean = true,
+        orderSignature: String = ""
     ) {
-        showAnalysisOverlayInternal(analysis, playTone)
+        showAnalysisOverlayInternal(analysis, playTone, orderSignature)
         currentOverlayOrderLabel = orderLabel
     }
 
-    private fun showAnalysisOverlayInternal(analysis: AnalysisResult, playTone: Boolean = true) {
+    private fun showAnalysisOverlayInternal(
+        analysis: AnalysisResult,
+        playTone: Boolean = true,
+        orderSignature: String = ""
+    ) {
         clearCollapseTimer()
         hideOverlay()
 
@@ -2109,7 +2290,7 @@ class MyAccessibilityService : AccessibilityService() {
         windowManager.addView(scrollContainer, params)
         overlayView = scrollContainer
         if (playTone) {
-            mainHandler.post { playAnalysisTone(analysis) }
+            mainHandler.post { playAnalysisTone(analysis, orderSignature) }
         }
 
         collapseRunnable = Runnable {
@@ -2119,7 +2300,16 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun playAnalysisTone(analysis: AnalysisResult) {
+    private fun playAnalysisTone(analysis: AnalysisResult, orderSignature: String = "") {
+        val timestamp = System.currentTimeMillis()
+        DiagnosticLogStore.append(
+            this,
+            "SOUND_PLAY_REQUEST",
+            "timestamp=$timestamp sessionId=$orderDetectionSessionId orderSignature=$orderSignature " +
+                    "currentShownOrderSignature=$currentShownOrderSignature isDuplicate=false popupAction=SHOW " +
+                    "soundAction=REQUEST popupShown=true duplicate=false reason=POPUP_SHOWN " +
+                    "soundAlreadyPlaying=false soundStopped=false replacePopup=false"
+        )
         if (!AppSettings.isSoundEnabled(this)) return
 
         val soundRes = when (analysis.recommendation) {
@@ -2141,6 +2331,14 @@ class MyAccessibilityService : AccessibilityService() {
             player.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
             descriptor.close()
             player.setOnCompletionListener { mediaPlayer ->
+                DiagnosticLogStore.append(
+                    this,
+                    "SOUND_PLAY_COMPLETE",
+                    "timestamp=${System.currentTimeMillis()} sessionId=$orderDetectionSessionId orderSignature=$orderSignature " +
+                            "currentShownOrderSignature=$currentShownOrderSignature isDuplicate=false popupAction=SHOW " +
+                            "soundAction=COMPLETE popupShown=true duplicate=false reason=MEDIA_COMPLETE " +
+                            "soundAlreadyPlaying=false soundStopped=false replacePopup=false"
+                )
                 mediaPlayer.release()
             }
             player.setOnErrorListener { mediaPlayer, _, _ ->
@@ -2149,6 +2347,14 @@ class MyAccessibilityService : AccessibilityService() {
             }
             player.prepare()
             player.start()
+            DiagnosticLogStore.append(
+                this,
+                "SOUND_PLAY_START",
+                "timestamp=${System.currentTimeMillis()} sessionId=$orderDetectionSessionId orderSignature=$orderSignature " +
+                        "currentShownOrderSignature=$currentShownOrderSignature isDuplicate=false popupAction=SHOW " +
+                        "soundAction=START popupShown=true duplicate=false reason=POPUP_SHOWN " +
+                        "soundAlreadyPlaying=false soundStopped=false replacePopup=false"
+            )
         }
     }
 
@@ -2720,6 +2926,7 @@ class MyAccessibilityService : AccessibilityService() {
         private const val POPUP_CANDIDATE_WINDOW_MS = 2_000L
         private const val MIN_SCREENSHOT_INTERVAL_MS = 1_000L
         private const val DUPLICATE_ORDER_WINDOW_MS = 25_000L
+        private const val STALE_SESSION_COOLDOWN_MS = 1_500L
         private const val POPUP_STRUCTURE_SCAN_MIN_INTERVAL_MS = 800L
         private const val POPUP_CANDIDATE_LOG_MIN_INTERVAL_MS = 3_000L
         private const val POPUP_STRUCTURE_SCAN_NODE_LIMIT = 140

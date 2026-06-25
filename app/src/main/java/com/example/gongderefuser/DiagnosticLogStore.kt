@@ -19,8 +19,24 @@ object DiagnosticLogStore {
         "OCR_FAIL_FINAL",
         "OCR_SUCCESS",
         "ORDER_ANALYSIS_FINISH",
+        "PENDING_EVENT_COALESCED",
+        "PENDING_EVENT_DROPPED_AFTER_STALE",
+        "PENDING_UBER_EVENT_CLEARED",
+        "PENDING_UBER_EVENT_PROCESS",
+        "PENDING_UBER_EVENT_RECEIVED",
         "POPUP_SHOW",
-        "SESSION_END"
+        "POPUP_REPLACE",
+        "REMINDER_FLOW_REPLACE",
+        "REMINDER_FLOW_START",
+        "REMINDER_FLOW_SUPPRESSED_DUPLICATE",
+        "SESSION_END",
+        "SESSION_STALE_COOLDOWN_END",
+        "SESSION_STALE_COOLDOWN_START",
+        "SOUND_PLAY_COMPLETE",
+        "SOUND_PLAY_REQUEST",
+        "SOUND_PLAY_SKIPPED_DUPLICATE",
+        "SOUND_PLAY_START",
+        "SOUND_STOP_CALLED"
     )
     private val debugPersistedTags = setOf(
         "ACCESSIBILITY",
