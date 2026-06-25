@@ -3,6 +3,11 @@ package com.example.gongderefuser
 import android.accessibilityservice.AccessibilityService
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -14,6 +19,8 @@ import android.os.Build
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.view.Display
 import android.view.Gravity
@@ -90,10 +97,20 @@ class MyAccessibilityService : AccessibilityService() {
     private var currentSessionLastHadDistance: Boolean = false
     private var currentSessionLastHadMinutes: Boolean = false
     private var lastEventStructureSnapshot: EventStructureSnapshot? = null
+    private var lastAccessibilityEventAt: Long = 0L
+    private var lastUberEventAt: Long = 0L
+    private var serviceConnected: Boolean = false
+    private var accessibilityServiceSuspectedDead: Boolean = false
+    private var watchdogRunnable: Runnable? = null
+    private var suspectedDeadDialog: AlertDialog? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         activeService = this
+        serviceConnected = true
+        lastAccessibilityEventAt = System.currentTimeMillis()
+        accessibilityServiceSuspectedDead = false
+        startAccessibilityWatchdog()
         syncForegroundNotification()
         showStatusOverlayInternal()
         DiagnosticLogStore.append(this, "ACCESSIBILITY", "connected package=$packageName")
@@ -101,12 +118,20 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val eventTime = System.currentTimeMillis()
+        lastAccessibilityEventAt = eventTime
+        if (accessibilityServiceSuspectedDead) {
+            accessibilityServiceSuspectedDead = false
+            val state = accessibilityWatchdogState(eventTime)
+            DiagnosticLogStore.append(this, "ACCESSIBILITY_SERVICE_RECOVERED", state.toLogMessage(eventTime))
+        }
         if (!MonitoringState.isEnabled(this)) return
         if (!isActivationActiveForMonitoring()) return
 
         val packageName = event?.packageName?.toString() ?: return
         logUberWindowDebug(event, packageName, "EVENT_RECEIVED")
         if (packageName != "com.ubercab.driver") return
+        lastUberEventAt = eventTime
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             logTargetClickEvent(event, packageName)
         }
@@ -1018,6 +1043,149 @@ class MyAccessibilityService : AccessibilityService() {
         currentSessionLastHadMinutes = false
     }
 
+    private fun startAccessibilityWatchdog() {
+        stopAccessibilityWatchdog()
+        watchdogRunnable = object : Runnable {
+            override fun run() {
+                runAccessibilityWatchdogCheck()
+                mainHandler.postDelayed(this, ACCESSIBILITY_WATCHDOG_INTERVAL_MS)
+            }
+        }
+        mainHandler.postDelayed(watchdogRunnable!!, ACCESSIBILITY_WATCHDOG_INTERVAL_MS)
+    }
+
+    private fun stopAccessibilityWatchdog() {
+        watchdogRunnable?.let(mainHandler::removeCallbacks)
+        watchdogRunnable = null
+    }
+
+    private fun runAccessibilityWatchdogCheck() {
+        val now = System.currentTimeMillis()
+        val state = accessibilityWatchdogState(now)
+        DiagnosticLogStore.append(this, "ACCESSIBILITY_WATCHDOG_CHECK", state.toLogMessage(now))
+        if (
+            state.enabled &&
+            state.serviceConnected &&
+            state.silentDurationMs > ACCESSIBILITY_SUSPECTED_DEAD_MS
+        ) {
+            if (!accessibilityServiceSuspectedDead) {
+                accessibilityServiceSuspectedDead = true
+                val message = state.toLogMessage(now)
+                DiagnosticLogStore.append(this, "ACCESSIBILITY_SERVICE_SUSPECTED_DEAD", message)
+                showAccessibilitySuspectedDeadReminder()
+                showAccessibilitySuspectedDeadNotification()
+            }
+        }
+    }
+
+    private fun accessibilityWatchdogState(now: Long): AccessibilityWatchdogState {
+        val root = rootInActiveWindow
+        val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
+        return AccessibilityWatchdogState(
+            enabled = isThisAccessibilityServiceEnabled(),
+            serviceConnected = serviceConnected,
+            lastAccessibilityEventAt = lastAccessibilityEventAt,
+            silentDurationMs = if (lastAccessibilityEventAt > 0L) now - lastAccessibilityEventAt else Long.MAX_VALUE,
+            lastUberEventAt = lastUberEventAt,
+            screenOn = powerManager?.isInteractive ?: true,
+            rootPackageName = root?.packageName?.toString().orEmpty(),
+            rootWindowCount = runCatching { windows.size }.getOrDefault(0)
+        )
+    }
+
+    private fun isThisAccessibilityServiceEnabled(): Boolean {
+        val expected = "$packageName/${MyAccessibilityService::class.java.name}"
+        val enabledServices = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ).orEmpty()
+        return enabledServices.split(':').any { serviceName ->
+            serviceName.equals(expected, ignoreCase = true) ||
+                serviceName.endsWith("/${MyAccessibilityService::class.java.name}", ignoreCase = true)
+        }
+    }
+
+    private fun showAccessibilitySuspectedDeadReminder() {
+        mainHandler.post {
+            if (suspectedDeadDialog?.isShowing == true) return@post
+            suspectedDeadDialog = AlertDialog.Builder(this)
+                .setTitle(ACCESSIBILITY_SUSPECTED_DEAD_TITLE)
+                .setMessage(ACCESSIBILITY_SUSPECTED_DEAD_MESSAGE)
+                .setPositiveButton("前往設定") { _, _ ->
+                    openAccessibilitySettings()
+                }
+                .setNegativeButton("稍後處理", null)
+                .create().also { dialog ->
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        dialog.window?.setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        dialog.window?.setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT)
+                    }
+                    runCatching { dialog.show() }
+                }
+        }
+    }
+
+    private fun showAccessibilitySuspectedDeadNotification() {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "gongde_accessibility_watchdog"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    "無障礙提醒",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            9201,
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        val notification = builder
+            .setContentTitle(ACCESSIBILITY_SUSPECTED_DEAD_TITLE)
+            .setContentText(ACCESSIBILITY_SUSPECTED_DEAD_MESSAGE)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(Notification.PRIORITY_DEFAULT)
+            .build()
+        manager.notify(ACCESSIBILITY_WATCHDOG_NOTIFICATION_ID, notification)
+    }
+
+    private fun openAccessibilitySettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+
+    private data class AccessibilityWatchdogState(
+        val enabled: Boolean,
+        val serviceConnected: Boolean,
+        val lastAccessibilityEventAt: Long,
+        val silentDurationMs: Long,
+        val lastUberEventAt: Long,
+        val screenOn: Boolean,
+        val rootPackageName: String,
+        val rootWindowCount: Int
+    ) {
+        fun toLogMessage(timestamp: Long): String {
+            return "timestamp=$timestamp enabled=$enabled serviceConnected=$serviceConnected " +
+                "lastAccessibilityEventAt=$lastAccessibilityEventAt silentDurationMs=$silentDurationMs " +
+                "lastUberEventAt=$lastUberEventAt screenOn=$screenOn rootPackageName=$rootPackageName " +
+                "rootWindowCount=$rootWindowCount"
+        }
+    }
+
     private fun logMainNavPageCheck(event: AccessibilityEvent, scan: PopupStructureScan) {
         val root = rootInActiveWindow
         val source = runCatching { event.source }.getOrNull()
@@ -1824,6 +1992,10 @@ class MyAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         DiagnosticLogStore.append(this, "ACCESSIBILITY", "destroyed package=$packageName")
+        serviceConnected = false
+        stopAccessibilityWatchdog()
+        suspectedDeadDialog?.dismiss()
+        suspectedDeadDialog = null
         clearCollapseTimer()
         pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
         pendingOrderEventRunnable = null
@@ -2503,6 +2675,12 @@ class MyAccessibilityService : AccessibilityService() {
         private const val POPUP_STRUCTURE_SCAN_SAMPLE_LIMIT = 10
         private const val EVENT_STRUCTURE_NODE_LIMIT = 160
         private const val EVENT_STRUCTURE_TEXT_LIMIT = 80
+        private const val ACCESSIBILITY_WATCHDOG_INTERVAL_MS = 60_000L
+        private const val ACCESSIBILITY_SUSPECTED_DEAD_MS = 10 * 60_000L
+        private const val ACCESSIBILITY_WATCHDOG_NOTIFICATION_ID = 9201
+        private const val ACCESSIBILITY_SUSPECTED_DEAD_TITLE = "功德拒絕器可能需要重啟無障礙"
+        private const val ACCESSIBILITY_SUSPECTED_DEAD_MESSAGE =
+            "無障礙開關仍開啟，但長時間沒有收到事件。請關閉後重新開啟無障礙服務。"
         private val NON_ORDER_TRIGGER_REASONS = setOf(
             "OPPORTUNITY_PAGE",
             "MAIN_NAV_PAGE"

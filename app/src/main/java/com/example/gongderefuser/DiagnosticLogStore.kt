@@ -11,6 +11,9 @@ object DiagnosticLogStore {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
     private val hourlyFileNameFormatter = SimpleDateFormat("yyyyMMdd-HH", Locale.US)
     private val releasePersistedTags = setOf(
+        "ACCESSIBILITY_SERVICE_RECOVERED",
+        "ACCESSIBILITY_SERVICE_SUSPECTED_DEAD",
+        "ACCESSIBILITY_WATCHDOG_CHECK",
         "APP_ERROR",
         "DUPLICATE_ORDER_SUPPRESSED",
         "OCR_FAIL_FINAL",
@@ -21,6 +24,9 @@ object DiagnosticLogStore {
     )
     private val debugPersistedTags = setOf(
         "ACCESSIBILITY",
+        "ACCESSIBILITY_SERVICE_RECOVERED",
+        "ACCESSIBILITY_SERVICE_SUSPECTED_DEAD",
+        "ACCESSIBILITY_WATCHDOG_CHECK",
         "ACTIVATION",
         "A11Y_CLICK",
         "A11Y_SCREENSHOT",
