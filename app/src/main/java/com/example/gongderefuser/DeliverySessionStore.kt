@@ -20,6 +20,7 @@ object DeliverySessionStore {
         val completedPickupCount: Int = 0,
         val completedDeliveryCount: Int = 0,
         val opportunityCount: Int = 0,
+        val activeRecordTimestamps: List<Long> = emptyList(),
         val completedRecordTimestamps: List<Long> = emptyList(),
         val reason: String = ""
     )
@@ -175,6 +176,7 @@ object DeliverySessionStore {
                 completedPickupCount = completedPickupCount,
                 completedDeliveryCount = completedDeliveryCount,
                 opportunityCount = opportunities.size,
+                activeRecordTimestamps = opportunities.map { it.recordTimestamp },
                 completedRecordTimestamps = completedRecordTimestamps,
                 reason = reason
             )

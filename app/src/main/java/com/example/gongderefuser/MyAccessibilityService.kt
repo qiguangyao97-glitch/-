@@ -557,6 +557,10 @@ class MyAccessibilityService : AccessibilityService() {
             val finalReason = currentSessionLastValidationReason.ifBlank { "MAX_ATTEMPTS_REACHED" }
             logOcrFinalFail(currentOcrAttemptNumber, eventElapsedMs(), finalReason)
             hideActiveOfferOverlayIfPopupGone(finalReason)
+            if (shouldCooldownAfterFinalOcrFail(finalReason)) {
+                dropPendingAfterStale(orderDetectionSessionId, finalReason)
+                startStaleSessionCooldown(orderDetectionSessionId, finalReason)
+            }
             logObservation(
                 "ORDER_DETECTION_WAIT",
                 "state=WAITING reason=OCR_FAIL failures=$orderDetectionSessionFailureCount"
@@ -629,7 +633,7 @@ class MyAccessibilityService : AccessibilityService() {
         val isStale = reason == "STALE_SESSION"
         if (isStale) {
             dropPendingAfterStale(endedSessionId, reason)
-            startStaleSessionCooldown(endedSessionId)
+            startStaleSessionCooldown(endedSessionId, reason)
         }
         val hadPending = pendingUberEvent
         val nextAction = if (hadPending && !isStale) "PROCESS_PENDING" else "IDLE"
@@ -664,7 +668,7 @@ class MyAccessibilityService : AccessibilityService() {
         val isStale = reason == "STALE_SESSION"
         if (isStale) {
             dropPendingAfterStale(sessionId, reason)
-            startStaleSessionCooldown(sessionId)
+            startStaleSessionCooldown(sessionId, reason)
         }
         val hadPending = pendingUberEvent
         val nextAction = if (hadPending && !isStale) "PROCESS_PENDING" else "IDLE"
@@ -1097,7 +1101,11 @@ class MyAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun startStaleSessionCooldown(sessionId: Long) {
+    private fun shouldCooldownAfterFinalOcrFail(reason: String): Boolean {
+        return reason == "NO_ORDER_CARD" || reason == "ALL_CORE_FIELDS_EMPTY"
+    }
+
+    private fun startStaleSessionCooldown(sessionId: Long, reason: String = "STALE_SESSION") {
         val now = System.currentTimeMillis()
         staleSessionCooldownUntil = now + STALE_SESSION_COOLDOWN_MS
         staleSessionCooldownRunnable?.let(mainHandler::removeCallbacks)
@@ -1105,7 +1113,7 @@ class MyAccessibilityService : AccessibilityService() {
             this,
             "SESSION_STALE_COOLDOWN_START",
             "timestamp=$now sessionId=$sessionId pendingCount=$pendingUberEventCount " +
-                    "latestPendingUberEvent=$pendingUberEvent reason=STALE_SESSION cooldownMs=$STALE_SESSION_COOLDOWN_MS nextAction=WAIT_FOR_NEW_EVENT"
+                    "latestPendingUberEvent=$pendingUberEvent reason=$reason cooldownMs=$STALE_SESSION_COOLDOWN_MS nextAction=WAIT_FOR_NEW_EVENT"
         )
         staleSessionCooldownRunnable = Runnable {
             val endNow = System.currentTimeMillis()
@@ -2588,6 +2596,11 @@ class MyAccessibilityService : AccessibilityService() {
         }
         if (pickupCompleted) {
             val result = DeliverySessionStore.markPickupCompleted(this, now)
+            if (result.changed) {
+                result.activeRecordTimestamps.forEach { recordTimestamp ->
+                    OrderHistory.markPickupCompleted(this, recordTimestamp, now)
+                }
+            }
             logDeliverySessionResult(
                 tag = "PICKUP_COMPLETED",
                 result = result,
@@ -2611,8 +2624,11 @@ class MyAccessibilityService : AccessibilityService() {
         val hasPostDeliveryState = hasPostDeliveryState(normalized)
         if (hasPostDeliveryState && now - activeCandidate.second >= DELIVERY_COMPLETION_CONFIRM_MIN_DELAY_MS) {
             val result = DeliverySessionStore.markDeliveryCompleted(this, now)
-            result.completedRecordTimestamps.forEach { recordTimestamp ->
-                OrderHistory.markCompleted(this, recordTimestamp, now)
+            if (result.changed) {
+                val markFinalCompleted = result.status == "COMPLETED"
+                result.activeRecordTimestamps.forEach { recordTimestamp ->
+                    OrderHistory.markDeliveryCompleted(this, recordTimestamp, now, markFinalCompleted)
+                }
             }
             logDeliverySessionResult(
                 tag = "DELIVERY_COMPLETED",

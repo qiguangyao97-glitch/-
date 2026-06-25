@@ -12,7 +12,7 @@ import java.util.Locale
 object OrderHistory {
     private const val PREF_NAME = "order_history"
     private const val KEY_RECORDS = "records"
-    private const val MAX_RECORDS = 50
+    private const val MAX_RECORDS = 500
 
     data class Record(
         val timestamp: Long,
@@ -36,7 +36,9 @@ object OrderHistory {
         val screenshotPath: String = "",
         val acceptedAt: Long = 0L,
         val completedAt: Long = 0L,
-        val rejectedAt: Long = 0L
+        val rejectedAt: Long = 0L,
+        val pickupCompletedAts: List<Long> = emptyList(),
+        val deliveryCompletedAts: List<Long> = emptyList()
     ) {
         fun timeLabel(): String {
             return SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(timestamp))
@@ -142,7 +144,9 @@ object OrderHistory {
                             screenshotPath = item.optString("screenshotPath"),
                             acceptedAt = item.optLong("acceptedAt"),
                             completedAt = item.optLong("completedAt"),
-                            rejectedAt = item.optLong("rejectedAt")
+                            rejectedAt = item.optLong("rejectedAt"),
+                            pickupCompletedAts = item.optLongArray("pickupCompletedAts"),
+                            deliveryCompletedAts = item.optLongArray("deliveryCompletedAts")
                         )
                     )
                 }
@@ -184,13 +188,40 @@ object OrderHistory {
     }
 
     fun markCompleted(context: Context, timestamp: Long, completedAt: Long = System.currentTimeMillis()) {
+        markDeliveryCompleted(context, timestamp, completedAt, markFinalCompleted = true)
+    }
+
+    fun markPickupCompleted(context: Context, timestamp: Long, pickupCompletedAt: Long = System.currentTimeMillis()) {
         save(
             context,
             load(context).map { record ->
                 if (record.timestamp == timestamp) {
                     record.copy(
-                        acceptedAt = if (record.acceptedAt > 0L) record.acceptedAt else completedAt,
-                        completedAt = if (record.completedAt > 0L) record.completedAt else completedAt,
+                        acceptedAt = if (record.acceptedAt > 0L) record.acceptedAt else pickupCompletedAt,
+                        pickupCompletedAts = appendTime(record.pickupCompletedAts, pickupCompletedAt),
+                        rejectedAt = 0L
+                    )
+                } else {
+                    record
+                }
+            }
+        )
+    }
+
+    fun markDeliveryCompleted(
+        context: Context,
+        timestamp: Long,
+        deliveryCompletedAt: Long = System.currentTimeMillis(),
+        markFinalCompleted: Boolean = false
+    ) {
+        save(
+            context,
+            load(context).map { record ->
+                if (record.timestamp == timestamp) {
+                    record.copy(
+                        acceptedAt = if (record.acceptedAt > 0L) record.acceptedAt else deliveryCompletedAt,
+                        completedAt = if (markFinalCompleted && record.completedAt <= 0L) deliveryCompletedAt else record.completedAt,
+                        deliveryCompletedAts = appendTime(record.deliveryCompletedAts, deliveryCompletedAt),
                         rejectedAt = 0L
                     )
                 } else {
@@ -240,6 +271,12 @@ object OrderHistory {
                     .put("acceptedAt", record.acceptedAt)
                     .put("completedAt", record.completedAt)
                     .put("rejectedAt", record.rejectedAt)
+                    .put("pickupCompletedAts", JSONArray().also { array ->
+                        record.pickupCompletedAts.forEach { array.put(it) }
+                    })
+                    .put("deliveryCompletedAts", JSONArray().also { array ->
+                        record.deliveryCompletedAts.forEach { array.put(it) }
+                    })
             )
         }
         prefs(context).edit().putString(KEY_RECORDS, array.toString()).apply()
@@ -259,6 +296,22 @@ object OrderHistory {
 
     private fun deliveryCountFromOrderType(orderType: String): Int {
         return Regex("""\d+""").find(orderType)?.value?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+    }
+
+    private fun JSONObject.optLongArray(name: String): List<Long> {
+        val array = optJSONArray(name) ?: return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val value = array.optLong(index, 0L)
+                if (value > 0L) add(value)
+            }
+        }
+    }
+
+    private fun appendTime(times: List<Long>, timestamp: Long): List<Long> {
+        if (timestamp <= 0L) return times
+        if (times.any { kotlin.math.abs(it - timestamp) < 1_000L }) return times
+        return (times + timestamp).sorted()
     }
 
     private fun prefs(context: Context) =

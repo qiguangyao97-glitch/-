@@ -913,7 +913,29 @@ class MainActivity : AppCompatActivity() {
         val acceptButtonColor = if (record.rejectedAt > 0L && record.acceptedAt <= 0L) COLOR_DANGER else COLOR_ACCENT
         actionRow.addView(
             createSmallActionButton(acceptButtonText, acceptButtonColor) {
-                OrderHistory.markAccepted(this@MainActivity, record.timestamp)
+                val acceptedAt = System.currentTimeMillis()
+                OrderHistory.markAccepted(this@MainActivity, record.timestamp, acceptedAt)
+                val sessionResult = DeliverySessionStore.addAcceptedOpportunity(
+                    context = this@MainActivity,
+                    recordTimestamp = record.timestamp,
+                    acceptedAt = acceptedAt,
+                    orderSignature = "${record.price}|${record.minutes}|${record.distance}",
+                    price = record.price,
+                    minutes = record.minutes,
+                    distance = record.distance,
+                    merchant = record.storeName,
+                    address = record.storeAddress,
+                    deliveryCount = record.deliveryCount
+                )
+                DiagnosticLogStore.append(
+                    this@MainActivity,
+                    "DELIVERY_SESSION_ACCEPTED",
+                    "timestamp=$acceptedAt source=MANUAL_HISTORY_BUTTON orderSignature=${record.price}|${record.minutes}|${record.distance} " +
+                            "recordTimestamp=${record.timestamp} price=${record.price} minutes=${record.minutes} " +
+                            "distance=${record.distance} deliveryCount=${record.deliveryCount} " +
+                            "sessionId=${sessionResult.sessionId} changed=${sessionResult.changed} reason=${sessionResult.reason} " +
+                            "expectedDeliveryCount=${sessionResult.expectedDeliveryCount}"
+                )
                 onChanged()
             },
             LinearLayout.LayoutParams(0, dp(40), 1f).apply {
@@ -956,8 +978,21 @@ class MainActivity : AppCompatActivity() {
         return buildList {
             if (record.rejectedAt > 0L && record.acceptedAt <= 0L) add("沒接：${record.rejectedTimeLabel()}")
             if (record.acceptedAt > 0L) add("已接：${record.acceptedTimeLabel()}")
+            if (record.pickupCompletedAts.isNotEmpty()) add("取餐：${formatLifecycleTimes(record.pickupCompletedAts)}")
+            if (record.deliveryCompletedAts.isNotEmpty()) add("配送：${formatLifecycleTimes(record.deliveryCompletedAts)}")
             if (record.completedAt > 0L) add("已完成：${record.completedTimeLabel()}")
         }.joinToString("　")
+    }
+
+    private fun formatLifecycleTimes(times: List<Long>): String {
+        return times.mapIndexed { index, timestamp ->
+            "${index + 1}.${formatTimeOnly(timestamp)}"
+        }.joinToString("、")
+    }
+
+    private fun formatTimeOnly(timestamp: Long): String {
+        return java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(timestamp))
     }
 
     private fun createModeBadge(mode: String): TextView {
@@ -3073,6 +3108,10 @@ class MainActivity : AppCompatActivity() {
         addCompactStatRow(parent, "預計時薪", "${OrderAnalyzer.formatMoney(record.effectiveHourly)} 元/小時")
         addCompactStatRow(parent, "訂單類型", record.orderType.ifBlank { "未識別" })
         addCompactStatRow(parent, "同地點配送", if (record.isSameLocationStack) "是" else "否")
+        if (record.acceptedAt > 0L) addCompactStatRow(parent, "接受時間", record.acceptedTimeLabel())
+        if (record.pickupCompletedAts.isNotEmpty()) addCompactStatRow(parent, "取餐完成", formatLifecycleTimes(record.pickupCompletedAts))
+        if (record.deliveryCompletedAts.isNotEmpty()) addCompactStatRow(parent, "配送完成", formatLifecycleTimes(record.deliveryCompletedAts))
+        if (record.completedAt > 0L) addCompactStatRow(parent, "最終完成", record.completedTimeLabel())
         addCompactStatRow(parent, "標籤備註", if (record.isWhitelisted) "命中" else "未命中")
         addCompactStatRow(parent, "避雷標籤", if (record.isBlacklisted) "命中" else "未命中")
     }
