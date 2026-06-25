@@ -30,6 +30,7 @@ object MonitoringState {
                 .apply()
             MonitorNotificationHelper.cancel(appContext)
             MyAccessibilityService.refreshForegroundNotification()
+            MyAccessibilityService.notifyMonitoringStateChanged(false)
             MyAccessibilityService.refreshStatusOverlay()
             return
         }
@@ -44,9 +45,11 @@ object MonitoringState {
         if (enabled) {
             MonitorNotificationHelper.showRunning(appContext)
             MyAccessibilityService.refreshForegroundNotification()
+            MyAccessibilityService.notifyMonitoringStateChanged(true)
         } else {
             MonitorNotificationHelper.cancel(appContext)
             MyAccessibilityService.refreshForegroundNotification()
+            MyAccessibilityService.notifyMonitoringStateChanged(false)
             appContext.stopService(Intent(appContext, ScreenCaptureService::class.java))
         }
 

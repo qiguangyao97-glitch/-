@@ -101,6 +101,7 @@ class MyAccessibilityService : AccessibilityService() {
     private var lastUberEventAt: Long = 0L
     private var serviceConnected: Boolean = false
     private var accessibilityServiceSuspectedDead: Boolean = false
+    private var lastMonitoringEnabledForWatchdog: Boolean = false
     private var watchdogRunnable: Runnable? = null
     private var suspectedDeadDialog: AlertDialog? = null
 
@@ -109,7 +110,8 @@ class MyAccessibilityService : AccessibilityService() {
         activeService = this
         serviceConnected = true
         lastAccessibilityEventAt = System.currentTimeMillis()
-        accessibilityServiceSuspectedDead = false
+        lastMonitoringEnabledForWatchdog = MonitoringState.isEnabled(this)
+        resetAccessibilityWatchdogState()
         startAccessibilityWatchdog()
         syncForegroundNotification()
         showStatusOverlayInternal()
@@ -120,11 +122,6 @@ class MyAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val eventTime = System.currentTimeMillis()
         lastAccessibilityEventAt = eventTime
-        if (accessibilityServiceSuspectedDead) {
-            accessibilityServiceSuspectedDead = false
-            val state = accessibilityWatchdogState(eventTime)
-            DiagnosticLogStore.append(this, "ACCESSIBILITY_SERVICE_RECOVERED", state.toLogMessage(eventTime))
-        }
         if (!MonitoringState.isEnabled(this)) return
         if (!isActivationActiveForMonitoring()) return
 
@@ -132,6 +129,11 @@ class MyAccessibilityService : AccessibilityService() {
         logUberWindowDebug(event, packageName, "EVENT_RECEIVED")
         if (packageName != "com.ubercab.driver") return
         lastUberEventAt = eventTime
+        if (accessibilityServiceSuspectedDead) {
+            accessibilityServiceSuspectedDead = false
+            val state = accessibilityWatchdogState(eventTime, monitoringEnabled = true)
+            DiagnosticLogStore.append(this, "ACCESSIBILITY_SERVICE_RECOVERED", state.toLogMessage(eventTime))
+        }
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             logTargetClickEvent(event, packageName)
         }
@@ -1061,12 +1063,23 @@ class MyAccessibilityService : AccessibilityService() {
 
     private fun runAccessibilityWatchdogCheck() {
         val now = System.currentTimeMillis()
-        val state = accessibilityWatchdogState(now)
+        val monitoringEnabled = MonitoringState.isEnabled(this)
+        if (monitoringEnabled != lastMonitoringEnabledForWatchdog) {
+            handleMonitoringStateChangedForWatchdog(monitoringEnabled)
+        }
+        val state = accessibilityWatchdogState(now, monitoringEnabled)
         DiagnosticLogStore.append(this, "ACCESSIBILITY_WATCHDOG_CHECK", state.toLogMessage(now))
+        if (!monitoringEnabled) {
+            clearAccessibilitySuspectedDeadState(cancelNotification = true, dismissDialog = true)
+            return
+        }
+        val uberSilentDurationMs = if (lastUberEventAt > 0L) now - lastUberEventAt else Long.MAX_VALUE
+        val hasRecentUberEvent = uberSilentDurationMs in (ACCESSIBILITY_SUSPECTED_DEAD_MS + 1)..ACCESSIBILITY_RECENT_UBER_EVENT_WINDOW_MS
         if (
+            monitoringEnabled &&
             state.enabled &&
             state.serviceConnected &&
-            state.silentDurationMs > ACCESSIBILITY_SUSPECTED_DEAD_MS
+            hasRecentUberEvent
         ) {
             if (!accessibilityServiceSuspectedDead) {
                 accessibilityServiceSuspectedDead = true
@@ -1078,19 +1091,55 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun accessibilityWatchdogState(now: Long): AccessibilityWatchdogState {
+    private fun accessibilityWatchdogState(now: Long, monitoringEnabled: Boolean): AccessibilityWatchdogState {
         val root = rootInActiveWindow
         val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
+        val uberSilentDurationMs = if (lastUberEventAt > 0L) now - lastUberEventAt else Long.MAX_VALUE
         return AccessibilityWatchdogState(
+            monitoringEnabled = monitoringEnabled,
             enabled = isThisAccessibilityServiceEnabled(),
             serviceConnected = serviceConnected,
             lastAccessibilityEventAt = lastAccessibilityEventAt,
             silentDurationMs = if (lastAccessibilityEventAt > 0L) now - lastAccessibilityEventAt else Long.MAX_VALUE,
             lastUberEventAt = lastUberEventAt,
+            uberSilentDurationMs = uberSilentDurationMs,
             screenOn = powerManager?.isInteractive ?: true,
             rootPackageName = root?.packageName?.toString().orEmpty(),
             rootWindowCount = runCatching { windows.size }.getOrDefault(0)
         )
+    }
+
+    private fun handleMonitoringStateChangedForWatchdog(enabled: Boolean) {
+        lastMonitoringEnabledForWatchdog = enabled
+        if (enabled) {
+            lastUberEventAt = 0L
+            resetAccessibilityWatchdogState()
+        } else {
+            clearAccessibilitySuspectedDeadState(cancelNotification = true, dismissDialog = true)
+        }
+    }
+
+    private fun resetAccessibilityWatchdogState() {
+        accessibilityServiceSuspectedDead = false
+        suspectedDeadDialog?.dismiss()
+        suspectedDeadDialog = null
+        cancelAccessibilitySuspectedDeadNotification()
+    }
+
+    private fun clearAccessibilitySuspectedDeadState(cancelNotification: Boolean, dismissDialog: Boolean) {
+        accessibilityServiceSuspectedDead = false
+        if (dismissDialog) {
+            suspectedDeadDialog?.dismiss()
+            suspectedDeadDialog = null
+        }
+        if (cancelNotification) {
+            cancelAccessibilitySuspectedDeadNotification()
+        }
+    }
+
+    private fun cancelAccessibilitySuspectedDeadNotification() {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(ACCESSIBILITY_WATCHDOG_NOTIFICATION_ID)
     }
 
     private fun isThisAccessibilityServiceEnabled(): Boolean {
@@ -1169,19 +1218,22 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private data class AccessibilityWatchdogState(
+        val monitoringEnabled: Boolean,
         val enabled: Boolean,
         val serviceConnected: Boolean,
         val lastAccessibilityEventAt: Long,
         val silentDurationMs: Long,
         val lastUberEventAt: Long,
+        val uberSilentDurationMs: Long,
         val screenOn: Boolean,
         val rootPackageName: String,
         val rootWindowCount: Int
     ) {
         fun toLogMessage(timestamp: Long): String {
-            return "timestamp=$timestamp enabled=$enabled serviceConnected=$serviceConnected " +
+            return "timestamp=$timestamp monitoringEnabled=$monitoringEnabled enabled=$enabled serviceConnected=$serviceConnected " +
                 "lastAccessibilityEventAt=$lastAccessibilityEventAt silentDurationMs=$silentDurationMs " +
-                "lastUberEventAt=$lastUberEventAt screenOn=$screenOn rootPackageName=$rootPackageName " +
+                "lastUberEventAt=$lastUberEventAt uberSilentDurationMs=$uberSilentDurationMs " +
+                "screenOn=$screenOn rootPackageName=$rootPackageName " +
                 "rootWindowCount=$rootWindowCount"
         }
     }
@@ -1994,8 +2046,7 @@ class MyAccessibilityService : AccessibilityService() {
         DiagnosticLogStore.append(this, "ACCESSIBILITY", "destroyed package=$packageName")
         serviceConnected = false
         stopAccessibilityWatchdog()
-        suspectedDeadDialog?.dismiss()
-        suspectedDeadDialog = null
+        clearAccessibilitySuspectedDeadState(cancelNotification = true, dismissDialog = true)
         clearCollapseTimer()
         pendingOrderEventRunnable?.let(mainHandler::removeCallbacks)
         pendingOrderEventRunnable = null
@@ -2677,6 +2728,7 @@ class MyAccessibilityService : AccessibilityService() {
         private const val EVENT_STRUCTURE_TEXT_LIMIT = 80
         private const val ACCESSIBILITY_WATCHDOG_INTERVAL_MS = 60_000L
         private const val ACCESSIBILITY_SUSPECTED_DEAD_MS = 10 * 60_000L
+        private const val ACCESSIBILITY_RECENT_UBER_EVENT_WINDOW_MS = 30 * 60_000L
         private const val ACCESSIBILITY_WATCHDOG_NOTIFICATION_ID = 9201
         private const val ACCESSIBILITY_SUSPECTED_DEAD_TITLE = "功德拒絕器可能需要重啟無障礙"
         private const val ACCESSIBILITY_SUSPECTED_DEAD_MESSAGE =
@@ -2721,6 +2773,13 @@ class MyAccessibilityService : AccessibilityService() {
             val service = activeService ?: return
             service.mainHandler.post {
                 service.syncForegroundNotification()
+            }
+        }
+
+        fun notifyMonitoringStateChanged(enabled: Boolean) {
+            val service = activeService ?: return
+            service.mainHandler.post {
+                service.handleMonitoringStateChangedForWatchdog(enabled)
             }
         }
 
