@@ -199,19 +199,19 @@ class MyAccessibilityService : AccessibilityService() {
         lastDetectionEventTime = now
 
         if (isInStaleSessionCooldown(now)) {
-            logTriggerGateDecision(event, eventId, "BYPASS", "STALE_SESSION_COOLDOWN_PENDING", popupScan)
-            markPendingUberEvent(eventId, now, "STALE_SESSION_COOLDOWN")
-            logSessionDecision(event, "SESSION_ALREADY_RUNNING", "STALE_SESSION_COOLDOWN")
+            logTriggerGateDecision(event, eventId, "BYPASS", "STALE_SESSION_COOLDOWN_IGNORED", popupScan)
+            ignorePendingDuringCooldown(eventId, now)
+            logSessionDecision(event, "IGNORED", "STALE_SESSION_COOLDOWN")
             return
         }
 
         if (isDetectionScheduled || isTakingScreenshot || isProcessingOrder || isOrderDetectionSessionActive) {
-            logTriggerGateDecision(event, eventId, "BYPASS", "SESSION_BUSY_PENDING", popupScan)
-            markPendingUberEvent(eventId, now, "SESSION_BUSY")
+            logTriggerGateDecision(event, eventId, "BYPASS", "SESSION_BUSY_LATEST_ONLY", popupScan)
+            markPendingUberEvent(eventId, now, "SESSION_BUSY_LATEST_ONLY")
             logSessionDecision(event, "SESSION_ALREADY_RUNNING", triggerDecision.reason)
             logObservation(
                 "ORDER_DETECTION_WAIT",
-                "pendingUberEvent=true reason=${triggerDecision.reason} count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
+                "latestCheckRequested=true reason=${triggerDecision.reason} count=$currentBurstDetectCount type=${eventTypeName(event.eventType)} class=${event.className}"
             )
             return
         }
@@ -639,7 +639,7 @@ class MyAccessibilityService : AccessibilityService() {
             startStaleSessionCooldown(endedSessionId, reason)
         }
         val hadPending = pendingUberEvent
-        val nextAction = if (hadPending && !isStale) "PROCESS_PENDING" else "IDLE"
+        val nextAction = if (hadPending && !isStale) "CLEAR_LATEST_REQUEST" else "IDLE"
         if (isOrderDetectionSessionActive) {
             DiagnosticLogStore.append(this, "ORDER_SESSION_END", "reason=$reason sessionId=$orderDetectionSessionId")
             DiagnosticLogStore.append(
@@ -661,7 +661,7 @@ class MyAccessibilityService : AccessibilityService() {
         currentSessionOcrSuccessStructureLogged = false
         pendingDetectionAfterCurrent = false
         if (!isStale) {
-            processPendingUberEventIfNeeded(endedSessionId)
+            clearPendingUberEvent("SESSION_CLOSED_LOOP_END", endedSessionId)
         }
     }
 
@@ -674,7 +674,7 @@ class MyAccessibilityService : AccessibilityService() {
             startStaleSessionCooldown(sessionId, reason)
         }
         val hadPending = pendingUberEvent
-        val nextAction = if (hadPending && !isStale) "PROCESS_PENDING" else "IDLE"
+        val nextAction = if (hadPending && !isStale) "CLEAR_LATEST_REQUEST" else "IDLE"
         DiagnosticLogStore.append(this, "ORDER_SESSION_FORCE_RESET", "reason=$reason sessionId=$sessionId")
         Log.i("ORDER_SESSION_FORCE_RESET", "reason=$reason sessionId=$sessionId")
         clearSessionTimeout()
@@ -702,7 +702,7 @@ class MyAccessibilityService : AccessibilityService() {
                     "hadPendingUberEvent=$hadPending nextAction=$nextAction"
         )
         if (!isStale) {
-            processPendingUberEventIfNeeded(sessionId)
+            clearPendingUberEvent("SESSION_CLOSED_LOOP_RESET", sessionId)
         }
     }
 
@@ -1058,6 +1058,12 @@ class MyAccessibilityService : AccessibilityService() {
                     "isDetectionScheduled=$isDetectionScheduled isTakingScreenshot=$isTakingScreenshot isProcessingOrder=$isProcessingOrder " +
                     "pendingCount=$pendingUberEventCount latestPendingUberEvent=true cooldownMs=${remainingStaleCooldownMs(timestamp)}"
         )
+        DiagnosticLogStore.append(
+            this,
+            "LATEST_CHECK_REQUESTED",
+            "timestamp=$timestamp sessionId=$orderDetectionSessionId eventId=$eventId reason=$reason " +
+                    "pendingCount=$pendingUberEventCount nextAction=COALESCE_ONLY"
+        )
     }
 
     private fun processPendingUberEventIfNeeded(previousSessionId: Long) {
@@ -1081,6 +1087,35 @@ class MyAccessibilityService : AccessibilityService() {
         startPendingOrderDetectionSession(
             now = System.currentTimeMillis(),
             reason = "PENDING_UBER_EVENT"
+        )
+    }
+
+    private fun ignorePendingDuringCooldown(eventId: Long, timestamp: Long) {
+        DiagnosticLogStore.append(
+            this,
+            "PENDING_IGNORED_DURING_COOLDOWN",
+            "timestamp=$timestamp sessionId=$orderDetectionSessionId eventId=$eventId " +
+                    "cooldownMs=${remainingStaleCooldownMs(timestamp)} reason=STALE_SESSION_COOLDOWN nextAction=WAIT_FOR_NEW_EVENT"
+        )
+    }
+
+    private fun clearPendingUberEvent(reason: String, previousSessionId: Long) {
+        if (!pendingUberEvent && pendingUberEventCount == 0) return
+        val now = System.currentTimeMillis()
+        DiagnosticLogStore.append(
+            this,
+            "LATEST_CHECK_CLEARED",
+            "timestamp=$now previousSessionId=$previousSessionId reason=$reason " +
+                    "pendingCount=$pendingUberEventCount latestPendingUberEvent=$pendingUberEvent nextAction=IDLE"
+        )
+        pendingUberEvent = false
+        pendingUberEventId = 0L
+        pendingUberEventTimestamp = 0L
+        pendingUberEventCount = 0
+        DiagnosticLogStore.append(
+            this,
+            "PENDING_UBER_EVENT_CLEARED",
+            "reason=$reason previousSessionId=$previousSessionId"
         )
     }
 
@@ -1125,9 +1160,9 @@ class MyAccessibilityService : AccessibilityService() {
                 this,
                 "SESSION_STALE_COOLDOWN_END",
                 "timestamp=$endNow sessionId=$sessionId pendingCount=$pendingUberEventCount " +
-                        "latestPendingUberEvent=$pendingUberEvent reason=COOLDOWN_FINISHED cooldownMs=0 nextAction=${if (pendingUberEvent) "PROCESS_PENDING" else "IDLE"}"
+                        "latestPendingUberEvent=$pendingUberEvent reason=COOLDOWN_FINISHED cooldownMs=0 nextAction=IDLE"
             )
-            processPendingUberEventIfNeeded(sessionId)
+            clearPendingUberEvent("COOLDOWN_FINISHED_DROP_OLD_EVENTS", sessionId)
         }.also {
             mainHandler.postDelayed(it, STALE_SESSION_COOLDOWN_MS)
         }
