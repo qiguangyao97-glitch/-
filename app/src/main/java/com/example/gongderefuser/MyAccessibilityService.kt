@@ -3329,14 +3329,14 @@ class MyAccessibilityService : AccessibilityService() {
             analysis.isMerchantWhitelisted -> "商家"
             else -> keyword.ifBlank { "已命中標籤規則" }
         }
+        val displayNote = oneLineNote(note.ifBlank { keyword })
         addHighlightedResultLine(
             parent = parent,
             label = if (isBlacklisted) "命中避雷標籤" else "命中標籤備註",
-            value = hitTarget,
-            fillColor = if (isBlacklisted) Color.rgb(254, 226, 226) else Color.rgb(220, 252, 231),
-            strokeColor = if (isBlacklisted) COLOR_DANGER else COLOR_SUCCESS
+            value = "$hitTarget：$displayNote",
+            fillColor = if (isBlacklisted) Color.rgb(254, 226, 226) else Color.WHITE,
+            strokeColor = if (isBlacklisted) COLOR_DANGER else Color.rgb(218, 225, 233)
         )
-        if (note.isNotBlank()) addResultLine(parent, "備註", twoLine(note))
     }
 
     private fun addHighlightedResultLine(
@@ -3381,12 +3381,11 @@ class MyAccessibilityService : AccessibilityService() {
         })
     }
 
-    private fun twoLine(value: String): String {
+    private fun oneLineNote(value: String): String {
         return value.lines()
             .map { it.trim() }
             .filter { it.isNotBlank() }
-            .take(2)
-            .joinToString("\n")
+            .joinToString(" ")
             .ifBlank { value.take(42) }
     }
 

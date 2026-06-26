@@ -3990,12 +3990,12 @@ class MainActivity : AppCompatActivity() {
             analysis.isMerchantWhitelisted -> "商家"
             else -> keyword.ifBlank { "已命中標籤規則" }
         }
+        val displayNote = oneLineNote(note.ifBlank { keyword })
         if (isBlacklisted) {
-            addColoredResultRow(parent, "命中避雷標籤", hitTarget, Color.rgb(254, 226, 226), COLOR_DANGER)
+            addColoredResultRow(parent, "命中避雷標籤", "$hitTarget：$displayNote", Color.rgb(254, 226, 226), COLOR_DANGER)
         } else {
-            addColoredResultRow(parent, "命中標籤備註", hitTarget, Color.rgb(220, 252, 231), COLOR_SUCCESS)
+            addColoredResultRow(parent, "命中標籤備註", "$hitTarget：$displayNote", Color.WHITE, COLOR_BORDER)
         }
-        if (note.isNotBlank()) addResultRow(parent, "備註", twoLine(note))
     }
 
     private fun recommendationColor(recommendation: String): Int {
@@ -4073,12 +4073,11 @@ class MainActivity : AppCompatActivity() {
         parent.addView(row)
     }
 
-    private fun twoLine(value: String): String {
+    private fun oneLineNote(value: String): String {
         return value.lines()
             .map { it.trim() }
             .filter { it.isNotBlank() }
-            .take(2)
-            .joinToString("\n")
+            .joinToString(" ")
             .ifBlank { value.take(42) }
     }
 
